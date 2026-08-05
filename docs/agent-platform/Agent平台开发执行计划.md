@@ -1,6 +1,6 @@
 # Agent 平台开发执行计划
 
-> 文档版本：V1.1
+> 文档版本：V1.2
 > 文档状态：开发输入计划
 > 适用范围：当前 `docs/agent-platform` 需求、架构、契约和测试文档
 
@@ -101,7 +101,7 @@ frontend/
 2. **Epic 编号冲突已处理**：总纲、索引、执行计划和追踪矩阵统一使用 Epic 0～9，独立保留 RunEvent/SSE Epic 4。
 3. **前端未初始化不是前置阻塞**：Vue 脚手架、包管理器、生成 Client 和前端门禁属于 Epic 0 的正式交付。
 4. **后端最小骨架不是前置阻塞**：模块边界、配置、迁移、测试和进程入口属于 Epic 0 的正式交付。
-5. **计划基线已处理**：本计划已纳入文档索引和 R4 基线，相关版本、SHA-256 和变更摘要同步更新。
+5. **计划基线已处理**：本计划已纳入文档索引和 R5 基线，相关版本、SHA-256 和变更摘要同步更新。
 6. **Python 门禁环境已处理**：根 Makefile 使用 `uv run python`，避免系统 Python 与项目虚拟环境依赖不一致；Black 固定 `py312`、Pyright 启用 strict，并增加最小健康测试。`make backend-check` 已通过。前端门禁仍因尚无 `package.json` 退出，作为 Epic 0 前端骨架交付处理，不通过关闭门禁绕过。
 7. **契约门禁待 Epic 0 落地**：当前 `make contract-check` 尚未配置实际命令，项目环境也缺少 YAML、JSON Schema 和 OpenAPI 校验依赖，因此“跳过”不视为通过。Epic 0 的首个任务必须补齐离线可复现的契约校验和生成 Diff，再开始业务功能。
 
@@ -120,4 +120,152 @@ frontend/
 
 ## 7. 开发启动条件
 
-R4 文档完整性通过后可开始 Epic 0 工程任务；Epic 0 必须先完成契约门禁和前后端脚手架，门禁通过前不进入业务功能。第 6 节剩余人工确认项按对应 Epic 的最晚时间完成，不阻塞与其无关的工程骨架工作。后续严格按 Epic 顺序推进，不跨 Epic 建设未验收的生产旁路。
+R5 文档完整性通过后可开始 Epic 0 工程任务；Epic 0 必须先完成契约门禁和前后端脚手架，门禁通过前不进入业务功能。第 6 节剩余人工确认项按对应 Epic 的最晚时间完成，不阻塞与其无关的工程骨架工作。后续严格按 Epic 顺序推进，不跨 Epic 建设未验收的生产旁路。
+
+## 8. AI Coding 开发步骤
+
+Epic 是阶段里程碑，不作为一次 AI Coding 的任务粒度。单个任务使用 `AP-E<epic>-NNN` 编号，只交付一个明确行为、一个紧密契约组或一个迁移组。
+
+执行节奏：
+
+1. 每个任务先填写 AI Coding 任务包，确认范围、非目标、允许目录和验收命令。
+2. 每个任务独立实现、测试、审查和合并；不把整个 Epic 交给一次生成。
+3. 每完成 2～4 个强相关任务执行一次集成门禁；每个 Epic 最后单独安排纵向 E2E 收口任务。
+4. 契约、迁移、后端、前端和 E2E 分任务实施；存在生产者/消费者关系时先完成契约和生产者。
+5. Spike 可以提前，但只能位于隔离测试路径，不得形成绕过 Temporal、Event Service、Policy 或 Sandbox 的生产旁路。
+
+### Epic 0：工程准入与基础骨架
+
+1. `AP-E0-001`：实现基线 SHA、OpenAPI、JSON Schema 和 Golden 示例校验，接通 `make contract-check`。
+2. `AP-E0-002`：建立 `backend/apps`、`backend/packages`、配置、健康检查和进程入口骨架。
+3. `AP-E0-003`：初始化 Vue 3、Vite、Element Plus、Router、Pinia、Vue Query 和前端门禁。
+4. `AP-E0-004`：建立 Python/TypeScript Client、DTO、RunEvent 类型生成与 Diff 门禁。
+5. `AP-E0-005`：建立 PostgreSQL、SQLAlchemy、Alembic、TenantContext 和基础 RLS/索引。
+6. `AP-E0-006`：实现 local/test Mock OIDC、`/me`、Tenant/Member/Role 和基础 RBAC。
+7. `AP-E0-007`：实现最小 Temporal Worker/Workflow、Outbox、结构化日志、Trace 和指标骨架。
+8. `AP-E0-008`：完成 Epic 0 集成验收，要求契约、后端、前端和最小 Workflow 门禁通过。
+
+`AP-E0-002` 与 `AP-E0-003` 可在 `AP-E0-001` 完成后并行；`AP-E0-005` 依赖后端和契约生成，`AP-E0-006` 依赖数据库租户基础。
+
+### Epic 1：资源、Model Gateway 与 Agent Draft
+
+1. `AP-E1-001`：资源定义/版本、ETag、幂等和引用查询公共能力。
+2. `AP-E1-002`：Prompt CRUD、版本、发布、回滚和前端页面。
+3. `AP-E1-003`：ModelProvider/ModelConfig、Secret Reference 和连通性异步操作。
+4. `AP-E1-004`：Model Gateway 请求、流式响应、错误和用量归一化。
+5. `AP-E1-005`：OpenAI、Qwen、DeepSeek Adapter 及供应商契约测试。
+6. `AP-E1-006`：预算、限流、Token/费用统计和受控 fallback。
+7. `AP-E1-007`：Agent Draft API、校验、复制、停用和引用约束。
+8. `AP-E1-008`：Agent Draft Vue 编辑器和 Epic 1 纵向验收。
+9. `AP-E1-009`：AgentScope 2.0.x 兼容 Spike，固定精确 patch 和镜像 Digest；不形成生产旁路。
+
+### Epic 2：发布与部署
+
+1. `AP-E2-001`：Snapshot 编译与不可变引用。
+2. `AP-E2-002`：AgentScope Bundle 和 Bundle Manifest 编译/校验。
+3. `AP-E2-003`：Release Workflow、异步 Operation 和发布失败保护。
+4. `AP-E2-004`：Deployment 激活、历史状态和并发保护。
+5. `AP-E2-005`：发布 Diff、版本历史和前端发布页面。
+6. `AP-E2-006`：回滚产生新 Release，并完成发布/回滚 E2E。
+
+### Epic 3：Session、Run 与 Temporal
+
+1. `AP-E3-001`：Session CRUD、归档、删除约束和分页。
+2. `AP-E3-002`：Message 历史、分支顺序和权限。
+3. `AP-E3-003`：Run/RunAttempt 创建、幂等、状态机和 Snapshot 绑定。
+4. `AP-E3-004`：AgentRunWorkflow、Activity、Signal 和 Query。
+5. `AP-E3-005`：取消、重试、新 Run 语义和 fencing token。
+6. `AP-E3-006`：Outbox dispatcher、Workflow 映射和对账入口。
+7. `AP-E3-007`：使用测试 Fake 验证 RuntimeEventCandidate Port，通过 `getRun` 轮询完成 Epic 3 验收；不实现 Event Store/SSE。
+
+### Epic 4：RunEvent、SSE 与 AG-UI
+
+1. `AP-E4-001`：RunEvent 表、计数器、约束和迁移。
+2. `AP-E4-002`：Candidate 校验、批量写入、幂等序号和终态保护。
+3. `AP-E4-003`：事件查询、分页、回放和序号缺口语义。
+4. `AP-E4-004`：SSE Cursor、Last-Event-ID、重连和背压。
+5. `AP-E4-005`：RunEvent 到 AG-UI 的出口映射。
+6. `AP-E4-006`：Vue 独立 Reducer，覆盖重复、乱序、缺口和终态。
+7. `AP-E4-007`：完成断线恢复、回放和终态冲突 E2E。
+
+### Epic 5：Sandbox、Workspace 与 Artifact
+
+1. `AP-E5-001`：SandboxPolicy、内部 API 和 Provider Port。
+2. `AP-E5-002`：SandboxInstance、Lease、provision/destroy 生命周期。
+3. `AP-E5-003`：Workspace URI、路径隔离和容量限制。
+4. `AP-E5-004`：Artifact 上传、完成和扫描流程。
+5. `AP-E5-005`：Artifact 下载、权限、过期和删除。
+6. `AP-E5-006`：完成隔离、SSRF、路径穿越、清理和 Artifact E2E。
+
+### Epic 6：能力治理、审批与审计
+
+1. `AP-E6-001`：Skill Manifest、导入、版本和供应链扫描。
+2. `AP-E6-002`：MCP 配置、Discover、能力冻结和安全校验。
+3. `AP-E6-003`：Policy 有效策略求交集和 Admission Controller。
+4. `AP-E6-004`：ApprovalRequest/Decision、过期和自审批阻断。
+5. `AP-E6-005`：一次性 Execution Ticket 和 Tool Gateway 消费。
+6. `AP-E6-006`：Audit 写入、查询、保留和敏感字段脱敏。
+7. `AP-E6-007`：完成高风险工具审批和审计 E2E。
+
+### Epic 7：生产可靠性与安全加固
+
+1. `AP-E7-001`：Reconciliation 规则和状态修复。
+2. `AP-E7-002`：API、Worker、Temporal、Redis、S3 故障恢复。
+3. `AP-E7-003`：配额、预算、限流和背压。
+4. `AP-E7-004`：SLO、指标、告警和 Trace 关联。
+5. `AP-E7-005`：容量、耐久和资源池隔离测试。
+6. `AP-E7-006`：安全阻断项、供应链和生产 Sandbox 验收。
+7. `AP-E7-007`：Runbook、灾备和恢复演练，完成生产准入。
+
+### Epic 8：Codex ACP
+
+1. `AP-E8-001`：Codex/ACP 精确版本和兼容 Spike。
+2. `AP-E8-002`：Codex Bundle 与 Runtime Target。
+3. `AP-E8-003`：ACP STDIO RuntimeAdapter。
+4. `AP-E8-004`：独立 CODEX_HOME、Worker Pool 和 Sandbox 进程管理。
+5. `AP-E8-005`：Codex Session 映射和隔离。
+6. `AP-E8-006`：取消、超时和恢复安全判断。
+7. `AP-E8-007`：完成 Codex 契约、安全和 E2E 验收。
+
+### Epic 9：V1 增量能力
+
+1. `AP-E9-001`：Session Sandbox 独立任务链。
+2. `AP-E9-002`：知识库导入、解析、分块和索引任务链。
+3. `AP-E9-003`：知识检索、ACL、删除和失效任务链。
+4. `AP-E9-004`：EvaluationSet、EvaluationRun 和版本冻结任务链。
+5. `AP-E9-005`：用户反馈、标签、评论和权限任务链。
+6. `AP-E9-006`：Temporal Schedule、DST、misfire 和并发策略任务链。
+7. `AP-E9-007`：A2A Client、认证、SSRF 防护和事件映射任务链。
+
+Epic 9 每项能力必须使用独立 Feature Flag，并继续拆成“契约/迁移 → 后端 → 前端 → E2E”，不得把整项能力一次性生成。
+
+## 9. 首个 AI Coding 任务
+
+首个任务固定为 `AP-E0-001`：契约完整性与校验门禁。
+
+```yaml
+task_id: AP-E0-001
+title: 实现契约完整性与校验门禁
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+scope:
+  includes:
+    - scripts/
+    - harness/project.json
+    - pyproject.toml
+    - uv.lock
+  excludes:
+    - backend 业务模块
+    - frontend 业务模块
+    - OpenAPI/JSON Schema 业务语义修改
+acceptance:
+  - make contract-check 实际执行且不再显示 skip
+  - 校验基线 SHA-256、OpenAPI 3.1、JSON Schema Draft 2020-12
+  - examples 全部通过对应 Schema
+  - 破坏任一 Hash、Schema 或 Example 时命令返回非零
+  - 不自动修改或重新格式化业务契约
+verification:
+  - make contract-check
+  - make backend-check
+```
+
+开始该任务前，项目环境需提供固定版本的 YAML、JSON Schema 和 OpenAPI 校验依赖；依赖由项目 lockfile 管理，不在 CI 运行时临时下载。

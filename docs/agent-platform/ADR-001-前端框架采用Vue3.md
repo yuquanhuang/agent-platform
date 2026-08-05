@@ -1,8 +1,8 @@
 # ADR-001：Agent 平台前端框架采用 Vue 3
 
 > ADR 状态：已接受  
-> ADR 版本：V1.2  
-> 生效基线：`agent-platform-v1-dev-baseline-2026-08-r4`  
+> ADR 版本：V1.3  
+> 生效基线：`agent-platform-v1-dev-baseline-2026-08-r5`  
 > 决策日期：2026-08-04
 
 ## 1. 背景
@@ -70,7 +70,7 @@ React、React Router 和 React 专属状态/组件实现不再是 V1 开发基�
 
 - 当前尚未形成需要兼容的正式 React 生产前端，因此不建设 React/Vue 双运行和组件级迁移层。
 - 不允许同时引入 React 和 Vue 微前端作为过渡方案。
-- 所有前端任务必须引用本 ADR、ADR-002 和当前 R4 基线。
+- 所有前端任务必须引用本 ADR、ADR-002 和当前 R5 基线。
 - 全目录不得保留未标记为历史的 React 固定选型描述。
 - OpenAPI 和 Schema 内容不因框架替换而变化，但必须重新校验生成 TypeScript Client、RunEvent Type 和基线 SHA-256。
 - Vue 脚手架、路由权限、Query Cache、Pinia 状态、SSE 恢复和生产构建全部通过后，框架替换验收完成。

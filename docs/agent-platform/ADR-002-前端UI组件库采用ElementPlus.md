@@ -1,8 +1,8 @@
 # ADR-002：Agent 平台前端 UI 组件库采用 Element Plus
 
 > ADR 状态：已接受  
-> ADR 版本：V1.0  
-> 生效基线：`agent-platform-v1-dev-baseline-2026-08-r4`  
+> ADR 版本：V1.1  
+> 生效基线：`agent-platform-v1-dev-baseline-2026-08-r5`  
 > 决策日期：2026-08-05
 
 ## 1. 决策

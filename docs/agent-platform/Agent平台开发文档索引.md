@@ -1,6 +1,6 @@
 # Agent 平台开发文档索引
 
-> 文档版本：V1.5  
+> 文档版本：V1.6  
 > 文档状态：开发输入基线
 
 ## 1. 文档集合与阅读顺序
@@ -164,10 +164,18 @@ Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 - Python 后端业务代码统一位于 `backend/`，Vue 前端业务代码统一位于 `frontend/`；根目录不再建立平行 `apps/`、`packages/`。
 - 更新任务包路径、文档版本、基线清单和完整文件 SHA-256；API、事件、状态机和 Vue 技术选型未变化。
 
-### Frozen Baseline 2026-08-R4
+### Frozen Baseline 2026-08-R4（已被 R5 取代）
 
 - 前端 UI 组件库固定为 Element Plus，并新增 ADR-002 与统一封装/design token 约束。
 - local/test OIDC 固定使用服务端 Mock Claim；staging/production 禁止 Mock，真实 Issuer/Claim 待部署确认。
 - Model Gateway 固定支持 OpenAI、Qwen、DeepSeek Adapter，具体启用模型和版本化费用表由 Epic 1 配置。
 - AgentScope 固定为 2.0.x，精确 patch 由 `uv.lock` 和运行镜像 Digest 固定。
 - API、RunEvent、状态机、Epic 0～9 和 `backend/`、`frontend/` 目录边界保持不变。
+
+### Frozen Baseline 2026-08-R5
+
+- 在执行计划中新增 `AP-E<epic>-NNN` AI Coding 任务目录、依赖顺序和合并节奏。
+- Epic 仍作为里程碑；每个任务只交付一个明确行为、紧密契约组或迁移组。
+- 固定首个开发任务为 `AP-E0-001` 契约完整性与校验门禁。
+- 独立保留 Epic 4 RunEvent/SSE 边界；Epic 3 只定义和产生 RuntimeEventCandidate Port。
+- 产品范围、机器契约、技术选型和 Epic 0～9 顺序未变化。

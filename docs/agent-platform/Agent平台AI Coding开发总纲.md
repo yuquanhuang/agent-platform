@@ -1,6 +1,6 @@
 # Agent 平台 AI Coding 开发总纲
 
-> 文档版本：V1.4  
+> 文档版本：V1.5  
 > 文档状态：开发输入基线  
 > 基线清单：[agent-platform-baseline.yaml](./agent-platform-baseline.yaml)
 
@@ -203,9 +203,9 @@ Schema/状态机
 每个任务在开始编码前必须提供以下内容：
 
 ```yaml
-task_id: AP-EPIC-NNN
+task_id: AP-E<epic>-NNN
 title: 明确、单一的交付目标
-baseline: agent-platform-v1-dev-baseline-2026-08-r4
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
 baseline_integrity:
   hash_algorithm: sha256
   verified_files: []
