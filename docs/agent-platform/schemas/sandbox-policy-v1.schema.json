@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-platform.local/schemas/sandbox-policy-v1.schema.json",
+  "title": "Agent Platform SandboxPolicy V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope",
+    "image_digest",
+    "cpu_limit",
+    "memory_mb",
+    "disk_mb",
+    "pids_limit",
+    "timeout_seconds",
+    "network",
+    "filesystem",
+    "process",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "scope": { "enum": ["run", "session"] },
+    "image_digest": {
+      "type": "string",
+      "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+    },
+    "cpu_limit": { "type": "number", "exclusiveMinimum": 0, "maximum": 64 },
+    "memory_mb": { "type": "integer", "minimum": 128, "maximum": 262144 },
+    "disk_mb": { "type": "integer", "minimum": 128, "maximum": 1048576 },
+    "pids_limit": { "type": "integer", "minimum": 8, "maximum": 4096 },
+    "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+    "run_as_non_root": { "const": true },
+    "readonly_root_filesystem": { "const": true },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "allow_domains", "allow_ports", "deny_private_networks"],
+      "properties": {
+        "mode": { "enum": ["none", "allowlist"] },
+        "allow_domains": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 100,
+          "items": { "type": "string", "minLength": 1, "maxLength": 253 }
+        },
+        "allow_ports": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 32,
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        },
+        "deny_private_networks": { "const": true },
+        "max_redirects": { "type": "integer", "minimum": 0, "maximum": 10, "default": 3 }
+      }
+    },
+    "filesystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read_patterns", "write_patterns", "max_files", "max_file_bytes"],
+      "properties": {
+        "read_patterns": { "type": "array", "maxItems": 100, "items": { "type": "string" } },
+        "write_patterns": { "type": "array", "maxItems": 100, "items": { "type": "string" } },
+        "max_files": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "max_file_bytes": { "type": "integer", "minimum": 1, "maximum": 10737418240 },
+        "allow_symlinks": { "const": false },
+        "allow_device_files": { "const": false }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_executables", "shell_allowed", "max_processes"],
+      "properties": {
+        "allowed_executables": { "type": "array", "maxItems": 100, "items": { "type": "string" } },
+        "shell_allowed": { "type": "boolean", "default": false },
+        "max_processes": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "termination_grace_seconds": { "type": "integer", "minimum": 1, "maximum": 120, "default": 10 }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow_export", "max_artifacts", "max_total_bytes", "allowed_content_types"],
+      "properties": {
+        "allow_export": { "type": "boolean" },
+        "max_artifacts": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "max_total_bytes": { "type": "integer", "minimum": 0, "maximum": 107374182400 },
+        "allowed_content_types": { "type": "array", "maxItems": 100, "items": { "type": "string" } }
+      }
+    },
+    "idle_ttl_seconds": { "type": "integer", "minimum": 0, "maximum": 604800, "default": 0 },
+    "max_lifetime_seconds": { "type": "integer", "minimum": 1, "maximum": 604800, "default": 86400 }
+  }
+}

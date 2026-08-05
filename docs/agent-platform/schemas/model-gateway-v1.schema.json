@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-platform.local/schemas/model-gateway-v1.schema.json",
+  "title": "Agent Platform Model Gateway Contracts V1",
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "immutable_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "hash"],
+      "properties": {
+        "uri": { "type": "string", "maxLength": 2048 },
+        "hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "type": "string", "pattern": "^\\d+(\\.\\d{1,8})?$" },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "tenant_id", "user_id", "agent_id", "snapshot_id", "run_id",
+        "model_binding_id", "prompt_ref", "tools_ref", "capability_requirements",
+        "stream", "timeout_seconds", "idempotency_key", "authorization_token"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "tenant_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "agent_id": { "type": "string" },
+        "snapshot_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "execution_attempt": { "type": "integer", "minimum": 1 },
+        "model_binding_id": { "type": "string" },
+        "prompt_ref": { "$ref": "#/$defs/immutable_ref" },
+        "tools_ref": { "$ref": "#/$defs/immutable_ref" },
+        "capability_requirements": { "type": "array", "uniqueItems": true, "items": { "enum": ["stream", "tools", "vision", "structured_output", "reasoning"] } },
+        "parameters": { "type": "object", "maxProperties": 50, "additionalProperties": { "type": ["string", "number", "integer", "boolean", "null"] } },
+        "stream": { "type": "boolean" },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 600 },
+        "token_budget": { "type": ["integer", "null"], "minimum": 1 },
+        "cost_budget": { "anyOf": [{ "$ref": "#/$defs/money" }, { "type": "null" }] },
+        "idempotency_key": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "authorization_token": { "type": "string", "minLength": 16, "maxLength": 4096 }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens", "estimated"],
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "reasoning_tokens": { "type": "integer", "minimum": 0 },
+        "cache_read_tokens": { "type": "integer", "minimum": 0 },
+        "cache_write_tokens": { "type": "integer", "minimum": 0 },
+        "estimated": { "type": "boolean" },
+        "cost": { "anyOf": [{ "$ref": "#/$defs/money" }, { "type": "null" }] }
+      }
+    },
+    "stream_event": {
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event_id", "event_type", "provider", "model", "provider_request_id", "occurred_at", "payload"],
+          "properties": {
+            "event_id": { "type": "string" },
+            "event_type": { "enum": ["response_started", "text_delta", "tool_call_delta", "usage", "response_completed", "response_error"] },
+            "provider": { "type": "string" },
+            "model": { "type": "string" },
+            "provider_request_id": { "type": ["string", "null"] },
+            "occurred_at": { "type": "string", "format": "date-time" },
+            "payload": { "type": "object" }
+          }
+        },
+        {
+          "oneOf": [
+            { "properties": { "event_type": { "const": "response_started" }, "payload": { "$ref": "#/$defs/response_started_payload" } } },
+            { "properties": { "event_type": { "const": "text_delta" }, "payload": { "$ref": "#/$defs/text_delta_payload" } } },
+            { "properties": { "event_type": { "const": "tool_call_delta" }, "payload": { "$ref": "#/$defs/tool_call_delta_payload" } } },
+            { "properties": { "event_type": { "const": "usage" }, "payload": { "$ref": "#/$defs/usage_payload" } } },
+            { "properties": { "event_type": { "const": "response_completed" }, "payload": { "$ref": "#/$defs/response_completed_payload" } } },
+            { "properties": { "event_type": { "const": "response_error" }, "payload": { "$ref": "#/$defs/response_error_payload" } } }
+          ]
+        }
+      ]
+    },
+    "response_started_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "text_delta_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delta"],
+      "properties": { "delta": { "type": "string", "minLength": 1, "maxLength": 65536 } }
+    },
+    "tool_call_delta_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_call_id", "arguments_patch"],
+      "properties": {
+        "tool_call_id": { "type": "string" },
+        "tool_name": { "type": ["string", "null"], "maxLength": 255 },
+        "arguments_patch": { "type": "string", "maxLength": 65536 }
+      }
+    },
+    "usage_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usage"],
+      "properties": { "usage": { "$ref": "#/$defs/usage" } }
+    },
+    "response_completed_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finish_reason", "output_ref"],
+      "properties": {
+        "finish_reason": { "enum": ["stop", "length", "tool_call", "cancelled", "unknown"] },
+        "output_ref": { "$ref": "#/$defs/immutable_ref" }
+      }
+    },
+    "response_error_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "submission_state"],
+      "properties": {
+        "code": { "type": "string", "maxLength": 64 },
+        "message": { "type": "string", "maxLength": 4000 },
+        "retryable": { "type": "boolean" },
+        "submission_state": { "enum": ["not_submitted", "submitted", "unknown"] }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "provider_request_id", "finish_reason", "output_ref", "usage", "fallback_count"],
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "provider_request_id": { "type": ["string", "null"] },
+        "finish_reason": { "enum": ["stop", "length", "tool_call", "cancelled", "error", "unknown"] },
+        "output_ref": { "$ref": "#/$defs/immutable_ref" },
+        "usage": { "$ref": "#/$defs/usage" },
+        "fallback_count": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 64 } }
+      }
+    }
+  }
+}

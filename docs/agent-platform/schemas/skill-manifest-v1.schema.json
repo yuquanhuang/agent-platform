@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-platform.local/schemas/skill-manifest-v1.schema.json",
+  "title": "Agent Platform Skill Manifest V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "runtime", "entry", "permissions", "dependencies", "inputs", "outputs", "sandbox"],
+  "properties": {
+    "apiVersion": { "const": "agent-platform/v1" },
+    "kind": { "const": "Skill" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "displayName", "description"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$" },
+        "version": { "type": "string", "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "license": { "type": ["string", "null"], "maxLength": 100 },
+        "authors": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 200 } }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compatible", "minimumPlatformVersion"],
+      "properties": {
+        "compatible": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["agentscope", "codex"] } },
+        "minimumPlatformVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instructions"],
+      "properties": {
+        "instructions": { "const": "SKILL.md" },
+        "command": {
+          "type": ["array", "null"],
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filesystem", "network", "tools", "secrets"],
+      "properties": {
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["read", "write"],
+          "properties": {
+            "read": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/workspacePattern" } },
+            "write": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/workspacePattern" } }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowDomains", "allowPorts"],
+          "properties": {
+            "allowDomains": { "type": "array", "uniqueItems": true, "maxItems": 100, "items": { "type": "string", "maxLength": 253 } },
+            "allowPorts": { "type": "array", "uniqueItems": true, "maxItems": 32, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+          }
+        },
+        "tools": { "type": "array", "uniqueItems": true, "maxItems": 100, "items": { "type": "string", "pattern": "^[a-zA-Z0-9_.:-]{1,128}$" } },
+        "secrets": { "type": "array", "uniqueItems": true, "maxItems": 50, "items": { "type": "string", "pattern": "^secret-purpose:[a-zA-Z0-9_.:-]{1,128}$" } }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["python", "system"],
+      "properties": {
+        "python": { "type": "array", "uniqueItems": true, "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 300 } },
+        "system": { "type": "array", "uniqueItems": true, "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+        "lockFile": { "type": ["string", "null"], "pattern": "^(requirements\\.lock|uv\\.lock|)$" }
+      }
+    },
+    "inputs": { "$ref": "https://json-schema.org/draft/2020-12/schema" },
+    "outputs": { "$ref": "https://json-schema.org/draft/2020-12/schema" },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["imageDigest", "timeoutSeconds", "riskLevel"],
+      "properties": {
+        "imageDigest": { "type": "string", "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$" },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "riskLevel": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+        "requiresRunSandbox": { "type": "boolean", "default": true }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "inputFile", "expectedFile"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 100 },
+          "inputFile": { "$ref": "#/$defs/relativePath" },
+          "expectedFile": { "$ref": "#/$defs/relativePath" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\u0000).+$"
+    },
+    "workspacePattern": {
+      "type": "string",
+      "pattern": "^workspace://tenant/\\{tenant_id\\}/user/\\{user_id\\}/session/\\{session_id\\}/runs/\\{run_id\\}/.*$"
+    }
+  }
+}

@@ -1,0 +1,1760 @@
+openapi: 3.1.0
+info:
+  title: Agent Platform Core API
+  version: 1.2.0
+  description: Core development contract for Agent, Release, Session, Run, Event, Approval and Artifact.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+  - name: Agents
+  - name: Releases
+  - name: Sessions
+  - name: Runs
+  - name: Approvals
+  - name: Artifacts
+  - name: InternalEvents
+  - name: Operations
+paths:
+  /api/v1/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentIdentity
+      responses:
+        '200':
+          description: Current authenticated platform identity and active tenant context.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentIdentity'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents:
+    post:
+      tags: [Agents]
+      operationId: createAgent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCreateRequest'
+      responses:
+        '201':
+          description: Agent created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    get:
+      tags: [Agents]
+      operationId: listAgents
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: keyword
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        '200':
+          description: Agent page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+    get:
+      tags: [Agents]
+      operationId: getAgent
+      responses:
+        '200':
+          description: Agent detail.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    patch:
+      tags: [Agents]
+      operationId: updateAgent
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentUpdateRequest'
+      responses:
+        '200':
+          description: Agent updated.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Agents]
+      operationId: deleteAgent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '202':
+          description: Agent deletion workflow accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/copy:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Agents]
+      operationId: copyAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CopyAgentRequest'
+      responses:
+        '201':
+          description: Copied Agent draft.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/disable:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    post:
+      tags: [Agents]
+      operationId: disableAgent
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisableAgentRequest'
+      responses:
+        '200':
+          description: Effective Agent state.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/publish:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Releases]
+      operationId: publishAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishAgentRequest'
+      responses:
+        '202':
+          description: Release workflow accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/releases/{release_id}:
+    parameters:
+      - $ref: '#/components/parameters/ReleaseId'
+    get:
+      tags: [Releases]
+      operationId: getRelease
+      responses:
+        '200':
+          description: Release detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Release'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Releases]
+      operationId: rollbackAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RollbackAgentRequest'
+      responses:
+        '202':
+          description: Rollback release accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+    get:
+      tags: [Releases]
+      operationId: listAgentVersions
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Agent version page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentVersionPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/versions/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+      - $ref: '#/components/parameters/VersionId'
+    get:
+      tags: [Releases]
+      operationId: getAgentVersion
+      responses:
+        '200':
+          description: Immutable Agent version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentVersion'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/diff:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+      - $ref: '#/components/parameters/FromSnapshotId'
+      - $ref: '#/components/parameters/ToSnapshotId'
+    get:
+      tags: [Releases]
+      operationId: diffAgentSnapshots
+      responses:
+        '200':
+          description: Structured Snapshot diff used by publish and rollback review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotDiff'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/references:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+    get:
+      tags: [Agents]
+      operationId: listAgentReferences
+      responses:
+        '200':
+          description: References that affect disable or deletion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferencePage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/deployments/{deployment_id}:
+    parameters:
+      - $ref: '#/components/parameters/DeploymentId'
+    get:
+      tags: [Releases]
+      operationId: getDeployment
+      responses:
+        '200':
+          description: Deployment detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deployment'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/sessions:
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: agent_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ACTIVE, ARCHIVED, DELETED]
+      responses:
+        '200':
+          description: Session page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    post:
+      tags: [Sessions]
+      operationId: createSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreateRequest'
+      responses:
+        '201':
+          description: Session created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/sessions/{session_id}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      responses:
+        '200':
+          description: Session detail.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    patch:
+      tags: [Sessions]
+      operationId: updateSession
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionUpdateRequest'
+      responses:
+        '200':
+          description: Updated Session.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Sessions]
+      operationId: deleteSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '202':
+          description: Auditable Session deletion accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/sessions/{session_id}/archive:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    post:
+      tags: [Sessions]
+      operationId: archiveSession
+      responses:
+        '200':
+          description: Archived Session.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/sessions/{session_id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Sessions]
+      operationId: listSessionMessages
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: branch_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Immutable message history page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagePage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/sessions/{session_id}/runs:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [Runs]
+      operationId: listSessionRuns
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Runs belonging to a Session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/runs:
+    post:
+      tags: [Runs]
+      operationId: createRun
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunCreateRequest'
+      responses:
+        '202':
+          description: Run accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/runs/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Runs]
+      operationId: getRun
+      responses:
+        '200':
+          description: Run detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/runs/{run_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Runs]
+      operationId: cancelRun
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRunRequest'
+      responses:
+        '202':
+          description: Cancellation accepted or current terminal state returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/runs/{run_id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Runs]
+      operationId: retryRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetryRunRequest'
+      responses:
+        '202':
+          description: New retry Run accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/runs/{run_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+      - name: after
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      - $ref: '#/components/parameters/Limit'
+    get:
+      tags: [Runs]
+      operationId: listRunEvents
+      responses:
+        '200':
+          description: Run event page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunEventPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/runs/{run_id}/stream:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+      - $ref: '#/components/parameters/LastEventId'
+      - name: after
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+    get:
+      tags: [Runs]
+      operationId: streamRunEvents
+      responses:
+        '200':
+          description: SSE stream. Each event data field contains a RunEvent JSON object.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/approvals/{approval_id}/decision:
+    parameters:
+      - $ref: '#/components/parameters/ApprovalId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    post:
+      tags: [Approvals]
+      operationId: decideApproval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalDecisionRequest'
+      responses:
+        '200':
+          description: Effective approval state.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Approval'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/approvals:
+    get:
+      tags: [Approvals]
+      operationId: listApprovals
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, APPROVED, REJECTED, EXPIRED, CANCELLED, CONSUMED]
+        - name: run_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Approval page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/approvals/{approval_id}:
+    parameters:
+      - $ref: '#/components/parameters/ApprovalId'
+    get:
+      tags: [Approvals]
+      operationId: getApproval
+      responses:
+        '200':
+          description: Approval detail.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Approval'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/artifacts/uploads:
+    post:
+      tags: [Artifacts]
+      operationId: createArtifactUpload
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArtifactUploadCreateRequest'
+      responses:
+        '201':
+          description: Restricted upload created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactUploadAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/artifacts/{artifact_id}:
+    parameters:
+      - $ref: '#/components/parameters/ArtifactId'
+    get:
+      tags: [Artifacts]
+      operationId: getArtifact
+      responses:
+        '200':
+          description: Artifact metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Artifact'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Artifacts]
+      operationId: deleteArtifact
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Artifact deletion accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/artifacts/{artifact_id}/complete:
+    parameters:
+      - $ref: '#/components/parameters/ArtifactId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Artifacts]
+      operationId: completeArtifactUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArtifactCompleteRequest'
+      responses:
+        '202':
+          description: Artifact verification and scan accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Artifact'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/artifacts/{artifact_id}/download:
+    parameters:
+      - $ref: '#/components/parameters/ArtifactId'
+    get:
+      tags: [Artifacts]
+      operationId: createArtifactDownload
+      responses:
+        '200':
+          description: Short-lived authorized download URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactDownload'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/operations/{operation_id}:
+    parameters:
+      - $ref: '#/components/parameters/OperationId'
+    get:
+      tags: [Operations]
+      operationId: getOperation
+      responses:
+        '200':
+          description: Queryable asynchronous operation state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /internal/v1/runs/{run_id}/events:batch:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [InternalEvents]
+      operationId: appendRunEventCandidates
+      security:
+        - serviceAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunEventBatchRequest'
+      responses:
+        '200':
+          description: Per-candidate append result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunEventBatchResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    serviceAuth:
+      type: mutualTLS
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: '^"rv:[1-9][0-9]*"$'
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+    AgentId:
+      name: agent_id
+      in: path
+      required: true
+      schema:
+        type: string
+    VersionId:
+      name: version_id
+      in: path
+      required: true
+      schema:
+        type: string
+    FromSnapshotId:
+      name: from_snapshot_id
+      in: query
+      required: true
+      schema:
+        type: string
+    ToSnapshotId:
+      name: to_snapshot_id
+      in: query
+      required: true
+      schema:
+        type: string
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ReleaseId:
+      name: release_id
+      in: path
+      required: true
+      schema:
+        type: string
+    DeploymentId:
+      name: deployment_id
+      in: path
+      required: true
+      schema:
+        type: string
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ApprovalId:
+      name: approval_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ArtifactId:
+      name: artifact_id
+      in: path
+      required: true
+      schema:
+        type: string
+    OperationId:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        type: string
+  headers:
+    ETag:
+      description: Strong resource version ETag. Its exact value is `"rv:<resource_version>"`.
+      schema:
+        type: string
+        pattern: '^"rv:[1-9][0-9]*"$'
+  responses:
+    ErrorResponse:
+      description: Error response.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    CurrentIdentity:
+      type: object
+      additionalProperties: false
+      required: [user_id, external_subject, display_name, active_tenant_id, memberships, auth_time]
+      properties:
+        user_id:
+          type: string
+        external_subject:
+          type: string
+        display_name:
+          type: string
+        active_tenant_id:
+          type: [string, 'null']
+        memberships:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [tenant_id, tenant_name, status, role_ids, membership_version]
+            properties:
+              tenant_id: { type: string }
+              tenant_name: { type: string }
+              status: { enum: [ACTIVE, DISABLED] }
+              role_ids: { type: array, uniqueItems: true, items: { type: string } }
+              membership_version: { type: integer, minimum: 1 }
+        auth_time:
+          type: string
+          format: date-time
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, request_id, retryable]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        request_id:
+          type: string
+        retryable:
+          type: boolean
+        details:
+          type: object
+          additionalProperties: true
+    AgentCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, runtime_type]
+      properties:
+        code:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]{2,63}$'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 2000
+        runtime_type:
+          type: string
+          enum: [agentscope, codex]
+        visibility:
+          type: string
+          enum: [private, tenant]
+          default: private
+        tags:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 32
+    CopyAgentRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]{2,63}$'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    DisableAgentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+    AgentUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 2000
+        visibility:
+          type: string
+          enum: [private, tenant]
+        tags:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 32
+        bindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceBinding'
+    ResourceBinding:
+      type: object
+      additionalProperties: false
+      required: [resource_type, resource_id, version_policy]
+      properties:
+        resource_type:
+          type: string
+          enum: [prompt, skill, mcp, model, knowledge, sandbox, agent]
+        resource_id:
+          type: string
+        version_policy:
+          type: string
+          enum: [fixed, resolve_on_publish]
+        version_id:
+          type: [string, 'null']
+    Agent:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, runtime_type, visibility, tags, bindings, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        runtime_type: { type: string, enum: [agentscope, codex] }
+        visibility: { type: string, enum: [private, tenant] }
+        tags:
+          type: array
+          maxItems: 20
+          items: { type: string, maxLength: 32 }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/ResourceBinding' }
+        status: { type: string, enum: [DRAFT, ACTIVE, DISABLED, DELETING, DELETED] }
+        resource_version: { type: integer, minimum: 1 }
+        active_deployment_id: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AgentPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Agent'
+        next_cursor:
+          type: [string, 'null']
+        has_more:
+          type: boolean
+    PublishAgentRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_agent_version, runtime_targets, release_note]
+      properties:
+        expected_agent_version:
+          type: integer
+          minimum: 1
+        runtime_targets:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        release_note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        run_smoke_test:
+          type: boolean
+          default: true
+        activate_on_success:
+          type: boolean
+          default: true
+    Release:
+      type: object
+      additionalProperties: false
+      required: [id, agent_id, status, workflow_id, created_at]
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        status:
+          type: string
+          enum: [REQUESTED, VALIDATING, COMPILING, SCANNING, SMOKE_TESTING, ACTIVATING, SUCCEEDED, FAILED, CANCELLED]
+        workflow_id:
+          type: string
+        snapshot_id:
+          type: [string, 'null']
+        deployment_ids:
+          type: array
+          items:
+            type: string
+        error:
+          anyOf:
+            - $ref: '#/components/schemas/Error'
+            - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+    ReleaseAccepted:
+      type: object
+      additionalProperties: false
+      required: [release_id, workflow_id, status, status_url]
+      properties:
+        release_id:
+          type: string
+        workflow_id:
+          type: string
+        status:
+          type: string
+          enum: [REQUESTED, VALIDATING]
+        status_url:
+          type: string
+    RollbackAgentRequest:
+      type: object
+      additionalProperties: false
+      required: [snapshot_id, runtime_targets, release_note]
+      properties:
+        snapshot_id:
+          type: string
+        runtime_targets:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        release_note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    AgentVersion:
+      type: object
+      additionalProperties: false
+      required: [id, agent_id, version_no, snapshot_id, content_hash, created_at]
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        version_no:
+          type: integer
+          minimum: 1
+        snapshot_id:
+          type: string
+        content_hash:
+          type: string
+          pattern: '^sha256:[a-f0-9]{64}$'
+        release_note:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+    AgentVersionPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentVersion'
+        next_cursor:
+          type: [string, 'null']
+        has_more:
+          type: boolean
+    SnapshotDiff:
+      type: object
+      additionalProperties: false
+      required: [agent_id, from_snapshot_id, to_snapshot_id, changes]
+      properties:
+        agent_id: { type: string }
+        from_snapshot_id: { type: string }
+        to_snapshot_id: { type: string }
+        changes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [category, path, change_type]
+            properties:
+              category: { enum: [resource_version, permission, network, sandbox, model, secret_reference, runtime] }
+              path: { type: string }
+              change_type: { enum: [added, removed, changed] }
+              before: {}
+              after: {}
+              sensitive: { type: boolean, default: false }
+    Reference:
+      type: object
+      additionalProperties: false
+      required: [resource_type, resource_id, reference_type]
+      properties:
+        resource_type: { type: string }
+        resource_id: { type: string }
+        reference_type: { enum: [deployment, schedule, child_agent, session, mcp_entry] }
+    ReferencePage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Reference' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    Deployment:
+      type: object
+      additionalProperties: false
+      required: [id, agent_id, snapshot_id, bundle_id, runtime_target_id, status, compatibility_hash, created_at]
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        snapshot_id:
+          type: string
+        bundle_id:
+          type: string
+        runtime_target_id:
+          type: string
+        status:
+          type: string
+          enum: [STAGED, ACTIVE, DEGRADED, RETIRED, FAILED]
+        compatibility_hash:
+          type: string
+          pattern: '^sha256:[a-f0-9]{64}$'
+        created_at:
+          type: string
+          format: date-time
+        activated_at:
+          type: [string, 'null']
+          format: date-time
+    SessionCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [agent_id]
+      properties:
+        agent_id:
+          type: string
+        title:
+          type: string
+          maxLength: 200
+        metadata:
+          $ref: '#/components/schemas/SessionMetadata'
+    SessionMetadata:
+      type: object
+      additionalProperties: false
+      properties:
+        locale:
+          type: string
+          maxLength: 16
+        timezone:
+          type: string
+          maxLength: 64
+        client_context_ref:
+          type: [string, 'null']
+          maxLength: 2048
+        client_context_hash:
+          type: [string, 'null']
+          pattern: '^sha256:[a-f0-9]{64}$'
+        tags:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 32
+    Session:
+      type: object
+      additionalProperties: false
+      required: [id, agent_id, user_id, default_deployment_id, status, resource_version, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        user_id:
+          type: string
+        default_deployment_id:
+          type: string
+        title:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [ACTIVE, ARCHIVED, DELETED]
+        resource_version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        archived_at:
+          type: [string, 'null']
+          format: date-time
+    SessionUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: { type: [string, 'null'], maxLength: 200 }
+        metadata: { $ref: '#/components/schemas/SessionMetadata' }
+    SessionPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Session' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    MessageContentPart:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { enum: [text, artifact_reference, tool_reference, error_notice] }
+        text: { type: [string, 'null'] }
+        artifact_id: { type: [string, 'null'] }
+        tool_call_id: { type: [string, 'null'] }
+        error_code: { type: [string, 'null'] }
+    Message:
+      type: object
+      additionalProperties: false
+      required: [id, session_id, role, content_parts, created_at]
+      properties:
+        id: { type: string }
+        session_id: { type: string }
+        branch_id: { type: [string, 'null'] }
+        parent_message_id: { type: [string, 'null'] }
+        role: { enum: [USER, ASSISTANT, SYSTEM, TOOL] }
+        content_parts: { type: array, items: { $ref: '#/components/schemas/MessageContentPart' } }
+        source_run_id: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    MessagePage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Message' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    RunCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [session_id, input]
+      properties:
+        session_id:
+          type: string
+        client_request_id:
+          type: string
+          minLength: 8
+          maxLength: 128
+          description: Optional client correlation identifier. It is not the idempotency key.
+        input:
+          $ref: '#/components/schemas/RunInput'
+        execution:
+          $ref: '#/components/schemas/RunExecution'
+    RunInput:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 100000
+        attachments:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [artifact_id]
+            properties:
+              artifact_id:
+                type: string
+    RunExecution:
+      type: object
+      additionalProperties: false
+      properties:
+        deployment_id:
+          type: [string, 'null']
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+          default: 600
+        token_budget:
+          type: [integer, 'null']
+          minimum: 1
+        cost_budget:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          pattern: '^\d+(\.\d{1,8})?$'
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+    RunAccepted:
+      type: object
+      additionalProperties: false
+      required: [run_id, session_id, status, events_url, stream_url]
+      properties:
+        run_id:
+          type: string
+        session_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        events_url:
+          type: string
+        stream_url:
+          type: string
+    RunStatus:
+      type: string
+      enum: [CREATED, QUEUED, PREPARING, RUNNING, WAITING_APPROVAL, CANCELLING, SUCCEEDED, FAILED, CANCELLED, TIMEOUT]
+    Run:
+      type: object
+      additionalProperties: false
+      required: [id, session_id, snapshot_id, deployment_id, status, created_at]
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        snapshot_id:
+          type: string
+        deployment_id:
+          type: string
+        retry_of_run_id:
+          type: [string, 'null']
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        result_quality:
+          type: [string, 'null']
+          enum: [NORMAL, SUCCEEDED_WITH_WARNINGS, null]
+        latest_sequence_no:
+          type: integer
+          minimum: 0
+        error:
+          anyOf:
+            - $ref: '#/components/schemas/Error'
+            - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: [string, 'null']
+          format: date-time
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+    RunPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Run' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    CancelRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+    RetryRunRequest:
+      type: object
+      additionalProperties: false
+      required: [deployment_policy]
+      properties:
+        deployment_policy:
+          type: string
+          enum: [original_snapshot, current_deployment]
+    RunEventPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more, latest_sequence_no]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunEvent'
+        has_more:
+          type: boolean
+        latest_sequence_no:
+          type: integer
+          minimum: 0
+    RunEvent:
+      $ref: './schemas/run-event-v1.schema.json'
+    ApprovalDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [APPROVED, REJECTED]
+        comment:
+          type: string
+          maxLength: 2000
+    Approval:
+      type: object
+      additionalProperties: false
+      required: [id, run_id, tool_name, parameter_digest, status, expires_at, resource_version]
+      properties:
+        id:
+          type: string
+        run_id:
+          type: string
+        tool_name:
+          type: string
+        parameter_digest:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED, EXPIRED, CANCELLED, CONSUMED]
+        expires_at:
+          type: string
+          format: date-time
+        resource_version:
+          type: integer
+          minimum: 1
+    ApprovalPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Approval'
+        next_cursor:
+          type: [string, 'null']
+        has_more:
+          type: boolean
+    ArtifactUploadCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, size, content_type, content_hash]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        size:
+          type: integer
+          minimum: 1
+          maximum: 104857600
+        content_type:
+          type: string
+          maxLength: 255
+        content_hash:
+          type: string
+          pattern: '^sha256:[a-f0-9]{64}$'
+    ArtifactUploadAccepted:
+      type: object
+      additionalProperties: false
+      required: [artifact_id, upload_url, expires_at, required_headers]
+      properties:
+        artifact_id:
+          type: string
+        upload_url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+        required_headers:
+          type: object
+          additionalProperties:
+            type: string
+    ArtifactCompleteRequest:
+      type: object
+      additionalProperties: false
+      required: [size, content_hash]
+      properties:
+        size:
+          type: integer
+          minimum: 1
+        content_hash:
+          type: string
+          pattern: '^sha256:[a-f0-9]{64}$'
+    Artifact:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, size, content_type, hash, created_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [UPLOADING, SCANNING, AVAILABLE, REJECTED, FAILED, EXPIRED, DELETING, DELETED]
+        size:
+          type: integer
+          minimum: 0
+        content_type:
+          type: string
+        hash:
+          type: string
+        run_id:
+          type: [string, 'null']
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    ArtifactDownload:
+      type: object
+      additionalProperties: false
+      required: [url, expires_at]
+      properties:
+        url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+    OperationAccepted:
+      type: object
+      additionalProperties: false
+      required: [operation_id, status, status_url]
+      properties:
+        operation_id:
+          type: string
+        status:
+          type: string
+          enum: [ACCEPTED, RUNNING]
+        status_url:
+          type: string
+    Operation:
+      type: object
+      additionalProperties: false
+      required: [operation_id, operation_type, status, created_at, updated_at]
+      properties:
+        operation_id: { type: string }
+        operation_type: { type: string, maxLength: 128 }
+        status: { enum: [ACCEPTED, RUNNING, SUCCEEDED, FAILED, CANCELLED] }
+        resource_type: { type: [string, 'null'] }
+        resource_id: { type: [string, 'null'] }
+        result: { type: [object, 'null'], additionalProperties: true }
+        error:
+          anyOf:
+            - $ref: '#/components/schemas/Error'
+            - type: 'null'
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+    RuntimeEventCandidate:
+      $ref: './schemas/run-event-v1.schema.json#/$defs/runtime_event_candidate'
+    RunEventBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [execution_attempt, execution_fencing_token, events]
+      properties:
+        execution_attempt:
+          type: integer
+          minimum: 1
+        execution_fencing_token:
+          type: string
+          minLength: 16
+          maxLength: 512
+        events:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/RuntimeEventCandidate'
+    RunEventAppendResult:
+      type: object
+      additionalProperties: false
+      required: [source_event_id, status]
+      properties:
+        source_event_id:
+          type: string
+        status:
+          type: string
+          enum: [created, duplicate, rejected]
+        event_id:
+          type: [string, 'null']
+        sequence_no:
+          type: [integer, 'null']
+          minimum: 1
+        error:
+          anyOf:
+            - $ref: '#/components/schemas/Error'
+            - type: 'null'
+    RunEventBatchResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunEventAppendResult'

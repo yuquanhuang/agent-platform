@@ -1,0 +1,133 @@
+{
+  "spec_version": "1.0",
+  "run_id": "run_01",
+  "trace_id": "trace_01",
+  "tenant_id": "tenant_01",
+  "user_id": "user_01",
+  "session_id": "session_01",
+  "execution": {
+    "attempt": 1,
+    "fencing_token": "opaque-fencing-token-0001",
+    "idempotency_key": "run-request-0001",
+    "timeout_seconds": 600,
+    "token_budget": 20000,
+    "cost_budget": { "amount": "10.00", "currency": "CNY" }
+  },
+  "session": {
+    "runtime_session_id": null,
+    "context_ref": null,
+    "context_hash": null
+  },
+  "release": {
+    "agent_id": "agent_01",
+    "agent_version_id": "agent_version_01",
+    "snapshot_id": "snapshot_01",
+    "deployment_id": "deployment_01",
+    "bundle": {
+      "uri": "bundle://tenant/tenant_01/snapshot/snapshot_01/runtime/agentscope/sha256-example",
+      "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "size_bytes": 4096,
+      "content_type": "application/vnd.agent-platform.bundle"
+    },
+    "compiler_version": "1.0.0"
+  },
+  "runtime": {
+    "runtime_type": "agentscope",
+    "target_id": "runtime_target_01",
+    "transport": "internal",
+    "capability_requirements": ["cancel", "tool_call", "files"]
+  },
+  "input": {
+    "user_message_id": "message_user_01",
+    "text": "分析附件并生成报告",
+    "attachments": []
+  },
+  "prompt": {
+    "compiled_ref": {
+      "uri": "immutable://prompt/run_01",
+      "hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "size_bytes": 2048,
+      "content_type": "text/markdown"
+    },
+    "prompt_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "compiler_version": "1.0.0",
+    "token_estimate": 1200
+  },
+  "bindings": {
+    "model": {
+      "binding_type": "model",
+      "resource_id": "model_01",
+      "version_id": "model_version_01",
+      "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "configuration_ref": null
+    },
+    "skills": [],
+    "tools": [],
+    "mcp_servers": [],
+    "knowledge": [],
+    "sub_agents": []
+  },
+  "security": {
+    "permission_policy_ref": "immutable://policy/run_01",
+    "permission_policy_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "short_lived_exchange_token": "opaque-short-lived-exchange-token",
+    "token_expires_at": "2026-08-03T09:00:00Z"
+  },
+  "sandbox": {
+    "schema_version": "1.0",
+    "scope": "run",
+    "image_digest": "registry.example/agent-runtime@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "cpu_limit": 2,
+    "memory_mb": 2048,
+    "disk_mb": 4096,
+    "pids_limit": 256,
+    "timeout_seconds": 600,
+    "run_as_non_root": true,
+    "readonly_root_filesystem": true,
+    "network": {
+      "mode": "none",
+      "allow_domains": [],
+      "allow_ports": [],
+      "deny_private_networks": true,
+      "max_redirects": 3
+    },
+    "filesystem": {
+      "read_patterns": ["workspace://tenant/{tenant_id}/user/{user_id}/session/{session_id}/runs/{run_id}/input/**"],
+      "write_patterns": ["workspace://tenant/{tenant_id}/user/{user_id}/session/{session_id}/runs/{run_id}/output/**"],
+      "max_files": 1000,
+      "max_file_bytes": 104857600,
+      "allow_symlinks": false,
+      "allow_device_files": false
+    },
+    "process": {
+      "allowed_executables": ["python"],
+      "shell_allowed": false,
+      "max_processes": 64,
+      "termination_grace_seconds": 10
+    },
+    "artifacts": {
+      "allow_export": true,
+      "max_artifacts": 20,
+      "max_total_bytes": 104857600,
+      "allowed_content_types": ["text/csv", "application/pdf"]
+    },
+    "idle_ttl_seconds": 0,
+    "max_lifetime_seconds": 900
+  },
+  "workspace": {
+    "workspace_uri": "workspace://tenant/tenant_01/user/user_01/session/session_01/runs/run_01/",
+    "quota_bytes": 1073741824,
+    "input_policy": {
+      "uri": "immutable://workspace-policy/input/run_01",
+      "hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "size_bytes": 256,
+      "content_type": "application/json"
+    },
+    "output_policy": {
+      "uri": "immutable://workspace-policy/output/run_01",
+      "hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "size_bytes": 256,
+      "content_type": "application/json"
+    }
+  }
+}

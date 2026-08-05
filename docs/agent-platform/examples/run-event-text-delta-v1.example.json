@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "event_id": "event_42",
+  "source_event_id": "agentscope-message-1-delta-4",
+  "tenant_id": "tenant_01",
+  "run_id": "run_01",
+  "session_id": "session_01",
+  "sequence_no": 42,
+  "event_type": "text_delta",
+  "occurred_at": "2026-08-03T08:15:30.123Z",
+  "recorded_at": "2026-08-03T08:15:30.150Z",
+  "trace_id": "trace_01",
+  "execution_attempt": 1,
+  "payload_version": "1.0",
+  "payload": {
+    "message_id": "message_assistant_01",
+    "delta": "分析结果如下："
+  }
+}

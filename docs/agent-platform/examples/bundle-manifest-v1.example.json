@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "bundle_id": "bundle_01",
+  "tenant_id": "tenant_01",
+  "agent_id": "agent_01",
+  "snapshot_id": "snapshot_01",
+  "runtime_type": "agentscope",
+  "compiler": {
+    "name": "AgentScopeBundleCompiler",
+    "version": "1.0.0"
+  },
+  "files": [
+    {
+      "path": "runtime.yaml",
+      "hash": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+      "size_bytes": 1024,
+      "mode": "0644",
+      "source_type": "runtime_config",
+      "source_id": null
+    }
+  ],
+  "bindings": [
+    {
+      "resource_type": "prompt",
+      "resource_id": "prompt_01",
+      "version_id": "prompt_version_01",
+      "content_hash": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    }
+  ],
+  "security": {
+    "permission_policy_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sandbox_policy_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "secret_refs": ["secret://tenant/tenant_01/model/default"]
+  },
+  "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "signature_ref": "signature://bundle/bundle_01",
+  "sbom_ref": "sbom://bundle/bundle_01",
+  "created_at": "2026-08-03T08:00:00Z"
+}

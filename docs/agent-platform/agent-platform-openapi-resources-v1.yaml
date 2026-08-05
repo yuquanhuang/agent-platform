@@ -1,0 +1,1701 @@
+openapi: 3.1.0
+info:
+  title: Agent Platform Resource and Administration API
+  version: 1.1.0
+  description: Machine-readable contract for versioned resources, administration, Knowledge, Evaluation, Schedule, A2A Client and Audit APIs.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+tags:
+  - name: Prompts
+  - name: Skills
+  - name: McpServers
+  - name: ModelProviders
+  - name: ModelConfigs
+  - name: RuntimeTargets
+  - name: SandboxProfiles
+  - name: Tenants
+  - name: Members
+  - name: Roles
+  - name: Knowledge
+  - name: Evaluations
+  - name: Schedules
+  - name: RemoteAgents
+  - name: Audit
+  - name: Operations
+paths:
+  /api/v1/prompts:
+    get:
+      tags: [Prompts]
+      operationId: listPrompts
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Keyword' }]
+      responses: { '200': { $ref: '#/components/responses/ResourcePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Prompts]
+      operationId: createPrompt
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PromptCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [Prompts]
+      operationId: getPrompt
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [Prompts]
+      operationId: updatePrompt
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody: { $ref: '#/components/requestBodies/ResourceUpdateBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [Prompts]
+      operationId: deletePrompt
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}/publish:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [Prompts]
+      operationId: publishPrompt
+      requestBody: { $ref: '#/components/requestBodies/ResourcePublishBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceVersionResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}/copy:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [Prompts]
+      operationId: copyPrompt
+      requestBody: { $ref: '#/components/requestBodies/ResourceCopyBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [Prompts]
+      operationId: disablePrompt
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [Prompts]
+      operationId: enablePrompt
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}/rollback:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [Prompts]
+      operationId: rollbackPrompt
+      requestBody: { $ref: '#/components/requestBodies/ResourceRollbackBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceVersionResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}/versions:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [Prompts]
+      operationId: listPromptVersions
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ResourceVersionPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}/diff:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [Prompts]
+      operationId: diffPromptVersions
+      parameters: [{ $ref: '#/components/parameters/FromVersionId' }, { $ref: '#/components/parameters/ToVersionId' }]
+      responses: { '200': { $ref: '#/components/responses/ResourceDiffResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/prompts/{resource_id}/references:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [Prompts]
+      operationId: listPromptReferences
+      responses: { '200': { $ref: '#/components/responses/ResourceReferencePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills:
+    get:
+      tags: [Skills]
+      operationId: listSkills
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Keyword' }]
+      responses: { '200': { $ref: '#/components/responses/ResourcePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Skills]
+      operationId: createSkill
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SkillCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [Skills]
+      operationId: getSkill
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [Skills]
+      operationId: updateSkill
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody: { $ref: '#/components/requestBodies/ResourceUpdateBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [Skills]
+      operationId: deleteSkill
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}/publish:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [Skills]
+      operationId: publishSkill
+      requestBody: { $ref: '#/components/requestBodies/ResourcePublishBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceVersionResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}/copy:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [Skills]
+      operationId: copySkill
+      requestBody: { $ref: '#/components/requestBodies/ResourceCopyBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [Skills]
+      operationId: disableSkill
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [Skills]
+      operationId: enableSkill
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}/rollback:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [Skills]
+      operationId: rollbackSkill
+      requestBody: { $ref: '#/components/requestBodies/ResourceRollbackBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceVersionResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}/versions:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [Skills]
+      operationId: listSkillVersions
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ResourceVersionPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}/diff:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [Skills]
+      operationId: diffSkillVersions
+      parameters: [{ $ref: '#/components/parameters/FromVersionId' }, { $ref: '#/components/parameters/ToVersionId' }]
+      responses: { '200': { $ref: '#/components/responses/ResourceDiffResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/skills/{resource_id}/references:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [Skills]
+      operationId: listSkillReferences
+      responses: { '200': { $ref: '#/components/responses/ResourceReferencePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers:
+    get:
+      tags: [McpServers]
+      operationId: listMcpServers
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Keyword' }]
+      responses: { '200': { $ref: '#/components/responses/ResourcePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [McpServers]
+      operationId: createMcpServer
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/McpServerCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [McpServers]
+      operationId: getMcpServer
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [McpServers]
+      operationId: updateMcpServer
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody: { $ref: '#/components/requestBodies/ResourceUpdateBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [McpServers]
+      operationId: deleteMcpServer
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}/discover:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [McpServers]
+      operationId: discoverMcpCapabilities
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}/publish:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [McpServers]
+      operationId: publishMcpServer
+      requestBody: { $ref: '#/components/requestBodies/ResourcePublishBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceVersionResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [McpServers]
+      operationId: disableMcpServer
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [McpServers]
+      operationId: enableMcpServer
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}/rollback:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [McpServers]
+      operationId: rollbackMcpServer
+      requestBody: { $ref: '#/components/requestBodies/ResourceRollbackBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceVersionResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}/versions:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [McpServers]
+      operationId: listMcpServerVersions
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ResourceVersionPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}/diff:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [McpServers]
+      operationId: diffMcpServerVersions
+      parameters: [{ $ref: '#/components/parameters/FromVersionId' }, { $ref: '#/components/parameters/ToVersionId' }]
+      responses: { '200': { $ref: '#/components/responses/ResourceDiffResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/mcp-servers/{resource_id}/references:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [McpServers]
+      operationId: listMcpServerReferences
+      responses: { '200': { $ref: '#/components/responses/ResourceReferencePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-providers:
+    get:
+      tags: [ModelProviders]
+      operationId: listModelProviders
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ResourcePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [ModelProviders]
+      operationId: createModelProvider
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ModelProviderCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-providers/{resource_id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [ModelProviders]
+      operationId: getModelProvider
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [ModelProviders]
+      operationId: updateModelProvider
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody: { $ref: '#/components/requestBodies/ResourceUpdateBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [ModelProviders]
+      operationId: deleteModelProvider
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-providers/{resource_id}/test:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [ModelProviders]
+      operationId: testModelProviderConnection
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-providers/{resource_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [ModelProviders]
+      operationId: disableModelProvider
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-providers/{resource_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [ModelProviders]
+      operationId: enableModelProvider
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs:
+    get:
+      tags: [ModelConfigs]
+      operationId: listModelConfigs
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ResourcePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [ModelConfigs]
+      operationId: createModelConfig
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ModelConfigCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs/{resource_id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [ModelConfigs]
+      operationId: getModelConfig
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [ModelConfigs]
+      operationId: updateModelConfig
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody: { $ref: '#/components/requestBodies/ResourceUpdateBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [ModelConfigs]
+      operationId: deleteModelConfig
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs/{resource_id}/publish:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [ModelConfigs]
+      operationId: publishModelConfig
+      requestBody: { $ref: '#/components/requestBodies/ResourcePublishBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceVersionResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs/{resource_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [ModelConfigs]
+      operationId: disableModelConfig
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs/{resource_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [ModelConfigs]
+      operationId: enableModelConfig
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs/{resource_id}/rollback:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [ModelConfigs]
+      operationId: rollbackModelConfig
+      requestBody: { $ref: '#/components/requestBodies/ResourceRollbackBody' }
+      responses: { '201': { $ref: '#/components/responses/ResourceVersionResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs/{resource_id}/versions:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [ModelConfigs]
+      operationId: listModelConfigVersions
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ResourceVersionPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs/{resource_id}/diff:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [ModelConfigs]
+      operationId: diffModelConfigVersions
+      parameters: [{ $ref: '#/components/parameters/FromVersionId' }, { $ref: '#/components/parameters/ToVersionId' }]
+      responses: { '200': { $ref: '#/components/responses/ResourceDiffResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/model-configs/{resource_id}/references:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [ModelConfigs]
+      operationId: listModelConfigReferences
+      responses: { '200': { $ref: '#/components/responses/ResourceReferencePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/runtime-targets:
+    get:
+      tags: [RuntimeTargets]
+      operationId: listRuntimeTargets
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ResourcePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [RuntimeTargets]
+      operationId: createRuntimeTarget
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RuntimeTargetCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/runtime-targets/{resource_id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [RuntimeTargets]
+      operationId: getRuntimeTarget
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [RuntimeTargets]
+      operationId: updateRuntimeTarget
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody: { $ref: '#/components/requestBodies/ResourceUpdateBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [RuntimeTargets]
+      operationId: deleteRuntimeTarget
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/runtime-targets/{resource_id}/test:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [RuntimeTargets]
+      operationId: testRuntimeTarget
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/runtime-targets/{resource_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [RuntimeTargets]
+      operationId: disableRuntimeTarget
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/runtime-targets/{resource_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [RuntimeTargets]
+      operationId: enableRuntimeTarget
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/sandbox-profiles:
+    get:
+      tags: [SandboxProfiles]
+      operationId: listSandboxProfiles
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ResourcePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [SandboxProfiles]
+      operationId: createSandboxProfile
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SandboxProfileCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/sandbox-profiles/{resource_id}:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [SandboxProfiles]
+      operationId: getSandboxProfile
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [SandboxProfiles]
+      operationId: updateSandboxProfile
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody: { $ref: '#/components/requestBodies/ResourceUpdateBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [SandboxProfiles]
+      operationId: deleteSandboxProfile
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/sandbox-profiles/{resource_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [SandboxProfiles]
+      operationId: disableSandboxProfile
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/sandbox-profiles/{resource_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [SandboxProfiles]
+      operationId: enableSandboxProfile
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/ResourceResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/sandbox-profiles/{resource_id}/references:
+    parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+    get:
+      tags: [SandboxProfiles]
+      operationId: listSandboxProfileReferences
+      responses: { '200': { $ref: '#/components/responses/ResourceReferencePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/tenants:
+    get:
+      tags: [Tenants]
+      operationId: listTenants
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/TenantPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Tenants]
+      operationId: createTenant
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TenantCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/TenantResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/tenants/{tenant_id}:
+    parameters: [{ $ref: '#/components/parameters/TenantId' }]
+    get:
+      tags: [Tenants]
+      operationId: getTenant
+      responses: { '200': { $ref: '#/components/responses/TenantResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [Tenants]
+      operationId: updateTenant
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TenantUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/TenantResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/tenants/{tenant_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [Tenants]
+      operationId: disableTenant
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/TenantResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/tenants/{tenant_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [Tenants]
+      operationId: enableTenant
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/TenantResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/members:
+    get:
+      tags: [Members]
+      operationId: listMembers
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/MemberPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Members]
+      operationId: createMember
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/MemberCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/MemberResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/members/{member_id}:
+    parameters: [{ $ref: '#/components/parameters/MemberId' }]
+    get:
+      tags: [Members]
+      operationId: getMember
+      responses: { '200': { $ref: '#/components/responses/MemberResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [Members]
+      operationId: updateMember
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/MemberUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/MemberResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [Members]
+      operationId: deleteMember
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/roles:
+    get:
+      tags: [Roles]
+      operationId: listRoles
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/RolePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Roles]
+      operationId: createRole
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RoleCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/RoleResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/roles/{role_id}:
+    parameters: [{ $ref: '#/components/parameters/RoleId' }]
+    get:
+      tags: [Roles]
+      operationId: getRole
+      responses: { '200': { $ref: '#/components/responses/RoleResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [Roles]
+      operationId: updateRole
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RoleUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/RoleResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [Roles]
+      operationId: deleteRole
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/knowledge-bases:
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeBases
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Keyword' }]
+      responses: { '200': { $ref: '#/components/responses/KnowledgeBasePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Knowledge]
+      operationId: createKnowledgeBase
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/KnowledgeBaseResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/knowledge-bases/{knowledge_base_id}:
+    parameters: [{ $ref: '#/components/parameters/KnowledgeBaseId' }]
+    get:
+      tags: [Knowledge]
+      operationId: getKnowledgeBase
+      responses: { '200': { $ref: '#/components/responses/KnowledgeBaseResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [Knowledge]
+      operationId: updateKnowledgeBase
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBaseUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/KnowledgeBaseResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [Knowledge]
+      operationId: deleteKnowledgeBase
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/knowledge-bases/{knowledge_base_id}/documents:
+    parameters: [{ $ref: '#/components/parameters/KnowledgeBaseId' }]
+    get:
+      tags: [Knowledge]
+      operationId: listKnowledgeDocuments
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/KnowledgeDocumentPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Knowledge]
+      operationId: createKnowledgeDocument
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeDocumentCreateRequest' } } }
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/knowledge-documents/{document_id}:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      tags: [Knowledge]
+      operationId: getKnowledgeDocument
+      responses: { '200': { $ref: '#/components/responses/KnowledgeDocumentResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [Knowledge]
+      operationId: deleteKnowledgeDocument
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/knowledge-bases/{knowledge_base_id}/retrieve:test:
+    parameters: [{ $ref: '#/components/parameters/KnowledgeBaseId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [Knowledge]
+      operationId: testKnowledgeRetrieval
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeRetrieveRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/KnowledgeRetrieveResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/evaluation-sets:
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluationSets
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/EvaluationSetPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Evaluations]
+      operationId: createEvaluationSet
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationSetCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/EvaluationSetResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/evaluation-sets/{evaluation_set_id}:
+    parameters: [{ $ref: '#/components/parameters/EvaluationSetId' }]
+    get:
+      tags: [Evaluations]
+      operationId: getEvaluationSet
+      responses: { '200': { $ref: '#/components/responses/EvaluationSetResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [Evaluations]
+      operationId: updateEvaluationSet
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationSetUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/EvaluationSetResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [Evaluations]
+      operationId: deleteEvaluationSet
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/evaluation-sets/{evaluation_set_id}/cases:
+    parameters: [{ $ref: '#/components/parameters/EvaluationSetId' }]
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluationCases
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/EvaluationCasePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Evaluations]
+      operationId: createEvaluationCase
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationCaseCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/EvaluationCaseResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/evaluation-runs:
+    post:
+      tags: [Evaluations]
+      operationId: createEvaluationRun
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationRunCreateRequest' } } }
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/evaluation-runs/{evaluation_run_id}:
+    parameters: [{ $ref: '#/components/parameters/EvaluationRunId' }]
+    get:
+      tags: [Evaluations]
+      operationId: getEvaluationRun
+      responses: { '200': { $ref: '#/components/responses/EvaluationRunResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/runs/{run_id}/feedback:
+    parameters: [{ $ref: '#/components/parameters/RunId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [Evaluations]
+      operationId: createRunFeedback
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RunFeedbackCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/RunFeedbackResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/schedules:
+    get:
+      tags: [Schedules]
+      operationId: listSchedules
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/SchedulePageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [Schedules]
+      operationId: createSchedule
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ScheduleCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/ScheduleResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/schedules/{schedule_id}:
+    parameters: [{ $ref: '#/components/parameters/ScheduleId' }]
+    get:
+      tags: [Schedules]
+      operationId: getSchedule
+      responses: { '200': { $ref: '#/components/responses/ScheduleResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [Schedules]
+      operationId: updateSchedule
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ScheduleUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/ScheduleResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [Schedules]
+      operationId: deleteSchedule
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/schedules/{schedule_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/ScheduleId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [Schedules]
+      operationId: enableSchedule
+      responses: { '200': { $ref: '#/components/responses/ScheduleResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/schedules/{schedule_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/ScheduleId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [Schedules]
+      operationId: disableSchedule
+      responses: { '200': { $ref: '#/components/responses/ScheduleResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/schedules/{schedule_id}/runs:
+    parameters: [{ $ref: '#/components/parameters/ScheduleId' }]
+    get:
+      tags: [Schedules]
+      operationId: listScheduleRuns
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/ScheduleRunPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/remote-agent-bindings:
+    get:
+      tags: [RemoteAgents]
+      operationId: listRemoteAgentBindings
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/RemoteAgentBindingPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [RemoteAgents]
+      operationId: createRemoteAgentBinding
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RemoteAgentBindingCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/RemoteAgentBindingResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/remote-agent-bindings/{binding_id}:
+    parameters: [{ $ref: '#/components/parameters/BindingId' }]
+    get:
+      tags: [RemoteAgents]
+      operationId: getRemoteAgentBinding
+      responses: { '200': { $ref: '#/components/responses/RemoteAgentBindingResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [RemoteAgents]
+      operationId: updateRemoteAgentBinding
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RemoteAgentBindingUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/RemoteAgentBindingResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    delete:
+      tags: [RemoteAgents]
+      operationId: deleteRemoteAgentBinding
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/remote-agent-bindings/{binding_id}/test:
+    parameters: [{ $ref: '#/components/parameters/BindingId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [RemoteAgents]
+      operationId: testRemoteAgentBinding
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/remote-agent-bindings/{binding_id}/invoke:
+    parameters: [{ $ref: '#/components/parameters/BindingId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+    post:
+      tags: [RemoteAgents]
+      operationId: invokeRemoteAgent
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RemoteAgentInvokeRequest' } } }
+      responses: { '202': { $ref: '#/components/responses/OperationAcceptedResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/audit-logs:
+    get:
+      tags: [Audit]
+      operationId: listAuditLogs
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: action
+          in: query
+          schema: { type: string, maxLength: 128 }
+        - name: resource_type
+          in: query
+          schema: { type: string, maxLength: 64 }
+        - name: actor_id
+          in: query
+          schema: { type: string }
+        - name: run_id
+          in: query
+          schema: { type: string }
+        - name: occurred_from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: occurred_to
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Audit page.
+          content: { application/json: { schema: { $ref: '#/components/schemas/AuditPage' } } }
+        default: { $ref: '#/components/responses/ErrorResponse' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+    IfMatch: { name: If-Match, in: header, required: true, schema: { type: string, pattern: '^"rv:[1-9][0-9]*"$' } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 20 } }
+    Cursor: { name: cursor, in: query, schema: { type: string } }
+    Keyword: { name: keyword, in: query, schema: { type: string, maxLength: 100 } }
+    ResourceId: { name: resource_id, in: path, required: true, schema: { type: string } }
+    TenantId: { name: tenant_id, in: path, required: true, schema: { type: string } }
+    MemberId: { name: member_id, in: path, required: true, schema: { type: string } }
+    RoleId: { name: role_id, in: path, required: true, schema: { type: string } }
+    KnowledgeBaseId: { name: knowledge_base_id, in: path, required: true, schema: { type: string } }
+    DocumentId: { name: document_id, in: path, required: true, schema: { type: string } }
+    EvaluationSetId: { name: evaluation_set_id, in: path, required: true, schema: { type: string } }
+    EvaluationRunId: { name: evaluation_run_id, in: path, required: true, schema: { type: string } }
+    RunId: { name: run_id, in: path, required: true, schema: { type: string } }
+    ScheduleId: { name: schedule_id, in: path, required: true, schema: { type: string } }
+    BindingId: { name: binding_id, in: path, required: true, schema: { type: string } }
+    FromVersionId: { name: from_version_id, in: query, required: true, schema: { type: string } }
+    ToVersionId: { name: to_version_id, in: query, required: true, schema: { type: string } }
+  requestBodies:
+    ResourceCreateBody:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourceCreateRequest' } } }
+    ResourceUpdateBody:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourceUpdateRequest' } } }
+    ResourcePublishBody:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourcePublishRequest' } } }
+    ResourceRollbackBody:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourceRollbackRequest' } } }
+    ResourceCopyBody:
+      required: true
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourceCopyRequest' } } }
+    ActionBody:
+      required: false
+      content: { application/json: { schema: { $ref: '#/components/schemas/ActionRequest' } } }
+  responses:
+    ErrorResponse:
+      description: Error response.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    ResourceResponse:
+      description: Resource.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Resource' } } }
+    ResourcePageResponse:
+      description: Resource page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourcePage' } } }
+    ResourceVersionResponse:
+      description: Published resource version.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourceVersion' } } }
+    ResourceVersionPageResponse:
+      description: Resource version page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourceVersionPage' } } }
+    ResourceDiffResponse:
+      description: Structured immutable version diff.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourceDiff' } } }
+    ResourceReferencePageResponse:
+      description: Resources that reference the target resource.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ResourceReferencePage' } } }
+    TenantResponse:
+      description: Tenant.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } }
+    TenantPageResponse:
+      description: Tenant page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/TenantPage' } } }
+    MemberResponse:
+      description: Tenant member.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } }
+    MemberPageResponse:
+      description: Tenant member page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/MemberPage' } } }
+    RoleResponse:
+      description: Role.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Role' } } }
+    RolePageResponse:
+      description: Role page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/RolePage' } } }
+    KnowledgeBaseResponse:
+      description: Knowledge base.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBase' } } }
+    KnowledgeBasePageResponse:
+      description: Knowledge base page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeBasePage' } } }
+    KnowledgeDocumentResponse:
+      description: Knowledge document.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeDocument' } } }
+    KnowledgeDocumentPageResponse:
+      description: Knowledge document page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeDocumentPage' } } }
+    KnowledgeRetrieveResponse:
+      description: Permission-filtered retrieval test result.
+      content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeRetrieveResult' } } }
+    EvaluationSetResponse:
+      description: Evaluation set.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationSet' } } }
+    EvaluationSetPageResponse:
+      description: Evaluation set page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationSetPage' } } }
+    EvaluationCaseResponse:
+      description: Evaluation case.
+      content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationCase' } } }
+    EvaluationCasePageResponse:
+      description: Evaluation case page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationCasePage' } } }
+    EvaluationRunResponse:
+      description: Evaluation run.
+      content: { application/json: { schema: { $ref: '#/components/schemas/EvaluationRun' } } }
+    RunFeedbackResponse:
+      description: User feedback attached to a Run.
+      content: { application/json: { schema: { $ref: '#/components/schemas/RunFeedback' } } }
+    ScheduleResponse:
+      description: Schedule.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Schedule' } } }
+    SchedulePageResponse:
+      description: Schedule page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/SchedulePage' } } }
+    ScheduleRunPageResponse:
+      description: Schedule trigger and Run links.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ScheduleRunPage' } } }
+    RemoteAgentBindingResponse:
+      description: Remote A2A Agent binding.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/RemoteAgentBinding' } } }
+    RemoteAgentBindingPageResponse:
+      description: Remote A2A Agent binding page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/RemoteAgentBindingPage' } } }
+    OperationAcceptedResponse:
+      description: Async operation accepted.
+      content: { application/json: { schema: { $ref: '#/components/schemas/OperationAccepted' } } }
+  headers:
+    ETag:
+      description: Strong resource version ETag. Its exact value is `"rv:<resource_version>"`.
+      schema: { type: string, pattern: '^"rv:[1-9][0-9]*"$' }
+  schemas:
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties: { error: { $ref: '#/components/schemas/Error' } }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, request_id, retryable]
+      properties:
+        code: { type: string, maxLength: 64 }
+        message: { type: string, maxLength: 4000 }
+        request_id: { type: string }
+        retryable: { type: boolean }
+        details: { type: object, maxProperties: 20, additionalProperties: true }
+    ResourceCreateRequest:
+      type: object
+      additionalProperties: false
+      description: content.resource_type must match the resource collection in the request path.
+      required: [code, name, content_schema_version, content]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { enum: [private, tenant], default: private }
+        content_schema_version: { type: string, maxLength: 16 }
+        content: { $ref: './schemas/resource-content-v1.schema.json' }
+    ResourceUpdateRequest:
+      type: object
+      additionalProperties: false
+      description: When content is supplied, content.resource_type must match the existing resource type.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { enum: [private, tenant] }
+        content_schema_version: { type: string, maxLength: 16 }
+        content: { $ref: './schemas/resource-content-v1.schema.json' }
+    ResourcePublishRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_resource_version, release_note]
+      properties:
+        expected_resource_version: { type: integer, minimum: 1 }
+        release_note: { type: string, minLength: 1, maxLength: 2000 }
+    ResourceRollbackRequest:
+      type: object
+      additionalProperties: false
+      required: [version_id, expected_resource_version, release_note]
+      properties:
+        version_id: { type: string }
+        expected_resource_version: { type: integer, minimum: 1 }
+        release_note: { type: string, minLength: 1, maxLength: 2000 }
+    ResourceCopyRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+    ActionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 500 }
+    Resource:
+      type: object
+      additionalProperties: false
+      required: [id, resource_type, code, name, visibility, content_schema_version, content, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        resource_type: { enum: [prompt, skill, mcp, model_provider, model_config, runtime_target, sandbox_profile] }
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        visibility: { enum: [private, tenant] }
+        content_schema_version: { type: string, maxLength: 16 }
+        content: { $ref: './schemas/resource-content-v1.schema.json' }
+        status: { enum: [DRAFT, ACTIVE, DISABLED, DELETING, DELETED] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ResourcePage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Resource' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    ResourceVersion:
+      type: object
+      additionalProperties: false
+      required: [id, definition_id, version_no, content_hash, published_at]
+      properties:
+        id: { type: string }
+        definition_id: { type: string }
+        version_no: { type: integer, minimum: 1 }
+        content_hash: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        release_note: { type: [string, 'null'], maxLength: 2000 }
+        published_at: { type: string, format: date-time }
+    ResourceVersionPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ResourceVersion' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    ResourceDiff:
+      type: object
+      additionalProperties: false
+      required: [resource_id, from_version_id, to_version_id, changes]
+      properties:
+        resource_id: { type: string }
+        from_version_id: { type: string }
+        to_version_id: { type: string }
+        changes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, change_type]
+            properties:
+              path: { type: string }
+              change_type: { enum: [added, removed, changed] }
+              before: {}
+              after: {}
+              sensitive: { type: boolean, default: false }
+    ResourceReference:
+      type: object
+      additionalProperties: false
+      required: [resource_type, resource_id, reference_type]
+      properties:
+        resource_type: { type: string }
+        resource_id: { type: string }
+        reference_type: { enum: [draft_binding, snapshot, deployment, schedule, session] }
+        version_id: { type: [string, 'null'] }
+    ResourceReferencePage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ResourceReference' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    PromptCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/ResourceCreateRequest'
+        - properties: { content: { $ref: './schemas/resource-content-v1.schema.json#/$defs/prompt' } }
+    SkillCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/ResourceCreateRequest'
+        - properties: { content: { $ref: './schemas/resource-content-v1.schema.json#/$defs/skill' } }
+    McpServerCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/ResourceCreateRequest'
+        - properties: { content: { $ref: './schemas/resource-content-v1.schema.json#/$defs/mcp' } }
+    ModelProviderCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/ResourceCreateRequest'
+        - properties: { content: { $ref: './schemas/resource-content-v1.schema.json#/$defs/model_provider' } }
+    ModelConfigCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/ResourceCreateRequest'
+        - properties: { content: { $ref: './schemas/resource-content-v1.schema.json#/$defs/model_config' } }
+    RuntimeTargetCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/ResourceCreateRequest'
+        - properties: { content: { $ref: './schemas/resource-content-v1.schema.json#/$defs/runtime_target' } }
+    SandboxProfileCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/ResourceCreateRequest'
+        - properties: { content: { $ref: './schemas/resource-content-v1.schema.json#/$defs/sandbox_profile' } }
+    TenantCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+    TenantUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+    Tenant:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        status: { enum: [ACTIVE, DISABLED, DELETING, DELETED] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TenantPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Tenant' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    MemberCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [external_subject, display_name, role_ids]
+      properties:
+        external_subject: { type: string, minLength: 1, maxLength: 255 }
+        display_name: { type: string, minLength: 1, maxLength: 100 }
+        email: { type: [string, 'null'], format: email }
+        role_ids: { type: array, uniqueItems: true, items: { type: string } }
+    MemberUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 100 }
+        role_ids: { type: array, uniqueItems: true, items: { type: string } }
+        status: { enum: [ACTIVE, DISABLED] }
+    Member:
+      type: object
+      additionalProperties: false
+      required: [id, tenant_id, user_id, display_name, role_ids, status, membership_version, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        user_id: { type: string }
+        display_name: { type: string }
+        email: { type: [string, 'null'], format: email }
+        role_ids: { type: array, uniqueItems: true, items: { type: string } }
+        status: { enum: [ACTIVE, DISABLED, DELETING, DELETED] }
+        membership_version: { type: integer, minimum: 1 }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MemberPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Member' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    RoleCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, permissions]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        permissions: { type: array, uniqueItems: true, items: { type: string, maxLength: 128 } }
+    RoleUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        permissions: { type: array, uniqueItems: true, items: { type: string, maxLength: 128 } }
+        status: { enum: [ACTIVE, DISABLED] }
+    Role:
+      type: object
+      additionalProperties: false
+      required: [id, tenant_id, code, name, permissions, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        permissions: { type: array, uniqueItems: true, items: { type: string } }
+        status: { enum: [ACTIVE, DISABLED, DELETING, DELETED] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RolePage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Role' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    KnowledgeBaseCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, adapter_type, embedding_model_config_id, chunking_policy]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        adapter_type: { const: default }
+        embedding_model_config_id: { type: string }
+        chunking_policy: { type: object, additionalProperties: true }
+    KnowledgeBaseUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        embedding_model_config_id: { type: string }
+        chunking_policy: { type: object, additionalProperties: true }
+    KnowledgeBase:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, adapter_type, embedding_model_config_id, chunking_policy, index_version, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        adapter_type: { const: default }
+        embedding_model_config_id: { type: string }
+        chunking_policy: { type: object, additionalProperties: true }
+        index_version: { type: integer, minimum: 1 }
+        status: { enum: [ACTIVE, DISABLED, DELETING, DELETED] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    KnowledgeBasePage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/KnowledgeBase' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    KnowledgeDocumentCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [artifact_id, source_version, acl_subjects]
+      properties:
+        artifact_id: { type: string }
+        source_version: { type: string, maxLength: 128 }
+        acl_subjects: { type: array, uniqueItems: true, items: { type: string } }
+        metadata: { type: object, additionalProperties: true }
+    KnowledgeDocument:
+      type: object
+      additionalProperties: false
+      required: [id, knowledge_base_id, artifact_id, source_version, content_hash, acl_subjects, index_version, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        knowledge_base_id: { type: string }
+        artifact_id: { type: string }
+        source_version: { type: string }
+        content_hash: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        acl_subjects: { type: array, uniqueItems: true, items: { type: string } }
+        index_version: { type: integer, minimum: 1 }
+        status: { enum: [UPLOADED, PARSING, INDEXING, READY, REINDEXING, FAILED, DELETING, DELETED] }
+        error_code: { type: [string, 'null'] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    KnowledgeDocumentPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/KnowledgeDocument' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    KnowledgeRetrieveRequest:
+      type: object
+      additionalProperties: false
+      required: [query, top_k]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 20000 }
+        top_k: { type: integer, minimum: 1, maximum: 100 }
+        score_threshold: { type: [number, 'null'], minimum: 0, maximum: 1 }
+    KnowledgeRetrieveResult:
+      type: object
+      additionalProperties: false
+      required: [items, index_version]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [document_id, chunk_id, text, score, source_version, untrusted]
+            properties:
+              document_id: { type: string }
+              chunk_id: { type: string }
+              text: { type: string }
+              score: { type: number }
+              source_version: { type: string }
+              untrusted: { const: true }
+        index_version: { type: integer, minimum: 1 }
+    EvaluationSetCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, visibility]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        visibility: { enum: [private, tenant] }
+        description: { type: [string, 'null'], maxLength: 2000 }
+    EvaluationSetUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        visibility: { enum: [private, tenant] }
+        description: { type: [string, 'null'], maxLength: 2000 }
+    EvaluationSet:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, visibility, version_no, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        visibility: { enum: [private, tenant] }
+        description: { type: [string, 'null'] }
+        version_no: { type: integer, minimum: 1 }
+        status: { enum: [DRAFT, ACTIVE, DISABLED, DELETING, DELETED] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EvaluationSetPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/EvaluationSet' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    EvaluationCaseCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [input, checks]
+      properties:
+        input: { type: object, additionalProperties: true }
+        checks: { type: array, minItems: 1, items: { type: object, additionalProperties: true } }
+        sensitivity: { enum: [PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED], default: INTERNAL }
+    EvaluationCase:
+      type: object
+      additionalProperties: false
+      required: [id, evaluation_set_id, case_version, input, checks, sensitivity, created_at]
+      properties:
+        id: { type: string }
+        evaluation_set_id: { type: string }
+        case_version: { type: integer, minimum: 1 }
+        input: { type: object, additionalProperties: true }
+        checks: { type: array, items: { type: object, additionalProperties: true } }
+        sensitivity: { enum: [PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED] }
+        created_at: { type: string, format: date-time }
+    EvaluationCasePage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/EvaluationCase' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    EvaluationRunCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [evaluation_set_id, snapshot_id]
+      properties:
+        evaluation_set_id: { type: string }
+        snapshot_id: { type: string }
+        model_config_version_id: { type: [string, 'null'] }
+        judge_model_config_version_id: { type: [string, 'null'] }
+        judge_prompt_version_id: { type: [string, 'null'] }
+    EvaluationRun:
+      type: object
+      additionalProperties: false
+      required: [id, evaluation_set_id, evaluation_set_version, snapshot_id, status, created_at]
+      properties:
+        id: { type: string }
+        evaluation_set_id: { type: string }
+        evaluation_set_version: { type: integer, minimum: 1 }
+        snapshot_id: { type: string }
+        model_config_version_id: { type: [string, 'null'] }
+        judge_model_config_version_id: { type: [string, 'null'] }
+        judge_prompt_version_id: { type: [string, 'null'] }
+        status: { enum: [REQUESTED, RUNNING, SUCCEEDED, FAILED, CANCELLED] }
+        summary: { type: [object, 'null'], additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+    RunFeedbackCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [rating]
+      properties:
+        rating: { enum: [UP, DOWN] }
+        tags: { type: array, uniqueItems: true, items: { type: string, maxLength: 64 } }
+        comment: { type: [string, 'null'], maxLength: 4000 }
+    RunFeedback:
+      type: object
+      additionalProperties: false
+      required: [id, run_id, user_id, rating, tags, created_at]
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        user_id: { type: string }
+        rating: { enum: [UP, DOWN] }
+        tags: { type: array, items: { type: string } }
+        comment: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    ScheduleCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, deployment_id, cron, timezone, misfire_policy, concurrency_policy, input]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        deployment_id: { type: string }
+        cron: { type: string, minLength: 1, maxLength: 128 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
+        misfire_policy: { enum: [SKIP, FIRE_ONCE, CATCH_UP] }
+        concurrency_policy: { enum: [SKIP, QUEUE, REPLACE] }
+        input: { type: object, additionalProperties: true }
+        secret_refs: { type: array, uniqueItems: true, items: { type: string } }
+    ScheduleUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        deployment_id: { type: string }
+        cron: { type: string, minLength: 1, maxLength: 128 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
+        misfire_policy: { enum: [SKIP, FIRE_ONCE, CATCH_UP] }
+        concurrency_policy: { enum: [SKIP, QUEUE, REPLACE] }
+        input: { type: object, additionalProperties: true }
+        secret_refs: { type: array, uniqueItems: true, items: { type: string } }
+    Schedule:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, deployment_id, cron, timezone, misfire_policy, concurrency_policy, input, secret_refs, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        deployment_id: { type: string }
+        cron: { type: string }
+        timezone: { type: string }
+        misfire_policy: { enum: [SKIP, FIRE_ONCE, CATCH_UP] }
+        concurrency_policy: { enum: [SKIP, QUEUE, REPLACE] }
+        input: { type: object, additionalProperties: true }
+        secret_refs: { type: array, items: { type: string } }
+        status: { enum: [ACTIVE, DISABLED, DELETING, DELETED] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SchedulePage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Schedule' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    ScheduleRun:
+      type: object
+      additionalProperties: false
+      required: [schedule_id, scheduled_at, triggered_at, run_id, trigger_type]
+      properties:
+        schedule_id: { type: string }
+        scheduled_at: { type: string, format: date-time }
+        triggered_at: { type: string, format: date-time }
+        run_id: { type: string }
+        trigger_type: { enum: [SCHEDULED, CATCH_UP, MANUAL] }
+    ScheduleRunPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ScheduleRun' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    RemoteAgentBindingCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, agent_card_url, auth_secret_ref, timeout_seconds, allowed_data_classes]
+      properties:
+        code: { type: string, pattern: '^[a-z][a-z0-9_-]{2,63}$' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        agent_card_url: { type: string, format: uri }
+        auth_secret_ref: { type: [string, 'null'] }
+        timeout_seconds: { type: integer, minimum: 1, maximum: 600 }
+        allowed_data_classes: { type: array, uniqueItems: true, items: { enum: [PUBLIC, INTERNAL, CONFIDENTIAL] } }
+    RemoteAgentBindingUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        agent_card_url: { type: string, format: uri }
+        auth_secret_ref: { type: [string, 'null'] }
+        timeout_seconds: { type: integer, minimum: 1, maximum: 600 }
+        allowed_data_classes: { type: array, uniqueItems: true, items: { enum: [PUBLIC, INTERNAL, CONFIDENTIAL] } }
+        status: { enum: [ACTIVE, DISABLED] }
+    RemoteAgentInvokeRequest:
+      type: object
+      additionalProperties: false
+      required: [input, data_classification]
+      properties:
+        input: { type: object, additionalProperties: true }
+        data_classification: { enum: [PUBLIC, INTERNAL, CONFIDENTIAL] }
+        timeout_seconds: { type: integer, minimum: 1, maximum: 600 }
+    RemoteAgentBinding:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, agent_card_url, timeout_seconds, allowed_data_classes, card_hash, status, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        agent_card_url: { type: string, format: uri }
+        auth_secret_ref: { type: [string, 'null'] }
+        timeout_seconds: { type: integer }
+        allowed_data_classes: { type: array, items: { enum: [PUBLIC, INTERNAL, CONFIDENTIAL] } }
+        card_hash: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        status: { enum: [ACTIVE, DISABLED, DELETING, DELETED] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RemoteAgentBindingPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/RemoteAgentBinding' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    OperationAccepted:
+      type: object
+      additionalProperties: false
+      required: [operation_id, status, status_url]
+      properties:
+        operation_id: { type: string }
+        status: { enum: [ACCEPTED, RUNNING] }
+        status_url: { type: string }
+    AuditRecord:
+      type: object
+      additionalProperties: false
+      required: [event_id, occurred_at, actor_id, action, resource_type, resource_id, result, trace_id]
+      properties:
+        event_id: { type: string }
+        occurred_at: { type: string, format: date-time }
+        actor_id: { type: string }
+        action: { type: string }
+        resource_type: { type: string }
+        resource_id: { type: string }
+        result: { enum: [SUCCESS, DENIED, FAILED] }
+        trace_id: { type: string }
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuditRecord' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }

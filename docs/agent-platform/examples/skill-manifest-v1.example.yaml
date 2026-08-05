@@ -1,0 +1,57 @@
+apiVersion: agent-platform/v1
+kind: Skill
+metadata:
+  name: data-analysis
+  version: 1.0.0
+  displayName: 数据分析
+  description: 在受控 Sandbox 中分析用户提供的数据文件并生成 Artifact。
+  license: Apache-2.0
+  authors:
+    - Agent Platform Team
+runtime:
+  compatible: [agentscope, codex]
+  minimumPlatformVersion: 1.0.0
+entry:
+  instructions: SKILL.md
+  command: [python, -m, skill_entry]
+permissions:
+  filesystem:
+    read:
+      - workspace://tenant/{tenant_id}/user/{user_id}/session/{session_id}/runs/{run_id}/input/**
+    write:
+      - workspace://tenant/{tenant_id}/user/{user_id}/session/{session_id}/runs/{run_id}/output/**
+  network:
+    allowDomains: []
+    allowPorts: []
+  tools: [python]
+  secrets: []
+dependencies:
+  python:
+    - pandas==2.2.3
+  system: []
+  lockFile: requirements.lock
+inputs:
+  type: object
+  additionalProperties: false
+  required: [question]
+  properties:
+    question:
+      type: string
+      minLength: 1
+      maxLength: 10000
+outputs:
+  type: object
+  additionalProperties: false
+  required: [artifact_uri]
+  properties:
+    artifact_uri:
+      type: string
+sandbox:
+  imageDigest: registry.example/agent-platform/python-data@sha256:7777777777777777777777777777777777777777777777777777777777777777
+  timeoutSeconds: 600
+  riskLevel: MEDIUM
+  requiresRunSandbox: true
+tests:
+  - name: basic-csv
+    inputFile: tests/basic/input.json
+    expectedFile: tests/basic/expected.json

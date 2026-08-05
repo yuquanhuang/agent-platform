@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-platform.local/schemas/run-spec-v1.schema.json",
+  "title": "Agent Platform RunSpec V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "run_id",
+    "trace_id",
+    "tenant_id",
+    "user_id",
+    "session_id",
+    "execution",
+    "release",
+    "runtime",
+    "input",
+    "prompt",
+    "bindings",
+    "security",
+    "sandbox",
+    "workspace"
+  ],
+  "properties": {
+    "spec_version": { "const": "1.0" },
+    "run_id": { "$ref": "#/$defs/id" },
+    "trace_id": { "$ref": "#/$defs/id" },
+    "tenant_id": { "$ref": "#/$defs/id" },
+    "user_id": { "$ref": "#/$defs/id" },
+    "session_id": { "$ref": "#/$defs/id" },
+    "execution": { "$ref": "#/$defs/execution" },
+    "session": { "$ref": "#/$defs/session" },
+    "release": { "$ref": "#/$defs/release" },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "input": { "$ref": "#/$defs/input" },
+    "prompt": { "$ref": "#/$defs/prompt" },
+    "bindings": { "$ref": "#/$defs/bindings" },
+    "security": { "$ref": "#/$defs/security" },
+    "sandbox": { "$ref": "sandbox-policy-v1.schema.json" },
+    "workspace": { "$ref": "#/$defs/workspace" },
+    "spec_hash": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "uri": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "immutable_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "hash", "size_bytes"],
+      "properties": {
+        "uri": { "$ref": "#/$defs/uri" },
+        "hash": { "$ref": "#/$defs/hash" },
+        "size_bytes": { "type": "integer", "minimum": 0, "maximum": 104857600 },
+        "content_type": { "type": ["string", "null"], "maxLength": 255 }
+      }
+    },
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "type": "string", "pattern": "^\\d+(\\.\\d{1,8})?$" },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt", "fencing_token", "idempotency_key", "timeout_seconds"],
+      "properties": {
+        "attempt": { "type": "integer", "minimum": 1 },
+        "fencing_token": { "type": "string", "minLength": 16, "maxLength": 512 },
+        "idempotency_key": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "token_budget": { "type": ["integer", "null"], "minimum": 1 },
+        "cost_budget": {
+          "anyOf": [
+            { "$ref": "#/$defs/money" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runtime_session_id": { "type": ["string", "null"], "maxLength": 255 },
+        "context_ref": {
+          "anyOf": [
+            { "$ref": "#/$defs/immutable_ref" },
+            { "type": "null" }
+          ]
+        },
+        "context_hash": {
+          "anyOf": [
+            { "$ref": "#/$defs/hash" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "snapshot_id", "deployment_id", "bundle"],
+      "properties": {
+        "agent_id": { "$ref": "#/$defs/id" },
+        "agent_version_id": { "$ref": "#/$defs/id" },
+        "snapshot_id": { "$ref": "#/$defs/id" },
+        "deployment_id": { "$ref": "#/$defs/id" },
+        "bundle": { "$ref": "#/$defs/immutable_ref" },
+        "compiler_version": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_type", "target_id", "capability_requirements"],
+      "properties": {
+        "runtime_type": { "enum": ["agentscope", "codex"] },
+        "target_id": { "$ref": "#/$defs/id" },
+        "transport": { "enum": ["internal", "acp_stdio"] },
+        "capability_requirements": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 32,
+          "items": {
+            "enum": [
+              "session_reuse",
+              "resume_after_worker_restart",
+              "cancel",
+              "thinking",
+              "plan",
+              "tool_call",
+              "approval_pause",
+              "files",
+              "structured_output"
+            ]
+          }
+        }
+      }
+    },
+    "attachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "uri", "hash", "size_bytes", "content_type"],
+      "properties": {
+        "artifact_id": { "$ref": "#/$defs/id" },
+        "uri": { "$ref": "#/$defs/uri" },
+        "hash": { "$ref": "#/$defs/hash" },
+        "size_bytes": { "type": "integer", "minimum": 0, "maximum": 104857600 },
+        "content_type": { "type": "string", "maxLength": 255 }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_message_id", "text", "attachments"],
+      "properties": {
+        "user_message_id": { "$ref": "#/$defs/id" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 100000 },
+        "attachments": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/attachment" }
+        }
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compiled_ref", "prompt_hash", "compiler_version"],
+      "properties": {
+        "compiled_ref": { "$ref": "#/$defs/immutable_ref" },
+        "prompt_hash": { "$ref": "#/$defs/hash" },
+        "compiler_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "token_estimate": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding_type", "resource_id", "version_id", "content_hash"],
+      "properties": {
+        "binding_type": { "enum": ["model", "skill", "tool", "mcp", "knowledge", "agent"] },
+        "resource_id": { "$ref": "#/$defs/id" },
+        "version_id": { "$ref": "#/$defs/id" },
+        "content_hash": { "$ref": "#/$defs/hash" },
+        "configuration_ref": {
+          "anyOf": [
+            { "$ref": "#/$defs/immutable_ref" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "skills", "tools", "mcp_servers", "knowledge", "sub_agents"],
+      "properties": {
+        "model": { "$ref": "#/$defs/binding" },
+        "skills": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/binding" } },
+        "tools": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/binding" } },
+        "mcp_servers": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/binding" } },
+        "knowledge": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/binding" } },
+        "sub_agents": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/binding" } }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["permission_policy_ref", "permission_policy_hash", "short_lived_exchange_token"],
+      "properties": {
+        "permission_policy_ref": { "$ref": "#/$defs/uri" },
+        "permission_policy_hash": { "$ref": "#/$defs/hash" },
+        "short_lived_exchange_token": { "type": "string", "minLength": 16, "maxLength": 4096 },
+        "token_expires_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_uri", "quota_bytes", "input_policy", "output_policy"],
+      "properties": {
+        "workspace_uri": {
+          "type": "string",
+          "pattern": "^workspace://tenant/[^/]+/user/[^/]+/session/[^/]+/runs/[^/]+/$"
+        },
+        "quota_bytes": { "type": "integer", "minimum": 1048576, "maximum": 107374182400 },
+        "input_policy": { "$ref": "#/$defs/immutable_ref" },
+        "output_policy": { "$ref": "#/$defs/immutable_ref" }
+      }
+    }
+  }
+}

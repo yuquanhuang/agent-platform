@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-platform.local/schemas/resource-content-v1.schema.json",
+  "title": "Agent Platform Resource Content V1",
+  "oneOf": [
+    { "$ref": "#/$defs/prompt" },
+    { "$ref": "#/$defs/skill" },
+    { "$ref": "#/$defs/mcp" },
+    { "$ref": "#/$defs/model_provider" },
+    { "$ref": "#/$defs/model_config" },
+    { "$ref": "#/$defs/runtime_target" },
+    { "$ref": "#/$defs/sandbox_profile" }
+  ],
+  "$defs": {
+    "variable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "required", "sensitive"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$" },
+        "type": { "enum": ["string", "integer", "number", "boolean", "object", "array"] },
+        "required": { "type": "boolean" },
+        "sensitive": { "type": "boolean" },
+        "default": {},
+        "max_length": { "type": ["integer", "null"], "minimum": 1, "maximum": 100000 }
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "template", "variables", "language", "compiler_policy_version"],
+      "properties": {
+        "resource_type": { "const": "prompt" },
+        "template": { "type": "string", "minLength": 1, "maxLength": 500000 },
+        "variables": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/variable" } },
+        "language": { "type": "string", "maxLength": 16 },
+        "compiler_policy_version": { "type": "string", "maxLength": 32 }
+      }
+    },
+    "skill_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "artifact_id", "content_hash"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$", "maxLength": 512 },
+        "artifact_id": { "type": "string", "maxLength": 255 },
+        "content_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "manifest", "files"],
+      "properties": {
+        "resource_type": { "const": "skill" },
+        "manifest": { "$ref": "skill-manifest-v1.schema.json" },
+        "files": { "type": "array", "minItems": 2, "maxItems": 10000, "items": { "$ref": "#/$defs/skill_file" } }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "transport", "endpoint", "secret_refs", "timeout_seconds"],
+      "properties": {
+        "resource_type": { "const": "mcp" },
+        "transport": { "enum": ["streamable_http"] },
+        "endpoint": { "type": "string", "format": "uri", "maxLength": 2048 },
+        "header_templates": { "type": "object", "maxProperties": 50, "additionalProperties": { "type": "string", "maxLength": 1000 } },
+        "secret_refs": { "type": "array", "uniqueItems": true, "maxItems": 20, "items": { "type": "string", "maxLength": 512 } },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "allowed_tools": { "type": "array", "uniqueItems": true, "maxItems": 500, "items": { "type": "string", "maxLength": 255 } }
+      }
+    },
+    "model_provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "provider_type", "base_url", "secret_ref", "timeout_seconds"],
+      "properties": {
+        "resource_type": { "const": "model_provider" },
+        "provider_type": { "type": "string", "maxLength": 64 },
+        "base_url": { "type": "string", "format": "uri" },
+        "secret_ref": { "type": "string", "maxLength": 512 },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 600 },
+        "data_retention_policy": { "type": "string", "maxLength": 1000 }
+      }
+    },
+    "model_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "provider_id", "model_id", "capabilities", "default_parameters"],
+      "properties": {
+        "resource_type": { "const": "model_config" },
+        "provider_id": { "type": "string" },
+        "model_id": { "type": "string", "maxLength": 255 },
+        "capabilities": { "type": "array", "uniqueItems": true, "items": { "enum": ["stream", "tools", "vision", "structured_output", "reasoning"] } },
+        "default_parameters": { "type": "object", "maxProperties": 50, "additionalProperties": { "type": ["string", "number", "integer", "boolean", "null"] } },
+        "max_context_tokens": { "type": ["integer", "null"], "minimum": 1 },
+        "rate_limit_rpm": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "runtime_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "runtime_type", "transport", "worker_queue"],
+      "properties": {
+        "resource_type": { "const": "runtime_target" },
+        "runtime_type": { "enum": ["agentscope", "codex"] },
+        "transport": { "enum": ["internal", "acp_stdio"] },
+        "worker_queue": { "type": "string", "maxLength": 128 },
+        "endpoint_ref": { "type": ["string", "null"], "maxLength": 2048 },
+        "capabilities": { "type": "array", "uniqueItems": true, "maxItems": 32, "items": { "type": "string", "maxLength": 64 } }
+      }
+    },
+    "sandbox_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "policy"],
+      "properties": {
+        "resource_type": { "const": "sandbox_profile" },
+        "policy": { "$ref": "sandbox-policy-v1.schema.json" }
+      }
+    }
+  }
+}

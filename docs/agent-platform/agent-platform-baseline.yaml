@@ -1,0 +1,104 @@
+baseline_id: agent-platform-v1-dev-baseline-2026-08-r4
+status: frozen-development-input
+frozen_at: "2026-08-05"
+integrity_algorithm: sha256
+integrity_excludes:
+  - agent-platform-baseline.yaml
+product:
+  name: agent-platform
+  description: Python 原生、可私有化部署的通用 Agent 开发与运行平台
+  implementation_language: python
+  python_version: "3.12"
+  migration_source: null
+scope:
+  requirements: MVP and V1 incremental capability contracts
+  implementation_order: Epic 0 through Epic 9
+  feature_flags_required_for_incremental_capabilities: true
+contracts:
+  document_index: Agent平台开发文档索引.md@1.5
+  execution_plan: Agent平台开发执行计划.md@1.1
+  requirements: Agent平台需求规格说明书.md@1.4
+  architecture: Agent平台架构与流程设计.md@1.6
+  api_and_events: Agent平台核心接口与事件契约.md@1.2
+  domain_model: Agent平台领域模型与状态机.md@1.1
+  non_functional: Agent平台非功能与验收基线.md@1.2
+  traceability: Agent平台需求追踪矩阵.md@1.5
+  ai_coding_guide: Agent平台AI Coding开发总纲.md@1.4
+  engineering: Agent平台工程技术与配置基线.md@1.4
+  database: Agent平台数据库详细设计.md@1.1
+  temporal: Agent平台Temporal工作流与活动契约.md@1.2
+  sandbox: Agent平台Sandbox与Workspace服务契约.md@1.2
+  frontend: Agent平台前端页面与交互契约.md@1.3
+  frontend_framework_adr: ADR-001-前端框架采用Vue3.md@1.2
+  frontend_ui_adr: ADR-002-前端UI组件库采用ElementPlus.md@1.0
+  security: Agent平台权限安全与审计契约.md@1.2
+  testing: Agent平台测试验收与AI任务包.md@1.4
+machine_readable:
+  openapi_core: agent-platform-openapi-v1.yaml@1.2.0
+  openapi_resources: agent-platform-openapi-resources-v1.yaml@1.1.0
+  run_spec: schemas/run-spec-v1.schema.json
+  run_event: schemas/run-event-v1.schema.json
+  skill_manifest: schemas/skill-manifest-v1.schema.json
+  bundle_manifest: schemas/bundle-manifest-v1.schema.json
+  sandbox_policy: schemas/sandbox-policy-v1.schema.json
+  resource_content: schemas/resource-content-v1.schema.json
+  model_gateway: schemas/model-gateway-v1.schema.json
+examples:
+  run_spec: examples/run-spec-v1.example.json
+  run_event_text_delta: examples/run-event-text-delta-v1.example.json
+  skill_manifest: examples/skill-manifest-v1.example.yaml
+  bundle_manifest: examples/bundle-manifest-v1.example.json
+precedence:
+  - approved_adr_and_security_policy
+  - machine_readable_schema_and_core_contract
+  - domain_model_and_state_machine
+  - frozen_requirement_and_business_rule
+  - architecture_and_flow
+  - example_and_ui_copy
+rules:
+  - 任何冲突必须先修正文档和基线清单，禁止 AI 自行选择。
+  - 未列入本清单的草稿、示例和外部项目代码不得作为生产契约。
+  - 公共契约变更必须同步更新 Schema、Golden File、追踪矩阵和兼容性说明。
+  - 所有 Run 和发布从首次生产实现开始使用 Temporal，不允许建立旁路任务系统。
+  - Runtime 只消费已发布 Snapshot 和不可变 Bundle。
+  - RuntimeAdapter 输出 RuntimeEventCandidate，RunEvent 由 Event Service 生成。
+  - V1 前端固定使用 Vue 3、TypeScript、Vite、Vue Router 4、Pinia 和 @tanstack/vue-query。
+  - V1 前端 UI 组件库固定使用 Element Plus。
+  - local/test 身份使用服务端 Mock OIDC；staging/production 禁止 Mock。
+  - Model Gateway 必须支持 OpenAI、Qwen 和 DeepSeek Provider Adapter。
+  - AgentScope 版本范围固定为 2.0.x，精确 patch 由锁文件和镜像 Digest 固定。
+  - 每个 AI Coding 任务必须校验本清单 integrity 中的 SHA-256，不一致时立即停止。
+  - 本基线冻结期间不新增平行需求或契约文件；新能力修改现有权威文件并重新冻结。
+
+integrity:
+  "ADR-001-前端框架采用Vue3.md": 82c88e1dcb93e813686c1bb6ce7d43d80e564cf0a1599600e7540a5fe1247e0e
+  "ADR-002-前端UI组件库采用ElementPlus.md": a6974e2709ce056a89cc6f54d0d12c3d22628a9cd2bd4d28730f9a2ed8dda63c
+  "Agent平台AI Coding开发总纲.md": ab056d6e0ccb50620eb09cbb2d18543400b8e450b82a5156ec51996c1b579b39
+  "Agent平台Sandbox与Workspace服务契约.md": 47533da6ef648c39032439a481744a911afc90681c34edb77b3acac22b80a5f8
+  "Agent平台Temporal工作流与活动契约.md": 2022640369526d35cbdb253215e9bbb3cf6e8bd3853c020fb6b7920ff3ff3cd4
+  "Agent平台前端页面与交互契约.md": 532be5dd0ca18479ec39071a7d827cffd7d38a41b65651d6400aed10514c43eb
+  "Agent平台工程技术与配置基线.md": 7eea63dacc94891d8c8e24e432d8686c1f4032dadd279256ff232bb49b4bc619
+  "Agent平台开发文档索引.md": 494e8fde06e6961e57e98b80db7321be8319b9afff2dd9996e1848de97788d14
+  "Agent平台数据库详细设计.md": 036b7112b5c1588227a370a43607ab7aed6db4434b159e089cc05ea62b2ba607
+  "Agent平台权限安全与审计契约.md": 20899d0fd5c9b183b7576cf2537763f50a61514760ed405918ab8759acf5d094
+  "Agent平台架构与流程设计.md": e9264ec7d559d4ada5cf3feb6859d7080b8ed00008f2e0418221a816cce4d05b
+  "Agent平台核心接口与事件契约.md": d6fec767a1a833136506736b192adcac691d06204e6e6d0b60061b8b41e5ad60
+  "Agent平台测试验收与AI任务包.md": 15f08676cd42fb9e1d059a263fe3e63fc8a551c72aa8c129aafe28b7bf6b7ca0
+  "Agent平台需求规格说明书.md": eee93344c348ed0ac7d7df1332920e010b481382eb33eadaff991bd53d579b35
+  "Agent平台需求追踪矩阵.md": 14e5b4a99e3efd9709f568614e2a50985966b77dac64847ca9730506e799f928
+  "Agent平台非功能与验收基线.md": c718c1ad1dbb90dc26da8948c37646193d1aa8c6fdac5dd2c7de98b133d205ca
+  "Agent平台领域模型与状态机.md": 295e0dbada55512149e9c16e217cb2d62b123c4309ffd691ba7f3b76afb2c73d
+  "Agent平台开发执行计划.md": 860c7daca837def91872785af20efa76050f1466625e1eb4bdaf047c07a03936
+  agent-platform-openapi-resources-v1.yaml: 3d5657b2d9049093a78c753f97484e5918af85d2e68d044d1fb52f2dcaea8559
+  agent-platform-openapi-v1.yaml: d957152731e092ffff68eed81bb45611299b62a58a5dd12d2d974f2cb2f8c30a
+  examples/bundle-manifest-v1.example.json: 9aabe8f628a11ae1060b79cf5136a26ea8223297caaa97586fe5145c8d867739
+  examples/run-event-text-delta-v1.example.json: 5d830234319120ddb7882ce33c0ec05e66859e2b211c1eaaef1515cb91b8cfc7
+  examples/run-spec-v1.example.json: 3eed3e6ff3eeccf52003c13088b0cdba5746ca35f72cad21d6cf3d150f029e4c
+  examples/skill-manifest-v1.example.yaml: 7e484d2d960849f4d8802b93b94cdbd6cbbe1236282216564858ea9a0a73fe15
+  schemas/bundle-manifest-v1.schema.json: e2f254d884b1e3478fb143e634c4efb13b6d98729330d7c7ae81611c6fd769ea
+  schemas/model-gateway-v1.schema.json: 10b13786425495368ac4ce8a0476b812bc538f6edfad830ac8fda89068e9d159
+  schemas/resource-content-v1.schema.json: c60ad559a86e2d81c9e99ec765692d3b530097a665cda70b567e39fced51ff43
+  schemas/run-event-v1.schema.json: 6f1fcefed181e7493b705d141ae5ff89ce0f1f858d7b6fb6f3be9d1cdd4b061a
+  schemas/run-spec-v1.schema.json: f898678f445008d5f5f2a82b5f49952664beeff3887db6548a4052993b77e6c5
+  schemas/sandbox-policy-v1.schema.json: 7fbd352d6e2b6171fc500cc2916fe6031c234e006129537037669ef4ec23e52e
+  schemas/skill-manifest-v1.schema.json: 0c5855994d3a12a4f428787b4146d818e85bb3400643f60a4cbd003b9a0d2a49
