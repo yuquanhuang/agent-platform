@@ -9,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "harness" / "project.json"
 ORDER = ("contracts", "backend", "frontend")
@@ -126,9 +125,15 @@ def run_for_scopes(
 
     for scope in scopes:
         if command == "check":
-            steps = [str(item) for item in config["scopes"][scope].get("check_steps", [])]
+            steps = [
+                str(item) for item in config["scopes"][scope].get("check_steps", [])
+            ]
         elif command == "contract_check":
-            steps = ["contract_check"] if scope == "contracts" else []
+            steps = (
+                [str(item) for item in config["scopes"][scope].get("check_steps", [])]
+                if scope == "contracts"
+                else []
+            )
         else:
             steps = [command]
 
@@ -159,7 +164,9 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         choices=("auto", "backend", "frontend", "contracts", "all"),
     )
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print commands without running them."
+    )
     return parser.parse_args()
 
 

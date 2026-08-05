@@ -35,11 +35,12 @@
       "check_steps": ["format_check", "lint", "typecheck", "test", "build"]
     },
     "contracts": {
-      "path": "contracts",
+      "path": "docs/agent-platform",
       "commands": {
-        "contract_check": []
+        "contract_check": ["{python}", "../../scripts/check_contracts.py"],
+        "generated_check": ["{python}", "../../scripts/generate_contracts.py", "--check"]
       },
-      "check_steps": ["contract_check"],
+      "check_steps": ["contract_check", "generated_check"],
       "affects": ["backend", "frontend"]
     }
   }

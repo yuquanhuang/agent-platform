@@ -1,0 +1,94 @@
+task_id: AP-E0-005
+title: 建立 PostgreSQL、SQLAlchemy、Alembic、TenantContext 和基础 RLS/索引
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/agent-platform-openapi-v1.yaml
+    - docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+scope:
+  includes:
+    - TenantContext 强类型契约及稳定公共出口
+    - SQLAlchemy 2.x Async Engine、Session Factory 和租户事务边界
+    - Alembic 异步迁移环境和独立迁移 Job 注入边界
+    - tenant、app_user、tenant_member、role、role_binding 首批 IAM 表
+    - tenant_member membership_version 权威版本字段
+    - 租户表 tenant_id 非空约束、基础唯一索引和 PostgreSQL RLS Policy
+  excludes:
+    - local/test Mock OIDC、/me、Tenant/Member/Role API 和 Policy Service
+    - role_permission 权限存储细节及权限变更审计
+    - Agent、Run、RunEvent、Outbox、Temporal 和其他业务表
+    - 应用启动时自动执行数据库迁移
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+requirements: [FR-IAM-002, FR-IAM-003, FR-IAM-006]
+acceptance: [AC-005]
+authoritative_contracts:
+  openapi_operations:
+    - getCurrentIdentity
+    - createTenant
+    - createMember
+    - createRole
+  json_schemas: []
+  design_documents:
+    - Agent平台数据库详细设计.md
+    - Agent平台权限安全与审计契约.md
+    - Agent平台工程技术与配置基线.md
+data:
+  entities:
+    - tenant
+    - app_user
+    - tenant_member
+    - role
+    - role_binding
+  migrations:
+    - 0001_iam_tenant_foundation
+security:
+  actions: []
+  audit_events:
+    - security.cross_tenant_denied
+  tenant_controls:
+    - Repository 和事务入口强制 TenantContext
+    - tenant_member、role、role_binding 启用并强制 RLS
+    - 事务通过参数绑定设置 app.current_tenant_id
+failure_semantics:
+  retryable_errors:
+    - DATABASE_UNAVAILABLE
+  non_retryable_errors:
+    - TENANT_CONTEXT_INVALID
+    - DATABASE_CONFIGURATION_INVALID
+  cancellation: 数据库事务取消时必须回滚并关闭独立 AsyncSession
+  compensation: 生产迁移遵循 expand/backfill/contract；应用启动不自动迁移
+file_scope:
+  allowed:
+    - backend/alembic.ini
+    - backend/migrations/**
+    - backend/packages/contracts/tenant.py
+    - backend/packages/contracts/public.py
+    - backend/packages/infrastructure/database/**
+    - backend/packages/infrastructure/public.py
+    - backend/tests/contracts/test_tenant_context.py
+    - backend/tests/infrastructure/database/**
+    - backend/tests/integration/database/**
+    - backend/README.md
+    - harness/tasks/AP-E0-005.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - frontend/**
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E0-002, AP-E0-004]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make check
+    - git diff --check
+  expected_results:
+    - Alembic 离线升级 SQL 包含五张 IAM 基础表、约束、索引和三张租户表 RLS
+    - TenantContext 拒绝额外字段、无效 UUID、无效 membership_version 和非 UTC auth_time
+    - AsyncSession expire_on_commit=False 且租户事务始终先绑定 tenant context
+    - RLS Policy 同时约束 USING 和 WITH CHECK，缺少 tenant context 时不返回租户数据
+    - PostgreSQL 16 集成测试证明跨租户读写被 RLS 阻断
+open_questions: []

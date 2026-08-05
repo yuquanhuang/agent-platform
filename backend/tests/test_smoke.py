@@ -1,4 +1,4 @@
-"""Minimal Epic 0 health checks for the backend package."""
+"""Smoke checks for the backend package entrypoint."""
 
 from main import main
 

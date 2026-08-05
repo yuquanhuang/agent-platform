@@ -1,41 +1,50 @@
 # Project Design System
 
-本文件是项目级模板。应用到新项目时必须替换占位内容，记录真实设计决策，禁止让 AI 猜测品牌色和组件规范。
+本文件记录 Agent 平台的项目级设计基线。未明确的品牌视觉不得由单个页面自行扩展。
 
 ## 基础信息
 
-- 产品/品牌名称：`TODO`
-- 前端框架：`TODO`
-- 组件库：`TODO`
-- 设计稿或参考系统：`TODO`
-- Token 源文件：`TODO`
-- 主题切换方式：`TODO`
+- 产品/品牌名称：`agent平台`
+- 前端框架：`Vue 3 + TypeScript + Vite`
+- 组件库：`Element Plus`
+- 设计稿或参考系统：当前以产品交互契约和 Element Plus 无障碍模式为准
+- Token 源文件：`frontend/src/styles/tokens.css`
+- 主题切换方式：Epic 0 仅提供浅色语义 Token；暗色主题需单独验收后启用
 
 ## 设计目标
 
-描述信息密度、主要使用场景、桌面端/移动端策略、无障碍目标和禁止出现的视觉模式。
+- 面向桌面端的中高信息密度管理平台，同时保证窄屏下导航和核心状态可用。
+- 所有状态必须同时使用文字/图标语义，不只依赖颜色。
+- 交互元素必须键盘可达、焦点可见；避免无说明动画、纯装饰渐变和页面级硬编码颜色。
+- 未确认品牌色前，项目 Token 映射 Element Plus 语义变量，不创建平行色板。
 
 ## Token 清单
 
 | 类别 | Token 来源 | 约束 |
 | --- | --- | --- |
-| 品牌色与状态色 | `TODO` | 组件不得硬编码重复色值 |
-| 文字与字体 | `TODO` | 明确字号、行高和字重层级 |
-| 间距与布局 | `TODO` | 使用统一间距尺度 |
-| 圆角与阴影 | `TODO` | 明确容器、弹层和交互态 |
-| 层级与动画 | `TODO` | 明确 z-index 和动效时长 |
+| 品牌色与状态色 | Element Plus 语义变量，经 `tokens.css` 映射 | 业务组件不得硬编码重复色值 |
+| 文字与字体 | 系统 UI 字体栈、Element Plus 字号层级 | 正文最小 14px，状态文本必须可读 |
+| 间距与布局 | `--ap-space-*` | 使用 4/8/12/16/24/32px 尺度 |
+| 圆角与阴影 | `--ap-radius-*`、`--ap-shadow-*` | 页面容器与浮层使用统一层级 |
+| 层级与动画 | Element Plus 层级；`--ap-motion-fast` | 尊重 `prefers-reduced-motion` |
 
 ## 布局规范
 
-- 页面框架：`TODO`
-- 侧边栏/顶栏：`TODO`
-- 内容最大宽度和页面边距：`TODO`
-- 响应式断点：`TODO`
-- 表格、表单和详情页密度：`TODO`
+- 页面框架：顶栏 + 可收起侧栏 + 主内容区。
+- 侧边栏/顶栏：桌面侧栏 240px，收起 72px；顶栏 56px。
+- 内容最大宽度和页面边距：内容最大 1440px，页面边距 24px；窄屏 16px。
+- 响应式断点：768px 以下使用窄屏布局，不依赖 hover 才能完成操作。
+- 表格、表单和详情页密度：默认 Element Plus `default`，高密度表格需页面级明确说明。
 
 ## 组件规范
 
-至少补充 Button、Form、Table/List、Dialog/Drawer、Navigation、Feedback、Empty/Error State 的使用和禁止规则。
+- Button：主操作每个区域最多一个 primary；危险操作使用二次确认并由后端鉴权。
+- Form：统一标签、错误文案和提交状态；服务端错误不得被客户端校验覆盖。
+- Table/List：服务端分页和稳定排序；loading、empty、partial data 分开展示。
+- Dialog/Drawer：短确认使用 Dialog，复杂编辑使用 Drawer/页面；关闭前处理未保存状态。
+- Navigation：由 Vue Router 统一管理；未启用能力不展示可点击入口。
+- Feedback：使用统一 Alert/Message/Result 封装，错误不得只写入控制台。
+- Empty/Error State：明确原因、影响和可执行下一步；依赖不可用提供安全重试。
 
 ## 视觉验收
 

@@ -1,7 +1,7 @@
 PYTHON ?= uv run python
 HARNESS := $(PYTHON) scripts/harness.py
 
-.PHONY: format format-check lint typecheck test build check check-all backend-check frontend-check contract-check harness-dry-run
+.PHONY: format format-check lint typecheck test build check check-all backend-check frontend-check contract-check generate-contracts generated-check harness-dry-run
 
 format:
 	$(HARNESS) format
@@ -35,6 +35,12 @@ frontend-check:
 
 contract-check:
 	$(HARNESS) contract-check --scope contracts
+
+generate-contracts:
+	$(PYTHON) scripts/generate_contracts.py
+
+generated-check:
+	$(PYTHON) scripts/generate_contracts.py --check
 
 harness-dry-run:
 	$(HARNESS) check --dry-run

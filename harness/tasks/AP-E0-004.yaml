@@ -1,0 +1,73 @@
+task_id: AP-E0-004
+title: 建立 Python/TypeScript Client、DTO、RunEvent 类型生成与 Diff 门禁
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-openapi-v1.yaml
+    - docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+    - docs/agent-platform/schemas/run-event-v1.schema.json
+scope:
+  includes:
+    - 离线可重复的契约代码生成命令
+    - 两份 OpenAPI 的 Python/TypeScript DTO 和异步 Client
+    - RunEvent 与 RuntimeEventCandidate 的 Python/TypeScript 强类型
+    - 生成物提交策略和重新生成零 Diff 门禁
+  excludes:
+    - 业务 API、数据库、OIDC、SSE/Event Store 实现
+    - 修改冻结 OpenAPI、JSON Schema 或基线 SHA-256
+requirements: [FR-RT-001, FR-RUN-003]
+acceptance: [AC-002]
+authoritative_contracts:
+  openapi_operations:
+    - agent-platform-openapi-v1.yaml
+    - agent-platform-openapi-resources-v1.yaml
+  json_schemas:
+    - schemas/run-event-v1.schema.json
+  state_machines: []
+data:
+  entities: []
+  migrations: []
+security:
+  actions: []
+  audit_events: []
+failure_semantics:
+  retryable_errors: []
+  non_retryable_errors:
+    - CONTRACT_GENERATION_FAILED
+    - GENERATED_CONTRACT_DIFF
+  cancellation: 生成命令无远端副作用，可安全取消并重新执行
+  compensation: 不修改冻结契约；生成失败时保留已提交生成物并阻断门禁
+file_scope:
+  allowed:
+    - backend/packages/contracts/generated/**
+    - backend/pyproject.toml
+    - backend/tests/contracts/**
+    - frontend/src/api/generated/**
+    - frontend/src/api/generated.spec.ts
+    - frontend/.prettierignore
+    - scripts/generate_contracts.py
+    - scripts/harness.py
+    - harness/project.json
+    - harness/tasks/AP-E0-004.yaml
+    - harness/AI_CODING_PROGRESS.md
+    - Makefile
+  forbidden:
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E0-001, AP-E0-002, AP-E0-003]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check
+    - git diff --check
+  golden_files:
+    - docs/agent-platform/examples/run-event-text-delta-v1.example.json
+  expected_results:
+    - 重新生成后无 Diff
+    - Python 生成模型可校验 Golden RunEvent
+    - TypeScript 生成 Client 和 RunEvent 类型通过 vue-tsc
+open_questions: []

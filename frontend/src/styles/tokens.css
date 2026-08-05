@@ -1,0 +1,26 @@
+:root {
+  --ap-page-background: var(--el-bg-color-page);
+  --ap-surface-color: var(--el-bg-color);
+  --ap-border-color: var(--el-border-color-light);
+  --ap-text-primary: var(--el-text-color-primary);
+  --ap-text-secondary: var(--el-text-color-secondary);
+  --ap-space-1: 4px;
+  --ap-space-2: 8px;
+  --ap-space-3: 12px;
+  --ap-space-4: 16px;
+  --ap-space-6: 24px;
+  --ap-space-8: 32px;
+  --ap-radius-md: var(--el-border-radius-base);
+  --ap-shadow-card: var(--el-box-shadow-light);
+  --ap-motion-fast: 160ms;
+  --ap-header-height: 56px;
+  --ap-sidebar-width: 240px;
+  --ap-sidebar-collapsed: 72px;
+  --ap-content-max-width: 1440px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ap-motion-fast: 0ms;
+  }
+}
