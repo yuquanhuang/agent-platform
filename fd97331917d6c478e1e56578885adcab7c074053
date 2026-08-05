@@ -1,0 +1,64 @@
+Makefile
+  02f440ba20aa0a13 2-40
+  6172cfb388c1554b 1
+.pre-commit-config.yaml
+  02f440ba20aa0a13 1-14
+.python-version
+  02f440ba20aa0a13 1
+.editorconfig
+  02f440ba20aa0a13 1-22
+AGENTS.md
+  02f440ba20aa0a13 1-49
+pyproject.toml
+  02f440ba20aa0a13 1-12
+main.py
+  02f440ba20aa0a13 1-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "fd97331917d6c478e1e56578885adcab7c074053",
+  "prompts": {
+    "02f440ba20aa0a13": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc00-c0b2-7e71-992b-dac9fc8ab288",
+        "model": "unknown"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 144,
+      "total_deletions": 0,
+      "accepted_lines": 143,
+      "overriden_lines": 0
+    },
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/be690e3020d80de41423da30cde120c1f005d7aac701ebb8621f57f32088527c"
+    },
+    "cc17b4291108bcfe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcfb1-1658-7693-8f8a-0ae41b696c1f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 0,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/95526aa72a2a3fa1ad9bfa42bdcda50563546d583b5128853b05f147d10b3ca4"
+    }
+  }
+}
