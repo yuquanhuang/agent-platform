@@ -1,0 +1,38 @@
+docs/agent-platform/ADR-002-前端UI组件库采用ElementPlus.md
+  6172cfb388c1554b 4-5
+docs/agent-platform/Agent平台测试验收与AI任务包.md
+  6172cfb388c1554b 3,262
+"docs/agent-platform/Agent平台AI Coding开发总纲.md"
+  6172cfb388c1554b 3,206,208
+docs/agent-platform/Agent平台开发文档索引.md
+  6172cfb388c1554b 3,167,174-181
+docs/agent-platform/ADR-001-前端框架采用Vue3.md
+  6172cfb388c1554b 4-5,73
+docs/agent-platform/Agent平台开发执行计划.md
+  6172cfb388c1554b 3,104,123-271
+docs/agent-platform/agent-platform-baseline.yaml
+  6172cfb388c1554b 1,18-19,26,32-33,35,70-71,76-78,83,88,93
+pyproject.toml
+  6172cfb388c1554b 7-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "fb27909b6f2442533d888260924fcfb292040460",
+  "prompts": {
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 191,
+      "total_deletions": 29,
+      "accepted_lines": 190,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/a946cca01d27294f3a00caf9684f9e144728b60e5b72ff24b597e2b81f6ef116"
+    }
+  }
+}
