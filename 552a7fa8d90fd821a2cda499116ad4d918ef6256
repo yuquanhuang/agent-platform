@@ -1,0 +1,30 @@
+pyproject.toml
+  6172cfb388c1554b 9-10
+harness/project.json
+  6172cfb388c1554b 38,40-41,43
+harness/AI_CODING_PROGRESS.md
+  6172cfb388c1554b 1-86
+scripts/check_contracts.py
+  6172cfb388c1554b 1-432
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "552a7fa8d90fd821a2cda499116ad4d918ef6256",
+  "prompts": {
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 533,
+      "total_deletions": 12,
+      "accepted_lines": 524,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/0a0b0ab6c70e38f47c28c9a3a5302941e6a1063713a412c3500b3e05482b1855"
+    }
+  }
+}
