@@ -1,0 +1,96 @@
+task_id: AP-E1-001
+title: 建立资源定义、不可变版本、强 ETag、幂等和引用查询公共能力
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/agent-platform-openapi-v1.yaml
+    - docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+scope:
+  includes:
+    - resource_definition 与 resource_version 的 SQLAlchemy/Alembic 基础
+    - 租户 RLS、软删除唯一约束、不可变版本内容和 Canonical JSON Hash
+    - 复用冻结 Resource/ResourceVersion/ResourceReference 生成契约
+    - 强 ETag、CAS、稳定游标和 24 小时幂等公共实现
+    - 可组合的引用查询 Port，供 Agent Binding、Snapshot、Deployment 等后续消费者接入
+    - 真实 PostgreSQL 的双租户、并发版本和不可变版本验证
+  excludes:
+    - Prompt、ModelProvider、ModelConfig、Agent Draft 的具体 API 或 Vue 页面
+    - 发布 Workflow、安全扫描、模型连通性、Model Gateway 和 AgentScope Runtime
+    - 新建未在基线定义的通用 resource_reference 持久化表
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+requirements:
+  - FR-CON-002
+  - FR-RES-001
+acceptance:
+  - 可编辑定义使用强 ETag `"rv:<resource_version>"` 且旧版本 CAS 失败
+  - 同租户同资源类型活动 code 唯一，跨租户允许同 code
+  - 发布版本内容与 Hash 不可变，重复内容不能生成第二个版本
+  - 幂等 Key 同请求可重放，不同请求返回 IDEMPOTENCY_KEY_REUSED
+  - 引用查询通过显式 Provider 聚合，不引入无来源的引用事实表
+authoritative_contracts:
+  openapi: docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+  content_schema: docs/agent-platform/schemas/resource-content-v1.schema.json
+  etag: '"rv:<resource_version>"'
+  resource_types: [prompt, skill, mcp, model_provider, model_config, runtime_target, sandbox_profile]
+data:
+  entities:
+    - resource_definition
+    - resource_version
+  migrations:
+    - 0004_resource_registry
+security:
+  tenant_controls:
+    - 所有查询显式携带 tenant_id 并由 TenantUnitOfWork 注入 RLS 上下文
+    - 跨租户资源返回不可感知结果，不提供通用 bypass
+  content:
+    - current_draft_json 和 content_json 必须经冻结 Pydantic ResourceContent 校验
+    - 只保存 Secret Reference，不记录或返回 Secret 明文
+failure_semantics:
+  conflicts:
+    - 旧 ETag 返回 RESOURCE_VERSION_CONFLICT
+    - 幂等 Key 请求 Hash 不同返回 IDEMPOTENCY_KEY_REUSED
+    - 同定义重复内容发布返回 RESOURCE_STATE_CONFLICT
+  rollback:
+    - Alembic downgrade 只删除本任务新增的资源版本和定义表
+file_scope:
+  allowed:
+    - backend/migrations/versions/0004_resource_registry.py
+    - backend/packages/domain/resources/**
+    - backend/packages/domain/public.py
+    - backend/packages/application/resources/**
+    - backend/packages/application/iam/management.py
+    - backend/packages/application/public.py
+    - backend/packages/infrastructure/database/idempotency.py
+    - backend/packages/infrastructure/database/resources.py
+    - backend/packages/infrastructure/database/iam.py
+    - backend/packages/infrastructure/database/models.py
+    - backend/packages/infrastructure/database/public.py
+    - backend/tests/domain/resources/**
+    - backend/tests/application/resources/**
+    - backend/tests/infrastructure/database/**
+    - backend/tests/integration/resources/**
+    - harness/tasks/AP-E1-001.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - backend/apps/api/routes/**
+    - frontend/src/**
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E0-004, AP-E0-005, AP-E0-006, AP-E0-008]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+  expected_results:
+    - R5 契约和 16 个生成文件零漂移
+    - 资源定义/版本迁移、ORM、领域和持久化测试通过
+    - PostgreSQL 双租户 RLS、ETag/CAS、幂等和不可变版本验证通过
+    - 原 IAM、Outbox、Temporal 和 Vue 基线无回归
+open_questions: []

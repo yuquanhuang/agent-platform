@@ -1,0 +1,81 @@
+"""Independent control/run Temporal worker composition."""
+
+import logging
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import timedelta
+
+from temporalio.client import Client
+from temporalio.worker import Worker
+
+from packages.application.temporal import (
+    CONTROL_PLANE_TASK_QUEUE,
+    RUN_ORCHESTRATOR_TASK_QUEUE,
+    PlatformProbeWorkflow,
+    platform_probe_activity,
+)
+from packages.contracts.temporal import TemporalWorkerKind
+from packages.infrastructure.config import AppSettings
+from packages.infrastructure.observability import PlatformMetrics
+from packages.infrastructure.temporal.client import connect_temporal_client
+
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeWorkerDefinition:
+    kind: TemporalWorkerKind
+    task_queue: str
+    workflows: Sequence[type]
+    activities: Sequence[Callable[..., object]]
+
+
+def probe_worker_definition(kind: TemporalWorkerKind) -> ProbeWorkerDefinition:
+    task_queue = (
+        CONTROL_PLANE_TASK_QUEUE
+        if kind is TemporalWorkerKind.CONTROL
+        else RUN_ORCHESTRATOR_TASK_QUEUE
+    )
+    return ProbeWorkerDefinition(
+        kind=kind,
+        task_queue=task_queue,
+        workflows=(PlatformProbeWorkflow,),
+        activities=(platform_probe_activity,),
+    )
+
+
+def create_probe_worker(
+    client: Client,
+    kind: TemporalWorkerKind,
+    *,
+    graceful_shutdown_timeout_seconds: float,
+) -> Worker:
+    definition = probe_worker_definition(kind)
+    return Worker(
+        client,
+        task_queue=definition.task_queue,
+        workflows=definition.workflows,
+        activities=definition.activities,
+        graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
+    )
+
+
+async def run_probe_worker_process(
+    settings: AppSettings,
+    kind: TemporalWorkerKind,
+    metrics: PlatformMetrics,
+) -> None:
+    """Connect and run exactly one fixed worker pool until shutdown."""
+
+    client = await connect_temporal_client(settings)
+    worker = create_probe_worker(
+        client,
+        kind,
+        graceful_shutdown_timeout_seconds=settings.worker_shutdown_grace_seconds,
+    )
+    metrics.process_up.labels(process=settings.service_name).set(1)
+    LOGGER.info("Temporal worker started task_queue=%s", worker.task_queue)
+    try:
+        await worker.run()
+    finally:
+        metrics.process_up.labels(process=settings.service_name).set(0)

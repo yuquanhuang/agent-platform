@@ -37,6 +37,17 @@ install.sh                   安全安装脚本
 5. 执行 `make harness-dry-run`，检查将要运行的命令。
 6. 运行 `make check-all`，确认两端工具链可用。
 
+Epic 0 收口时使用失败关闭的真实依赖验收：
+
+```bash
+AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test \
+AP_TEST_TEMPORAL=1 \
+make epic0-acceptance
+```
+
+该命令在 `make check-all` 基础上强制 PostgreSQL/Temporal 集成测试零
+skip，并启动临时 FastAPI 与 Vite 进程验证 `/health/ready` 跨端代理。
+
 ## 变更路由
 
 - 仅修改 `backend/**`：运行后端门禁。

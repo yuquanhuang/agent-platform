@@ -1,0 +1,68 @@
+task_id: AP-E1-002
+title: Prompt CRUD、版本、发布、回滚与 Vue 管理页面
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/agent-platform-openapi-v1.yaml
+    - docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+scope:
+  includes:
+    - Prompt 专用后端应用服务、租户 RBAC、CRUD、软删除、启停和审计
+    - Prompt 发布、不可变版本列表、结构化 Diff、从历史版本回滚和复制
+    - CompositeResourceReferenceReader 驱动的空引用页
+    - Vue 3 Composition API、Element Plus、Vue Query 的 Prompt 列表和编辑页面
+    - 模板与变量 Schema 分离编辑、If-Match 冲突恢复、发布前 Diff/引用预览
+  excludes:
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+    - Model Gateway、Agent Draft、AgentScope Runtime、真实 OIDC/JWKS
+    - 浏览器持久化敏感变量测试值或把资源实体复制进 Pinia
+    - 新建无事实来源的 resource_reference 表
+data:
+  migrations:
+    - 0005_prompt_permissions_and_rollback
+  rollback:
+    - 0005 downgrade removes ROLLBACK-kind versions, then restores the AP-E1-001 content-hash uniqueness constraint
+security:
+  - 服务端 TenantAccess/RBAC 是最终授权，前端按钮隐藏不是安全边界
+  - 审计和日志只保存字段摘要、Hash 或脱敏 Diff，不保存完整 Prompt 或敏感默认值
+  - 回滚显式允许历史内容再次成为新版本；普通发布仍拒绝重复内容
+file_scope:
+  allowed:
+    - backend/migrations/versions/0005_prompt_permissions_and_rollback.py
+    - backend/packages/application/resources/**
+    - backend/packages/application/public.py
+    - backend/packages/domain/iam/permissions.py
+    - backend/packages/infrastructure/database/resources.py
+    - backend/packages/infrastructure/database/models.py
+    - backend/packages/infrastructure/database/public.py
+    - backend/apps/api/app.py
+    - backend/apps/api/routes/prompts.py
+    - backend/tests/application/resources/**
+    - backend/tests/api/test_prompts.py
+    - backend/tests/infrastructure/database/**
+    - backend/tests/integration/resources/test_prompt_api.py
+    - backend/tests/integration/resources/test_resource_registry.py
+    - frontend/src/**
+    - harness/tasks/AP-E1-002.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E1-001, AP-E0-006, AP-E0-008]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+acceptance:
+  - Prompt 权限在服务端生效，旧 ETag、幂等 Key 和跨租户访问安全失败
+  - 发布生成不可变版本，回滚从旧版本复制内容生成新版本且旧版本不变
+  - Diff 对敏感变量默认值脱敏，审计不包含完整 Prompt
+  - Vue 列表/编辑覆盖 loading、empty、error、冲突、Diff 和引用预览
+open_questions: []

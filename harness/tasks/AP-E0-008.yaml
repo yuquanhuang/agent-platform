@@ -1,0 +1,71 @@
+task_id: AP-E0-008
+title: 完成 Epic 0 全栈集成验收与工程基线收口
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/agent-platform-openapi-v1.yaml
+    - docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+scope:
+  includes:
+    - 新增失败关闭的 make epic0-acceptance 统一入口
+    - 强制真实 PostgreSQL 和 Temporal 集成测试零 skip
+    - 执行契约、后端、前端和生成文件全仓门禁
+    - 执行 Vue Vite 开发代理到 FastAPI readiness 的真实跨端冒烟
+    - 输出 Epic 0 完成定义、验证证据和进入 Epic 1 的剩余风险
+  excludes:
+    - Epic 1 Prompt、Model Gateway、Agent Draft 业务开发
+    - Docker Compose、生产 Secret Resolver 和集群部署清单
+    - Playwright 浏览器场景和完整用户业务 E2E
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+requirements: []
+acceptance: []
+authoritative_contracts:
+  backend_readiness: GET /health/ready
+  frontend_proxy_path: /health/ready
+  required_temporal_test: PlatformProbeWorkflow
+  required_database: PostgreSQL 16+
+security:
+  environment:
+    - AP_TEST_DATABASE_URL 必须使用 postgresql+asyncpg 且数据库名以 _test 结尾
+    - AP_TEST_TEMPORAL 必须显式为 1
+    - 冒烟测试只绑定随机 loopback 端口
+  secrets:
+    - 验收输出不得打印数据库密码、Token 或完整环境变量
+failure_semantics:
+  fail_closed:
+    - 任一真实集成测试 skipped 时验收失败
+    - 任一契约、后端、前端或构建门禁失败时验收失败
+    - API 或 Vite 进程提前退出、超时或返回错误结构时验收失败
+  cleanup:
+    - 冒烟子进程在成功、失败和取消路径均终止
+    - 临时 JUnit、日志和端口文件只位于系统临时目录
+file_scope:
+  allowed:
+    - Makefile
+    - scripts/epic0_acceptance.py
+    - backend/tests/integration/temporal/test_probe_workflow.py
+    - harness/README.md
+    - harness/tasks/AP-E0-008.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - backend/packages/domain/**
+    - backend/packages/application/iam/**
+    - frontend/src/**
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E0-001, AP-E0-002, AP-E0-003, AP-E0-004, AP-E0-005, AP-E0-006, AP-E0-007]
+verification:
+  commands:
+    - make epic0-acceptance
+    - git diff --check
+    - uv lock --check
+  expected_results:
+    - R5 契约和 16 个生成文件零漂移
+    - 后端 Black、Ruff、Pyright strict 和全部测试通过
+    - PostgreSQL、IAM、Outbox 和 Temporal 集成测试全部执行且零 skip
+    - 前端 Prettier、ESLint、vue-tsc、Vitest 和生产构建通过
+    - Vite /health/ready 代理返回 FastAPI 的权威 readiness JSON
+open_questions: []

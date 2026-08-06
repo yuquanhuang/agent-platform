@@ -1,0 +1,131 @@
+task_id: AP-E0-006
+title: 实现 local/test Mock OIDC、/me、Tenant/Member/Role 和基础 RBAC
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/agent-platform-openapi-v1.yaml
+    - docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+scope:
+  includes:
+    - local/test 服务端固定 Mock Bearer 身份，不接受客户端 tenant/role Claim
+    - GET /api/v1/me 权威用户、成员、角色和 membership_version 查询
+    - Tenant/Member/Role 冻结 API、强 ETag、幂等和稳定错误语义
+    - resource:action 基础 RBAC 与角色权限存储
+    - 成员、角色和绑定变更时 membership_version 原子递增
+    - IAM 关键变更和跨租户拒绝的追加式安全审计
+    - 平台级 Tenant 管理与租户级 Member/Role 事务边界分离
+  excludes:
+    - 真实 OIDC/JWKS/PKCE、Refresh Token、Cookie/BFF 和生产 Claim 映射
+    - 通用 Policy Service、资源 Owner/Condition、审批和 Break-glass
+    - Audit 查询、保留和脱敏管理接口
+    - Temporal、Outbox Dispatcher、Redis 失效广播和前端管理页面
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+requirements: [FR-IAM-001, FR-IAM-002, FR-IAM-003, FR-IAM-005, FR-IAM-006]
+acceptance: [AC-005]
+authoritative_contracts:
+  openapi_operations:
+    - getCurrentIdentity
+    - listTenants
+    - createTenant
+    - getTenant
+    - updateTenant
+    - disableTenant
+    - enableTenant
+    - listMembers
+    - createMember
+    - getMember
+    - updateMember
+    - deleteMember
+    - listRoles
+    - createRole
+    - getRole
+    - updateRole
+    - deleteRole
+    - getOperation
+  permission_format: resource:action
+  etag_format: '"rv:<resource_version>"'
+data:
+  entities:
+    - role_permission
+    - audit_log
+    - idempotency_record
+    - operation_record
+  migrations:
+    - 0002_iam_rbac_foundation
+security:
+  platform_roles: [platform_admin]
+  tenant_roles: [tenant_admin]
+  audit_events:
+    - auth.login
+    - auth.failure
+    - role.bind
+    - role.unbind
+    - resource.create
+    - resource.update
+    - resource.disable
+    - security.cross_tenant_denied
+  tenant_controls:
+    - Mock tenant/role 只来自服务端配置
+    - TenantContext membership_version 与数据库当前值不一致时失败关闭
+    - Member/Role Repository 方法强制 TenantContext 和显式 tenant 条件
+    - 平台事务入口不得暴露给普通租户用例
+failure_semantics:
+  retryable_errors:
+    - DEPENDENCY_UNAVAILABLE
+  non_retryable_errors:
+    - UNAUTHENTICATED
+    - PERMISSION_DENIED
+    - RESOURCE_NOT_FOUND
+    - RESOURCE_STATE_CONFLICT
+    - RESOURCE_VERSION_CONFLICT
+    - IDEMPOTENCY_KEY_REUSED
+  cancellation: 数据库事务取消时回滚；已完成的幂等响应不得重复副作用
+  compensation: 删除先进入终态 Operation；生产身份切换必须在后续真实 OIDC 任务完成
+file_scope:
+  allowed:
+    - backend/apps/api/**
+    - backend/packages/application/iam/**
+    - backend/packages/application/public.py
+    - backend/packages/contracts/auth.py
+    - backend/packages/contracts/errors.py
+    - backend/packages/contracts/public.py
+    - backend/packages/domain/iam/**
+    - backend/packages/domain/public.py
+    - backend/packages/infrastructure/auth/**
+    - backend/packages/infrastructure/database/**
+    - backend/packages/infrastructure/public.py
+    - backend/migrations/versions/0002_iam_rbac_foundation.py
+    - backend/tests/api/**
+    - backend/tests/application/iam/**
+    - backend/tests/domain/iam/**
+    - backend/tests/infrastructure/auth/**
+    - backend/tests/infrastructure/database/**
+    - backend/tests/integration/iam/**
+    - backend/.env.example
+    - backend/README.md
+    - harness/tasks/AP-E0-006.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - frontend/src/views/**
+    - frontend/src/stores/**
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E0-002, AP-E0-004, AP-E0-005]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check-all
+    - git diff --check
+  expected_results:
+    - 缺少或非法 Bearer Token 返回 401 且包含 X-Request-ID
+    - 浏览器 Header/Body/Query 无法覆盖服务端 Mock tenant/role
+    - /me 从数据库返回权威 memberships、role_ids 和 membership_version
+    - 过期 membership_version、停用成员或停用角色立即拒绝新请求
+    - 两租户 Member/Role 读写和 RLS 越权矩阵通过
+    - ETag、幂等、Operation 和审计记录符合冻结契约
+open_questions: []

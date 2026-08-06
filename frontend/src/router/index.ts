@@ -12,6 +12,18 @@ export const router = createRouter({
           name: 'platform-status',
           component: () => import('@/views/PlatformStatusView.vue'),
         },
+        {
+          path: 'prompts',
+          name: 'prompt-list',
+          component: () => import('@/views/prompts/PromptListView.vue'),
+          meta: { permission: 'prompt:list' },
+        },
+        {
+          path: 'prompts/:id/edit',
+          name: 'prompt-edit',
+          component: () => import('@/views/prompts/PromptEditorView.vue'),
+          meta: { permission: 'prompt:update' },
+        },
       ],
     },
     {

@@ -1,10 +1,11 @@
 """Strongly typed process configuration."""
 
+import ipaddress
 from enum import StrEnum
 from functools import lru_cache
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import AnyHttpUrl, Field, model_validator
+from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from packages.contracts.public import EXPECTED_CONTRACT_BASELINE_ID
@@ -61,6 +62,11 @@ class AppSettings(BaseSettings):
     temporal_namespace: Annotated[str, Field(min_length=1, max_length=255)] | None = (
         None
     )
+    temporal_connect_timeout_seconds: Annotated[float, Field(gt=0, le=60)] = 10.0
+    worker_shutdown_grace_seconds: Annotated[float, Field(ge=0, le=300)] = 30.0
+    outbox_batch_size: Annotated[int, Field(ge=1, le=500)] = 50
+    outbox_max_attempts: Annotated[int, Field(ge=1, le=100)] = 10
+    metrics_allowed_networks: tuple[str, ...] = ("127.0.0.1/32", "::1/128")
     oidc_issuer: AnyHttpUrl | None = None
     oidc_client_id: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     oidc_client_secret_ref: SecretReference | None = None
@@ -70,6 +76,44 @@ class AppSettings(BaseSettings):
     contract_baseline_id: str = EXPECTED_CONTRACT_BASELINE_ID
     api_host: Annotated[str, Field(min_length=1, max_length=255)] = "127.0.0.1"
     api_port: Annotated[int, Field(ge=1, le=65535)] = 8000
+    mock_identity_issuer: AnyHttpUrl = AnyHttpUrl("https://mock.agent-platform.test")
+    mock_external_subject: Annotated[str, Field(min_length=1, max_length=255)] = (
+        "mock-platform-admin"
+    )
+    mock_display_name: Annotated[str, Field(min_length=1, max_length=100)] = (
+        "Mock Platform Admin"
+    )
+    mock_email: Annotated[str, Field(min_length=3, max_length=320)] | None = (
+        "mock-admin@example.test"
+    )
+    mock_platform_roles: tuple[Literal["platform_admin"], ...] = ("platform_admin",)
+    mock_active_tenant_id: (
+        Annotated[
+            str,
+            Field(
+                pattern=(
+                    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
+                    r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+                )
+            ),
+        ]
+        | None
+    ) = None
+    mock_membership_version: Annotated[int, Field(ge=1)] | None = None
+
+    @field_validator("metrics_allowed_networks")
+    @classmethod
+    def validate_metrics_networks(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value:
+            raise ValueError("AP_METRICS_ALLOWED_NETWORKS must not be empty")
+        for network in value:
+            try:
+                ipaddress.ip_network(network, strict=False)
+            except ValueError as exc:
+                raise ValueError(
+                    "AP_METRICS_ALLOWED_NETWORKS must contain valid CIDRs"
+                ) from exc
+        return value
 
     @model_validator(mode="after")
     def validate_environment_security(self) -> Self:
@@ -100,6 +144,15 @@ class AppSettings(BaseSettings):
             ]
             if missing:
                 raise ValueError(f"OIDC mode requires: {', '.join(missing)}")
+        if (
+            self.auth_mode is AuthMode.MOCK
+            and self.mock_active_tenant_id is not None
+            and self.mock_membership_version is None
+        ):
+            raise ValueError(
+                "AP_MOCK_MEMBERSHIP_VERSION is required when "
+                "AP_MOCK_ACTIVE_TENANT_ID is configured"
+            )
         return self
 
 

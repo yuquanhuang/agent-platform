@@ -28,6 +28,9 @@ const { sidebarCollapsed } = storeToRefs(appShellStore);
         <ElMenuItem index="/">
           <span>系统状态</span>
         </ElMenuItem>
+        <ElMenuItem index="/prompts">
+          <span>Prompt 管理</span>
+        </ElMenuItem>
       </ElMenu>
     </ElAside>
 
@@ -36,7 +39,7 @@ const { sidebarCollapsed } = storeToRefs(appShellStore);
         <ElButton plain @click="appShellStore.toggleSidebar">
           {{ sidebarCollapsed ? '展开导航' : '收起导航' }}
         </ElButton>
-        <ElText type="info">Epic 0 工程底座</ElText>
+        <ElText type="info">通用 Agent 平台</ElText>
       </ElHeader>
       <ElMain class="app-shell__main">
         <div class="app-shell__content">

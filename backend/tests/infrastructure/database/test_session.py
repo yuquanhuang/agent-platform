@@ -12,6 +12,7 @@ from packages.contracts.public import SubjectType, TenantContext
 from packages.infrastructure.database import uow as uow_module
 from packages.infrastructure.database.public import (
     TENANT_SETTING_NAME,
+    PlatformUnitOfWork,
     bind_tenant_context,
     create_database_engine,
     create_session_factory,
@@ -151,3 +152,25 @@ async def test_tenant_unit_of_work_rolls_back_on_use_case_failure(
     rollback.assert_awaited_once_with()
     commit.assert_not_awaited()
     close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_platform_unit_of_work_is_explicit_and_does_not_bind_tenant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_session = MagicMock(spec=AsyncSession)
+    fake_session.begin = AsyncMock()
+    fake_session.commit = AsyncMock()
+    fake_session.rollback = AsyncMock()
+    fake_session.close = AsyncMock()
+    session = cast(AsyncSession, fake_session)
+    factory = cast(async_sessionmaker[AsyncSession], MagicMock(return_value=session))
+    binder = AsyncMock()
+    monkeypatch.setattr(uow_module, "bind_tenant_context", binder)
+
+    async with PlatformUnitOfWork(factory) as unit_of_work:
+        assert unit_of_work.session is session
+
+    binder.assert_not_awaited()
+    cast(AsyncMock, session.commit).assert_awaited_once_with()
+    cast(AsyncMock, session.close).assert_awaited_once_with()

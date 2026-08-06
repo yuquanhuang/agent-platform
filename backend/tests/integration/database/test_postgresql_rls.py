@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,10 @@ from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from packages.contracts.public import SubjectType, TenantContext
+from packages.infrastructure.database.outbox import SqlAlchemyOutboxStore
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 DATABASE_URL_ENV = "AP_TEST_DATABASE_URL"
@@ -20,6 +24,8 @@ TENANT_A = "11111111-1111-4111-8111-111111111111"
 TENANT_B = "22222222-2222-4222-8222-222222222222"
 USER_A = "33333333-3333-4333-8333-333333333333"
 MEMBER_A = "44444444-4444-4444-8444-444444444444"
+OUTBOX_A = "55555555-5555-4555-8555-555555555555"
+PROBE_A = "66666666-6666-4666-8666-666666666666"
 
 
 def require_database_url() -> str:
@@ -149,10 +155,67 @@ async def verify_rls(database_url: str) -> None:
                         ),
                         {"tenant_id": TENANT_A, "user_id": USER_A},
                     )
+
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO outbox_event "
+                        "(id, tenant_id, aggregate_type, aggregate_id, event_type, "
+                        "payload_json, payload_schema_version) VALUES "
+                        "(:id, :tenant_id, 'probe', :probe_id, "
+                        "'platform_probe_requested.v1', '{}'::jsonb, 1)"
+                    ),
+                    {
+                        "id": OUTBOX_A,
+                        "tenant_id": TENANT_A,
+                        "probe_id": PROBE_A,
+                    },
+                )
+
+            outbox_store = SqlAlchemyOutboxStore(
+                async_sessionmaker(
+                    app_engine,
+                    autoflush=False,
+                    expire_on_commit=False,
+                )
+            )
+            tenant_context = TenantContext(
+                tenant_id=TENANT_A,
+                subject_type=SubjectType.SERVICE,
+                subject_id=USER_A,
+                auth_time=datetime(2026, 8, 6, tzinfo=UTC),
+                request_id="req-outbox-postgresql",
+                trace_id="trace-outbox-postgresql",
+            )
+            now = datetime(2026, 8, 7, tzinfo=UTC)
+            claimed = await outbox_store.claim_ready(
+                tenant_context,
+                now=now,
+                limit=10,
+                lease_duration=timedelta(seconds=30),
+            )
+            assert len(claimed) == 1
+            assert claimed[0].attempts == 1
+            assert claimed[0].status.value == "PUBLISHING"
+            await outbox_store.mark_published(
+                tenant_context,
+                claimed[0].id,
+                now=now,
+            )
         finally:
             await app_engine.dispose()
 
         async with admin_engine.connect() as connection:
+            outbox_state = (
+                await connection.execute(
+                    text(
+                        "SELECT status, attempts, published_at IS NOT NULL "
+                        "FROM outbox_event WHERE id = :id"
+                    ),
+                    {"id": OUTBOX_A},
+                )
+            ).one()
+            assert tuple(outbox_state) == ("PUBLISHED", 1, True)
             policies = (
                 await connection.execute(
                     text(
@@ -161,7 +224,16 @@ async def verify_rls(database_url: str) -> None:
                     )
                 )
             ).scalars()
-            assert list(policies) == ["role", "role_binding", "tenant_member"]
+            assert list(policies) == [
+                "operation_record",
+                "outbox_event",
+                "resource_definition",
+                "resource_version",
+                "role",
+                "role_binding",
+                "role_permission",
+                "tenant_member",
+            ]
     finally:
         await admin_engine.dispose()
 

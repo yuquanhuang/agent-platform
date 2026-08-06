@@ -1,0 +1,103 @@
+task_id: AP-E0-007
+title: 实现最小 Temporal Worker/Workflow、Outbox 与可观测性骨架
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/agent-platform-openapi-v1.yaml
+    - docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+scope:
+  includes:
+    - control-plane 与 run-orchestrator 独立 Temporal Worker 装配
+    - 带版本 Pydantic Temporal Probe Workflow/Activity 契约和确定性 Workflow ID
+    - OutboxEvent 领域状态、事务内写入接口、租户级 claim/retry/dead 持久化
+    - 数据库事务外 Temporal Starter 和有界失败收敛
+    - JSON 结构化日志、OpenTelemetry Trace 和低基数 Prometheus 指标
+    - 受内部网络限制的 API /metrics 端点
+  excludes:
+    - AgentRun、Release、Deployment、RunEvent、Event Store 和 SSE 业务实现
+    - AgentRunWorkflow、PublishAgentWorkflow 的完整 Activity/Signal/Query
+    - 跨租户 Tenant Enumerator、生产 Secret Resolver 和部署编排
+    - Outbox 到 Run/Release 的业务事件映射及 Workflow Run ID 持久化
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+requirements: []
+acceptance: []
+authoritative_contracts:
+  temporal_queues:
+    control: control-plane
+    run: run-orchestrator
+  probe_workflow_id: probe/{tenant_id}/{probe_id}
+  outbox_states: [PENDING, PUBLISHING, PUBLISHED, DEAD]
+data:
+  entities:
+    - outbox_event
+  migrations:
+    - 0003_temporal_outbox
+security:
+  tenant_controls:
+    - Outbox Repository 方法强制 TenantContext 和显式 tenant_id 条件
+    - Workflow ID 固定包含 tenant_id
+    - 后台跨租户轮询留给显式 Tenant Enumerator，不允许无条件全表扫描
+  observability:
+    - 日志不得输出 Token、Secret、Cookie 或 Authorization
+    - 指标 Label 不使用 tenant_id、run_id、workflow_id 等高基数字段
+    - /metrics 只接受配置的内部网络来源
+failure_semantics:
+  retryable_errors:
+    - Temporal 暂时不可用
+    - RPC 超时
+    - 可重试数据库错误
+  non_retryable_errors:
+    - 不支持的 Outbox event_type
+    - Payload Schema 不兼容
+    - Workflow ID 与租户不一致
+  cancellation: Dispatcher 取消时保留 PUBLISHING Lease，由超时 claim 恢复，不吞取消
+  compensation: 超过最大次数进入 DEAD；后续 Reconciler 使用原消息 ID 重放
+file_scope:
+  allowed:
+    - backend/apps/api/**
+    - backend/apps/temporal_worker_control/**
+    - backend/apps/temporal_worker_run/**
+    - backend/apps/event_worker/**
+    - backend/apps/processes.py
+    - backend/packages/application/outbox/**
+    - backend/packages/application/temporal/**
+    - backend/packages/application/public.py
+    - backend/packages/contracts/temporal/**
+    - backend/packages/contracts/public.py
+    - backend/packages/domain/outbox/**
+    - backend/packages/domain/public.py
+    - backend/packages/infrastructure/database/**
+    - backend/packages/infrastructure/observability/**
+    - backend/packages/infrastructure/temporal/**
+    - backend/packages/infrastructure/config.py
+    - backend/packages/infrastructure/public.py
+    - backend/migrations/versions/0003_temporal_outbox_observability.py
+    - backend/tests/**
+    - backend/.env.example
+    - backend/README.md
+    - harness/tasks/AP-E0-007.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - frontend/**
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E0-002, AP-E0-005, AP-E0-006]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check-all
+    - git diff --check
+  expected_results:
+    - Workflow 代码在 Sandbox 内保持确定性且 Probe 可通过 Temporal Test Environment 执行
+    - control/run Worker 注册到不同固定 Task Queue
+    - Outbox claim 事务提交后才调用 Temporal，重复 Workflow ID 视为成功
+    - 可重试失败退避并最终 DEAD，进程取消不被吞掉
+    - Outbox 表具备租户 RLS、状态约束和 status/next_attempt_at 索引
+    - JSON 日志包含 service、request_id、trace_id 且不记录敏感 Header
+    - Prometheus 指标只使用有界 Label
+open_questions: []

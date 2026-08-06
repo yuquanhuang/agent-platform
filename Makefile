@@ -1,7 +1,7 @@
 PYTHON ?= uv run python
 HARNESS := $(PYTHON) scripts/harness.py
 
-.PHONY: format format-check lint typecheck test build check check-all backend-check frontend-check contract-check generate-contracts generated-check harness-dry-run
+.PHONY: format format-check lint typecheck test build check check-all backend-check frontend-check contract-check generate-contracts generated-check harness-dry-run epic0-acceptance
 
 format:
 	$(HARNESS) format
@@ -44,3 +44,6 @@ generated-check:
 
 harness-dry-run:
 	$(HARNESS) check --dry-run
+
+epic0-acceptance:
+	$(PYTHON) scripts/epic0_acceptance.py

@@ -1,4 +1,4 @@
-"""Shared behavior for process boundaries not implemented in this task."""
+"""Stable names and fail-closed behavior for backend process boundaries."""
 
 from enum import StrEnum
 from typing import NoReturn

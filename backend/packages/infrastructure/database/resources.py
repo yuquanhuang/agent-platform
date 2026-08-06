@@ -1,0 +1,966 @@
+"""Tenant-scoped persistence for the shared versioned resource registry."""
+
+import hashlib
+import json
+from datetime import UTC, datetime
+from typing import cast
+from uuid import UUID
+
+from pydantic import JsonValue
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from packages.application.public import RequestMetadata
+from packages.contracts.generated.resources_models import (
+    ActionRequest,
+    ResourceCopyRequest,
+    ResourceCreateRequest,
+    ResourcePublishRequest,
+    ResourceRollbackRequest,
+    ResourceUpdateRequest,
+)
+from packages.contracts.public import (
+    TenantContext,
+    resource_state_conflict,
+    resource_version_conflict,
+    validation_error,
+)
+from packages.domain.public import (
+    MutationOutcome,
+    OperationRecord,
+    OperationStatus,
+    ResourceContentValue,
+    ResourceDefinitionRecord,
+    ResourceRegistryStatus,
+    ResourceType,
+    ResourceVersionRecord,
+    ResourceVersionStatus,
+    ResourceVisibility,
+    canonical_content_hash,
+    decode_cursor,
+    encode_cursor,
+    parse_resource_content,
+    resource_content_json,
+    validate_content_type,
+)
+from packages.infrastructure.database.idempotency import (
+    claim_idempotency,
+    complete_idempotency,
+)
+from packages.infrastructure.database.models import (
+    AuditLogModel,
+    OperationRecordModel,
+    ResourceDefinitionModel,
+    ResourceVersionModel,
+)
+from packages.infrastructure.database.uow import TenantUnitOfWork
+
+
+class SqlAlchemyResourceRegistry:
+    """Persist resource definitions and versions inside tenant transactions."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def create_definition(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_type: ResourceType,
+        request: ResourceCreateRequest,
+        idempotency_key: str,
+        request_hash: str,
+        metadata: RequestMetadata,
+    ) -> MutationOutcome[ResourceDefinitionRecord]:
+        content = _validated_content(resource_type, request.content)
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            record_id, replay = await claim_idempotency(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type=f"{resource_type}.create",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return MutationOutcome(replay=replay)
+            existing = await session.scalar(
+                select(ResourceDefinitionModel.id).where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.code == request.code,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+            )
+            if existing is not None:
+                raise resource_state_conflict("Resource code is already in use.")
+            now = datetime.now(UTC)
+            model = ResourceDefinitionModel(
+                tenant_id=tenant_id,
+                resource_type=resource_type,
+                code=request.code,
+                name=request.name,
+                description=request.description,
+                owner_user_id=actor_id,
+                visibility=request.visibility or "private",
+                current_draft_json=_stored_content(content),
+                draft_schema_version=request.content_schema_version,
+                created_by=actor_id,
+                updated_by=actor_id,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(model)
+            await session.flush()
+            result = _definition_record(model)
+            await _add_audit(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action="resource.create",
+                resource_type=resource_type,
+                resource_id=model.id,
+                metadata=metadata,
+                change={"code": request.code, "resource_type": resource_type},
+            )
+            await complete_idempotency(
+                session,
+                record_id,
+                response_status=201,
+                response_body=_definition_json(result),
+                response_etag=f'"rv:{result.resource_version}"',
+                response_ref=str(result.id),
+            )
+            return MutationOutcome(value=result)
+
+    async def get_definition(
+        self,
+        context: TenantContext,
+        *,
+        resource_type: ResourceType,
+        resource_id: UUID,
+    ) -> ResourceDefinitionRecord | None:
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            model = await unit_of_work.session.scalar(
+                select(ResourceDefinitionModel).where(
+                    ResourceDefinitionModel.tenant_id == UUID(context.tenant_id),
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+            )
+            return _definition_record(model) if model is not None else None
+
+    async def list_definitions(
+        self,
+        context: TenantContext,
+        *,
+        resource_type: ResourceType,
+        limit: int,
+        cursor: str | None,
+        keyword: str | None = None,
+    ) -> tuple[list[ResourceDefinitionRecord], str | None]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            tenant_id = UUID(context.tenant_id)
+            statement = (
+                select(ResourceDefinitionModel)
+                .where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+                .order_by(
+                    ResourceDefinitionModel.created_at.desc(),
+                    ResourceDefinitionModel.id.desc(),
+                )
+            )
+            if keyword:
+                statement = statement.where(
+                    or_(
+                        ResourceDefinitionModel.code.ilike(f"%{keyword}%"),
+                        ResourceDefinitionModel.name.ilike(f"%{keyword}%"),
+                    )
+                )
+            if cursor is not None:
+                try:
+                    created_at, resource_id = decode_cursor(cursor)
+                except ValueError as exc:
+                    raise validation_error("Pagination cursor is invalid.") from exc
+                statement = statement.where(
+                    or_(
+                        ResourceDefinitionModel.created_at < created_at,
+                        and_(
+                            ResourceDefinitionModel.created_at == created_at,
+                            ResourceDefinitionModel.id < resource_id,
+                        ),
+                    )
+                )
+            rows = list((await session.scalars(statement.limit(limit + 1))).all())
+            page = rows[:limit]
+            next_cursor = (
+                encode_cursor(page[-1].created_at, page[-1].id)
+                if len(rows) > limit and page
+                else None
+            )
+            return [_definition_record(row) for row in page], next_cursor
+
+    async def update_definition(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_type: ResourceType,
+        resource_id: UUID,
+        expected_version: int,
+        request: ResourceUpdateRequest,
+        metadata: RequestMetadata,
+    ) -> ResourceDefinitionRecord | None:
+        content = (
+            _validated_content(resource_type, request.content)
+            if request.content is not None
+            else None
+        )
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            model = await session.scalar(
+                select(ResourceDefinitionModel)
+                .where(
+                    ResourceDefinitionModel.tenant_id == UUID(context.tenant_id),
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if model is None:
+                return None
+            if model.resource_version != expected_version:
+                raise resource_version_conflict()
+            if request.name is not None:
+                model.name = request.name
+            if "description" in request.model_fields_set:
+                model.description = request.description
+            if request.visibility is not None:
+                model.visibility = request.visibility
+            if request.content_schema_version is not None:
+                model.draft_schema_version = request.content_schema_version
+            if content is not None:
+                model.current_draft_json = _stored_content(content)
+            model.resource_version += 1
+            model.updated_by = actor_id
+            model.updated_at = datetime.now(UTC)
+            await session.flush()
+            result = _definition_record(model)
+            await _add_audit(
+                session,
+                tenant_id=model.tenant_id,
+                actor_id=actor_id,
+                action="resource.update",
+                resource_type=resource_type,
+                resource_id=model.id,
+                metadata=metadata,
+                change=_update_audit_summary(request, content),
+            )
+            return result
+
+    async def publish_version(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_type: ResourceType,
+        resource_id: UUID,
+        request: ResourcePublishRequest,
+        idempotency_key: str,
+        request_hash: str,
+        metadata: RequestMetadata,
+    ) -> MutationOutcome[ResourceVersionRecord]:
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            record_id, replay = await claim_idempotency(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type=f"{resource_type}.publish",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return MutationOutcome(replay=replay)
+            definition = await session.scalar(
+                select(ResourceDefinitionModel)
+                .where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if definition is None:
+                raise resource_state_conflict("Resource definition is not available.")
+            if definition.resource_version != request.expected_resource_version:
+                raise resource_version_conflict()
+            content = _validated_content(
+                resource_type, parse_resource_content(definition.current_draft_json)
+            )
+            content_hash = canonical_content_hash(content)
+            duplicate = await session.scalar(
+                select(ResourceVersionModel.id).where(
+                    ResourceVersionModel.tenant_id == tenant_id,
+                    ResourceVersionModel.definition_id == resource_id,
+                    ResourceVersionModel.content_hash == content_hash,
+                    ResourceVersionModel.publication_kind == "PUBLISH",
+                )
+            )
+            if duplicate is not None:
+                raise resource_state_conflict(
+                    "The resource content is already published."
+                )
+            next_version = (
+                await session.scalar(
+                    select(
+                        func.coalesce(func.max(ResourceVersionModel.version_no), 0)
+                    ).where(
+                        ResourceVersionModel.tenant_id == tenant_id,
+                        ResourceVersionModel.definition_id == resource_id,
+                    )
+                )
+                or 0
+            ) + 1
+            now = datetime.now(UTC)
+            version_model = ResourceVersionModel(
+                tenant_id=tenant_id,
+                definition_id=resource_id,
+                version_no=next_version,
+                schema_version=definition.draft_schema_version,
+                content_json=_stored_content(content),
+                content_hash=content_hash,
+                release_note=request.release_note,
+                publication_kind="PUBLISH",
+                published_by=actor_id,
+                published_at=now,
+            )
+            session.add(version_model)
+            definition.status = "ACTIVE"
+            definition.resource_version += 1
+            definition.updated_by = actor_id
+            definition.updated_at = now
+            await session.flush()
+            result = _version_record(version_model)
+            await _add_audit(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action="resource.publish",
+                resource_type=resource_type,
+                resource_id=resource_id,
+                metadata=metadata,
+                change={"version_no": next_version, "content_hash": content_hash},
+            )
+            await complete_idempotency(
+                session,
+                record_id,
+                response_status=201,
+                response_body=_version_json(result),
+                response_etag=None,
+                response_ref=str(result.id),
+            )
+            return MutationOutcome(value=result)
+
+    async def copy_definition(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_type: ResourceType,
+        resource_id: UUID,
+        request: ResourceCopyRequest,
+        idempotency_key: str,
+        request_hash: str,
+        metadata: RequestMetadata,
+    ) -> MutationOutcome[ResourceDefinitionRecord] | None:
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            record_id, replay = await claim_idempotency(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type=f"{resource_type}.copy",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return MutationOutcome(replay=replay)
+            source = await session.scalar(
+                select(ResourceDefinitionModel).where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+            )
+            if source is None:
+                return None
+            duplicate = await session.scalar(
+                select(ResourceDefinitionModel.id).where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.code == request.code,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+            )
+            if duplicate is not None:
+                raise resource_state_conflict("Resource code is already in use.")
+            now = datetime.now(UTC)
+            model = ResourceDefinitionModel(
+                tenant_id=tenant_id,
+                resource_type=resource_type,
+                code=request.code,
+                name=request.name,
+                description=source.description,
+                owner_user_id=actor_id,
+                visibility=source.visibility,
+                current_draft_json=source.current_draft_json,
+                draft_schema_version=source.draft_schema_version,
+                created_by=actor_id,
+                updated_by=actor_id,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(model)
+            await session.flush()
+            result = _definition_record(model)
+            await _add_audit(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action="resource.copy",
+                resource_type=resource_type,
+                resource_id=model.id,
+                metadata=metadata,
+                change={"source_resource_id": str(resource_id), "code": request.code},
+            )
+            await complete_idempotency(
+                session,
+                record_id,
+                response_status=201,
+                response_body=_definition_json(result),
+                response_etag=f'"rv:{result.resource_version}"',
+                response_ref=str(result.id),
+            )
+            return MutationOutcome(value=result)
+
+    async def set_definition_status(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_type: ResourceType,
+        resource_id: UUID,
+        expected_version: int,
+        enabled: bool,
+        request: ActionRequest | None,
+        idempotency_key: str,
+        request_hash: str,
+        metadata: RequestMetadata,
+    ) -> MutationOutcome[ResourceDefinitionRecord] | None:
+        tenant_id = UUID(context.tenant_id)
+        operation = "enable" if enabled else "disable"
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            record_id, replay = await claim_idempotency(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type=f"{resource_type}.{operation}",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return MutationOutcome(replay=replay)
+            definition = await session.scalar(
+                select(ResourceDefinitionModel)
+                .where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if definition is None:
+                return None
+            if definition.resource_version != expected_version:
+                raise resource_version_conflict()
+            if enabled:
+                if definition.status != "DISABLED":
+                    raise resource_state_conflict(
+                        "Only a disabled resource can be enabled."
+                    )
+                has_version = await session.scalar(
+                    select(ResourceVersionModel.id)
+                    .where(
+                        ResourceVersionModel.tenant_id == tenant_id,
+                        ResourceVersionModel.definition_id == resource_id,
+                    )
+                    .limit(1)
+                )
+                definition.status = "ACTIVE" if has_version is not None else "DRAFT"
+            else:
+                if definition.status not in {"DRAFT", "ACTIVE"}:
+                    raise resource_state_conflict(
+                        "Resource cannot be disabled from its current state."
+                    )
+                definition.status = "DISABLED"
+            definition.resource_version += 1
+            definition.updated_by = actor_id
+            definition.updated_at = datetime.now(UTC)
+            await session.flush()
+            result = _definition_record(definition)
+            reason_digest = _optional_text_digest(request.reason if request else None)
+            await _add_audit(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action=f"resource.{operation}",
+                resource_type=resource_type,
+                resource_id=resource_id,
+                metadata=metadata,
+                change={
+                    "status": result.status,
+                    **({"reason_digest": reason_digest} if reason_digest else {}),
+                },
+            )
+            await complete_idempotency(
+                session,
+                record_id,
+                response_status=200,
+                response_body=_definition_json(result),
+                response_etag=f'"rv:{result.resource_version}"',
+                response_ref=str(result.id),
+            )
+            return MutationOutcome(value=result)
+
+    async def delete_definition(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_type: ResourceType,
+        resource_id: UUID,
+        expected_version: int,
+        idempotency_key: str,
+        request_hash: str,
+        metadata: RequestMetadata,
+    ) -> MutationOutcome[OperationRecord] | None:
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            record_id, replay = await claim_idempotency(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type=f"{resource_type}.delete",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return MutationOutcome(replay=replay)
+            definition = await session.scalar(
+                select(ResourceDefinitionModel)
+                .where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if definition is None:
+                return None
+            if definition.resource_version != expected_version:
+                raise resource_version_conflict()
+            now = datetime.now(UTC)
+            definition.status = "DELETED"
+            definition.deleted_at = now
+            definition.deleted_by = actor_id
+            definition.updated_at = now
+            definition.updated_by = actor_id
+            definition.resource_version += 1
+            operation = OperationRecordModel(
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type=f"{resource_type}.delete",
+                status="SUCCEEDED",
+                resource_type=resource_type,
+                resource_id=resource_id,
+                result_json={"deleted": True},
+                created_at=now,
+                updated_at=now,
+                finished_at=now,
+            )
+            session.add(operation)
+            await session.flush()
+            result = _operation_record(operation)
+            await _add_audit(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action="resource.delete",
+                resource_type=resource_type,
+                resource_id=resource_id,
+                metadata=metadata,
+                change={"operation_id": str(result.id)},
+            )
+            response_body: dict[str, object] = {
+                "operation_id": str(result.id),
+                "status": "ACCEPTED",
+                "status_url": f"/api/v1/operations/{result.id}",
+            }
+            await complete_idempotency(
+                session,
+                record_id,
+                response_status=202,
+                response_body=response_body,
+                response_etag=None,
+                response_ref=str(result.id),
+            )
+            return MutationOutcome(value=result)
+
+    async def rollback_version(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_type: ResourceType,
+        resource_id: UUID,
+        source_version_id: UUID,
+        request: ResourceRollbackRequest,
+        idempotency_key: str,
+        request_hash: str,
+        metadata: RequestMetadata,
+    ) -> MutationOutcome[ResourceVersionRecord] | None:
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            record_id, replay = await claim_idempotency(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type=f"{resource_type}.rollback",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return MutationOutcome(replay=replay)
+            definition = await session.scalar(
+                select(ResourceDefinitionModel)
+                .where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if definition is None:
+                return None
+            if definition.resource_version != request.expected_resource_version:
+                raise resource_version_conflict()
+            source = await session.scalar(
+                select(ResourceVersionModel).where(
+                    ResourceVersionModel.tenant_id == tenant_id,
+                    ResourceVersionModel.definition_id == resource_id,
+                    ResourceVersionModel.id == source_version_id,
+                )
+            )
+            if source is None:
+                return None
+            next_version = (
+                await session.scalar(
+                    select(
+                        func.coalesce(func.max(ResourceVersionModel.version_no), 0)
+                    ).where(
+                        ResourceVersionModel.tenant_id == tenant_id,
+                        ResourceVersionModel.definition_id == resource_id,
+                    )
+                )
+                or 0
+            ) + 1
+            now = datetime.now(UTC)
+            version = ResourceVersionModel(
+                tenant_id=tenant_id,
+                definition_id=resource_id,
+                version_no=next_version,
+                schema_version=source.schema_version,
+                content_json=source.content_json,
+                content_hash=source.content_hash,
+                release_note=request.release_note,
+                publication_kind="ROLLBACK",
+                source_uri=f"resource-version:{source.id}",
+                published_by=actor_id,
+                published_at=now,
+            )
+            session.add(version)
+            definition.current_draft_json = source.content_json
+            definition.draft_schema_version = source.schema_version
+            definition.status = "ACTIVE"
+            definition.resource_version += 1
+            definition.updated_by = actor_id
+            definition.updated_at = now
+            await session.flush()
+            result = _version_record(version)
+            await _add_audit(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action="resource.rollback",
+                resource_type=resource_type,
+                resource_id=resource_id,
+                metadata=metadata,
+                change={
+                    "source_version_id": str(source.id),
+                    "version_no": next_version,
+                    "content_hash": source.content_hash,
+                },
+            )
+            await complete_idempotency(
+                session,
+                record_id,
+                response_status=201,
+                response_body=_version_json(result),
+                response_etag=None,
+                response_ref=str(result.id),
+            )
+            return MutationOutcome(value=result)
+
+    async def list_versions(
+        self,
+        context: TenantContext,
+        *,
+        resource_type: ResourceType,
+        resource_id: UUID,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[list[ResourceVersionRecord], str | None]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            definition_exists = await session.scalar(
+                select(ResourceDefinitionModel.id).where(
+                    ResourceDefinitionModel.tenant_id == UUID(context.tenant_id),
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+            )
+            if definition_exists is None:
+                return [], None
+            statement = (
+                select(ResourceVersionModel)
+                .where(
+                    ResourceVersionModel.tenant_id == UUID(context.tenant_id),
+                    ResourceVersionModel.definition_id == resource_id,
+                )
+                .order_by(ResourceVersionModel.version_no.desc())
+            )
+            if cursor is not None:
+                try:
+                    _, version_id = decode_cursor(cursor)
+                except ValueError as exc:
+                    raise validation_error("Pagination cursor is invalid.") from exc
+                anchor = await session.scalar(
+                    select(ResourceVersionModel.version_no).where(
+                        ResourceVersionModel.id == version_id,
+                        ResourceVersionModel.definition_id == resource_id,
+                    )
+                )
+                if anchor is None:
+                    raise validation_error("Pagination cursor is invalid.")
+                statement = statement.where(ResourceVersionModel.version_no < anchor)
+            rows = list((await session.scalars(statement.limit(limit + 1))).all())
+            page = rows[:limit]
+            next_cursor = (
+                encode_cursor(page[-1].published_at, page[-1].id)
+                if len(rows) > limit and page
+                else None
+            )
+            return [_version_record(row) for row in page], next_cursor
+
+    async def get_version(
+        self,
+        context: TenantContext,
+        *,
+        resource_type: ResourceType,
+        resource_id: UUID,
+        version_id: UUID,
+    ) -> ResourceVersionRecord | None:
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            definition_exists = await session.scalar(
+                select(ResourceDefinitionModel.id).where(
+                    ResourceDefinitionModel.tenant_id == UUID(context.tenant_id),
+                    ResourceDefinitionModel.resource_type == resource_type,
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+            )
+            if definition_exists is None:
+                return None
+            model = await session.scalar(
+                select(ResourceVersionModel).where(
+                    ResourceVersionModel.tenant_id == UUID(context.tenant_id),
+                    ResourceVersionModel.definition_id == resource_id,
+                    ResourceVersionModel.id == version_id,
+                )
+            )
+            return _version_record(model) if model is not None else None
+
+
+def _validated_content(
+    resource_type: ResourceType, content: object
+) -> ResourceContentValue:
+    try:
+        parsed = parse_resource_content(content)
+        validate_content_type(resource_type, parsed)
+        return parsed
+    except ValueError as exc:
+        raise validation_error(str(exc)) from exc
+
+
+def _definition_record(model: ResourceDefinitionModel) -> ResourceDefinitionRecord:
+    return ResourceDefinitionRecord(
+        id=model.id,
+        tenant_id=model.tenant_id,
+        resource_type=cast(ResourceType, model.resource_type),
+        code=model.code,
+        name=model.name,
+        description=model.description,
+        owner_user_id=model.owner_user_id,
+        visibility=cast(ResourceVisibility, model.visibility),
+        content_schema_version=model.draft_schema_version,
+        content=parse_resource_content(model.current_draft_json),
+        status=cast(ResourceRegistryStatus, model.status),
+        resource_version=model.resource_version,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _stored_content(content: ResourceContentValue) -> dict[str, object]:
+    return cast(dict[str, object], resource_content_json(content))
+
+
+def _version_record(model: ResourceVersionModel) -> ResourceVersionRecord:
+    return ResourceVersionRecord(
+        id=model.id,
+        tenant_id=model.tenant_id,
+        definition_id=model.definition_id,
+        version_no=model.version_no,
+        schema_version=model.schema_version,
+        content=parse_resource_content(model.content_json),
+        content_hash=model.content_hash,
+        release_note=model.release_note,
+        status=cast(ResourceVersionStatus, model.status),
+        published_at=model.published_at,
+        published_by=model.published_by,
+    )
+
+
+def _definition_json(record: ResourceDefinitionRecord) -> dict[str, object]:
+    return {
+        "id": str(record.id),
+        "resource_type": record.resource_type,
+        "code": record.code,
+        "name": record.name,
+        "description": record.description,
+        "visibility": record.visibility,
+        "content_schema_version": record.content_schema_version,
+        "content": resource_content_json(record.content),
+        "status": record.status,
+        "resource_version": record.resource_version,
+        "created_at": record.created_at.isoformat(),
+        "updated_at": record.updated_at.isoformat(),
+    }
+
+
+def _version_json(record: ResourceVersionRecord) -> dict[str, object]:
+    return {
+        "id": str(record.id),
+        "definition_id": str(record.definition_id),
+        "version_no": record.version_no,
+        "content_hash": record.content_hash,
+        "release_note": record.release_note,
+        "published_at": record.published_at.isoformat(),
+    }
+
+
+def _operation_record(model: OperationRecordModel) -> OperationRecord:
+    return OperationRecord(
+        id=model.id,
+        operation_type=model.operation_type,
+        status=cast(OperationStatus, model.status),
+        resource_type=model.resource_type,
+        resource_id=model.resource_id,
+        result=cast(dict[str, JsonValue] | None, model.result_json),
+        error=cast(dict[str, JsonValue] | None, model.error_json),
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+        finished_at=model.finished_at,
+    )
+
+
+def _update_audit_summary(
+    request: ResourceUpdateRequest, content: ResourceContentValue | None
+) -> dict[str, object]:
+    changed_fields = sorted(request.model_fields_set)
+    summary: dict[str, object] = {"changed_fields": changed_fields}
+    if content is not None:
+        summary["content_hash"] = canonical_content_hash(content)
+    return summary
+
+
+def _optional_text_digest(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return f"sha256:{hashlib.sha256(value.encode()).hexdigest()}"
+
+
+async def _add_audit(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    actor_id: UUID,
+    action: str,
+    resource_type: str,
+    resource_id: UUID,
+    metadata: RequestMetadata,
+    change: dict[str, object],
+) -> None:
+    canonical = json.dumps(change, sort_keys=True, separators=(",", ":")).encode()
+    session.add(
+        AuditLogModel(
+            tenant_id=tenant_id,
+            actor_type="user",
+            actor_id=actor_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            result="SUCCESS",
+            reason_codes=[],
+            change_digest=f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+            request_id=metadata.request_id,
+            trace_id=metadata.trace_id,
+            metadata_json=change,
+        )
+    )

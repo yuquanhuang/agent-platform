@@ -41,3 +41,17 @@ def test_oidc_mode_requires_issuer_client_and_secret_reference() -> None:
 def test_contract_baseline_mismatch_fails_startup_configuration() -> None:
     with pytest.raises(ValidationError, match="does not match"):
         AppSettings.model_validate({"contract_baseline_id": "unexpected-baseline"})
+
+
+def test_mock_active_tenant_requires_membership_version() -> None:
+    with pytest.raises(ValidationError, match="AP_MOCK_MEMBERSHIP_VERSION"):
+        AppSettings.model_validate(
+            {"mock_active_tenant_id": "11111111-1111-4111-8111-111111111111"}
+        )
+
+
+def test_metrics_networks_must_be_valid_and_non_empty() -> None:
+    with pytest.raises(ValidationError, match="valid CIDRs"):
+        AppSettings.model_validate({"metrics_allowed_networks": ["not-a-cidr"]})
+    with pytest.raises(ValidationError, match="must not be empty"):
+        AppSettings.model_validate({"metrics_allowed_networks": []})
