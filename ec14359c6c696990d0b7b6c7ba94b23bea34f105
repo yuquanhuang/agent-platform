@@ -1,0 +1,72 @@
+backend/apps/api/routes/auth.py
+  6172cfb388c1554b 1-33
+backend/packages/infrastructure/config.py
+  6172cfb388c1554b 3,6,8,65-69,79-116,147-155
+backend/packages/infrastructure/public.py
+  6172cfb388c1554b 12-19,25-34,41,43-50,52,54-56,60
+harness/AI_CODING_PROGRESS.md
+  6172cfb388c1554b 5,22-26,90-174
+backend/tests/infrastructure/database/test_migrations.py
+  6172cfb388c1554b 29-42,58-67,72-77,79-106
+backend/packages/infrastructure/database/identity.py
+  6172cfb388c1554b 1-112
+harness/tasks/AP-E0-006.yaml
+  6172cfb388c1554b 1-131
+backend/packages/application/public.py
+  6172cfb388c1554b 4-27,29-48
+backend/tests/infrastructure/database/test_session.py
+  6172cfb388c1554b 15,155-176
+backend/packages/contracts/errors.py
+  6172cfb388c1554b 1-72
+backend/packages/contracts/public.py
+  6172cfb388c1554b 3,5-15,21,24-25,28-35
+backend/packages/infrastructure/database/uow.py
+  6172cfb388c1554b 1,58-81
+backend/tests/infrastructure/test_config.py
+  6172cfb388c1554b 44-57
+backend/apps/api/http.py
+  6172cfb388c1554b 1-155
+backend/packages/domain/public.py
+  6172cfb388c1554b 3-76
+backend/tests/api/test_auth.py
+  6172cfb388c1554b 1-108
+backend/tests/infrastructure/database/test_models.py
+  6172cfb388c1554b 21-22,24-29,32,35,43-47,99-176
+backend/README.md
+  6172cfb388c1554b 43-100
+backend/apps/api/app.py
+  6172cfb388c1554b 5-6,8-21,24-31,36,41-43,45-53,55-69
+backend/packages/infrastructure/database/models.py
+  6172cfb388c1554b 14,16,20,126-128,245-319,323-564,566-612
+backend/.env.example
+  6172cfb388c1554b 11-20,28-32,37
+backend/packages/infrastructure/database/public.py
+  6172cfb388c1554b 4-5,8-13,16,20-24,33,39,41-46,49-54
+backend/packages/contracts/auth.py
+  6172cfb388c1554b 1-40
+backend/migrations/versions/0002_iam_rbac_foundation.py
+  6172cfb388c1554b 1-327
+backend/tests/integration/database/test_postgresql_rls.py
+  6172cfb388c1554b 5,14,16-17,27-28,158-204,209-218,227-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "ec14359c6c696990d0b7b6c7ba94b23bea34f105",
+  "prompts": {
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 2164,
+      "total_deletions": 51,
+      "accepted_lines": 2133,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/6ad7ca87b2bd4db489f4b895813716f97acc38e8ff0bb9685b276e9152c98689"
+    }
+  }
+}
