@@ -1,0 +1,74 @@
+task_id: AP-E1-004
+title: Model Gateway 请求、流式响应、错误与用量归一化
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/schemas/model-gateway-v1.schema.json
+scope:
+  includes:
+    - 与冻结 Model Gateway Schema 一致的请求、响应、Usage 和流事件 Contracts
+    - Provider Adapter、Secret Reference Resolver、Model Binding Reader、Budget Guard 和 Usage Store 端口
+    - 非流式与流式 Gateway 编排、能力校验、超时、错误归一化和安全 fallback
+    - model_usage 租户事实表、RLS、索引和精确/估算用量持久化
+    - model_provider.connection_test_requested 事件处理与 Operation 终态推进
+    - Fake Adapter、Fake Secret Resolver 和 Outbox 路由契约测试
+  excludes:
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+    - OpenAI、Qwen、DeepSeek 真实 HTTP Adapter 和供应商费用表
+    - 长期 Secret 明文存储、日志、审计或 Operation 回显
+    - quota_policy、budget_policy、budget_reservation 持久化和完整分级配额管理
+    - 新增前端 Model Gateway API 或页面
+data:
+  migrations:
+    - 0007_model_gateway_usage
+  rollback:
+    - 0007 downgrade drops only model_usage and its tenant RLS policy
+security:
+  - Runtime 只传短期授权和不可变引用，不接触供应商长期 Secret
+  - fallback 仅允许 retryable=true 且 submission_state=not_submitted
+  - 错误、日志、审计和 Operation 只保存归一化安全摘要
+  - model_usage 显式 tenant 条件并启用 FORCE RLS
+async_operation:
+  event_type: model_provider.connection_test_requested
+  handler: ModelProviderConnectionTestHandler
+  operation_flow: ACCEPTED -> RUNNING -> SUCCEEDED|FAILED
+  routing:
+    - TemporalProbeStarter 保持只处理 platform_probe_requested.v1
+    - OutboxEventRouter 按事件类型路由，不把模型事件交给 Probe starter
+file_scope:
+  allowed:
+    - backend/migrations/versions/0007_model_gateway_usage.py
+    - backend/packages/contracts/model_gateway.py
+    - backend/packages/domain/model_gateway/**
+    - backend/packages/application/model_gateway/**
+    - backend/packages/application/outbox/**
+    - backend/packages/infrastructure/model_gateway/**
+    - backend/packages/infrastructure/database/**
+    - backend/packages/infrastructure/observability/**
+    - backend/packages/**/public.py
+    - backend/tests/**
+    - harness/tasks/AP-E1-004.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E1-003, AP-E1-001, AP-E0-007]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+acceptance:
+  - 普通与流式调用均输出冻结字段并记录统一 Usage
+  - 缺失精确 Token 时 estimated=true，费用缺失不虚构费用表
+  - 未提交的明确可重试错误才允许 fallback，未知提交状态禁止重试
+  - 连接测试事件不会被 TemporalProbeStarter 标记 DEAD，并安全推进 Operation 终态
+  - model_usage 跨租户不可见，错误和用量记录不包含 Secret
+  - AP-E1-003 Provider/Config、Operation 轮询和既有 Outbox/Temporal Probe 无回归
+open_questions:
+  - FR-MDL-006 要求 ModelConfig 发布冻结 Provider 与 Secret Reference，但冻结 ResourceContentModelConfig 只有 provider_id；生产 ModelBindingReader 前需人工确认采用独立不可变 model_binding_snapshot，还是延后到 AgentSnapshot 编译时冻结。

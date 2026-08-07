@@ -1,4 +1,5 @@
 import {
+  CoreApiClient,
   FetchApiTransport,
   ResourcesApiClient,
   type ApiRequest,
@@ -32,3 +33,4 @@ const mockAuthorization = import.meta.env.DEV ? 'Bearer mock' : undefined;
 const transport = new AuthenticatedApiTransport(new FetchApiTransport(), mockAuthorization);
 
 export const resourcesApiClient = new ResourcesApiClient(transport);
+export const coreApiClient = new CoreApiClient(transport);

@@ -7,9 +7,9 @@ import type { ApiTransport } from '@/api/generated/transport';
 
 describe('generated contracts', () => {
   it('covers both frozen OpenAPI operation catalogs', () => {
-    expect(coreOperationIds).toHaveLength(40);
+    expect(coreOperationIds).toHaveLength(41);
     expect(resourceOperationIds).toHaveLength(127);
-    expect(new Set([...coreOperationIds, ...resourceOperationIds]).size).toBe(167);
+    expect(new Set([...coreOperationIds, ...resourceOperationIds]).size).toBe(168);
   });
 
   it('keeps RunEvent as a discriminated union', () => {

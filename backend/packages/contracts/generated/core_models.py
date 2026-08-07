@@ -76,7 +76,16 @@ class AgentUpdateRequest(BaseModel):
     description: str | None = Field(None, max_length=2000)
     visibility: Literal["private", "tenant"] | None = None
     tags: list[str] | None = Field(None, max_length=20)
-    bindings: list[ResourceBinding] | None = None
+    bindings: AgentBindingList | None = None
+
+
+class ModelRoutingBindingConfiguration(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    fallback_error_codes: list[Literal["RATE_LIMITED", "PROVIDER_UNAVAILABLE"]] = Field(
+        ..., min_length=1, max_length=2
+    )
 
 
 class ResourceBinding(BaseModel):
@@ -89,6 +98,12 @@ class ResourceBinding(BaseModel):
     resource_id: str
     version_policy: Literal["fixed", "resolve_on_publish"]
     version_id: str | None = None
+    binding_role: Literal["primary", "fallback_1", "fallback_2"] | None = None
+    configuration_schema_version: Literal["model-routing/v1"] | None = None
+    configuration: ModelRoutingBindingConfiguration | None = None
+
+
+type AgentBindingList = list[ResourceBinding]
 
 
 class Agent(BaseModel):
@@ -102,7 +117,7 @@ class Agent(BaseModel):
     runtime_type: Literal["agentscope", "codex"]
     visibility: Literal["private", "tenant"]
     tags: list[str] = Field(..., max_length=20)
-    bindings: list[ResourceBinding]
+    bindings: AgentBindingList
     status: Literal["DRAFT", "ACTIVE", "DISABLED", "DELETING", "DELETED"]
     resource_version: int = Field(..., ge=1)
     active_deployment_id: str | None = None
@@ -128,6 +143,48 @@ class PublishAgentRequest(BaseModel):
     release_note: str = Field(..., min_length=1, max_length=2000)
     run_smoke_test: bool | None = True
     activate_on_success: bool | None = True
+
+
+class PublishAgentPreviewRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    expected_agent_version: int = Field(..., ge=1)
+    runtime_targets: list[str] = Field(..., min_length=1, max_length=32)
+
+
+class PublishAgentPreview(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    agent_id: str
+    expected_agent_version: int = Field(..., ge=1)
+    preview_snapshot_hash: str = Field(..., pattern="^sha256:[a-f0-9]{64}$")
+    resolved_bindings: list[ResolvedPublishBinding]
+    targets: list[PublishAgentPreviewTarget] = Field(..., min_length=1)
+    ready_to_publish: bool
+
+
+class ResolvedPublishBinding(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    resource_type: Literal["prompt", "skill", "mcp", "model", "sandbox", "agent"]
+    resource_id: str
+    version_id: str
+    version_no: int = Field(..., ge=1)
+    content_hash: str = Field(..., pattern="^sha256:[a-f0-9]{64}$")
+    binding_role: Literal["primary", "fallback_1", "fallback_2"] | None = None
+
+
+class PublishAgentPreviewTarget(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    runtime_target_id: str
+    current_deployment_id: str | None
+    current_snapshot_id: str | None
+    changes: list[SnapshotDiffChangesItem]
 
 
 class Release(BaseModel):
@@ -203,6 +260,26 @@ class SnapshotDiff(BaseModel):
     from_snapshot_id: str
     to_snapshot_id: str
     changes: list[SnapshotDiffChangesItem]
+
+
+class SnapshotDiffChangesItem(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    category: Literal[
+        "resource_version",
+        "permission",
+        "network",
+        "sandbox",
+        "model",
+        "secret_reference",
+        "runtime",
+    ]
+    path: str
+    change_type: Literal["added", "removed", "changed"]
+    before: JsonValue | None = None
+    after: JsonValue | None = None
+    sensitive: bool | None = False
 
 
 class Reference(BaseModel):
@@ -618,6 +695,8 @@ type PublishAgentAgentId = str
 
 type PublishAgentIdempotencyKey = str
 
+type PreviewAgentPublishAgentId = str
+
 type GetReleaseReleaseId = str
 
 type RollbackAgentAgentId = str
@@ -758,26 +837,6 @@ class CurrentIdentityMembershipsItem(BaseModel):
     membership_version: int = Field(..., ge=1)
 
 
-class SnapshotDiffChangesItem(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid", populate_by_name=True, regex_engine="python-re"
-    )
-    category: Literal[
-        "resource_version",
-        "permission",
-        "network",
-        "sandbox",
-        "model",
-        "secret_reference",
-        "runtime",
-    ]
-    path: str
-    change_type: Literal["added", "removed", "changed"]
-    before: JsonValue | None = None
-    after: JsonValue | None = None
-    sensitive: bool | None = False
-
-
 class RunInputAttachmentsItem(BaseModel):
     model_config = ConfigDict(
         extra="allow", populate_by_name=True, regex_engine="python-re"
@@ -793,16 +852,22 @@ for _model in (
     CopyAgentRequest,
     DisableAgentRequest,
     AgentUpdateRequest,
+    ModelRoutingBindingConfiguration,
     ResourceBinding,
     Agent,
     AgentPage,
     PublishAgentRequest,
+    PublishAgentPreviewRequest,
+    PublishAgentPreview,
+    ResolvedPublishBinding,
+    PublishAgentPreviewTarget,
     Release,
     ReleaseAccepted,
     RollbackAgentRequest,
     AgentVersion,
     AgentVersionPage,
     SnapshotDiff,
+    SnapshotDiffChangesItem,
     Reference,
     ReferencePage,
     Deployment,
@@ -838,7 +903,6 @@ for _model in (
     RunEventAppendResult,
     RunEventBatchResponse,
     CurrentIdentityMembershipsItem,
-    SnapshotDiffChangesItem,
     RunInputAttachmentsItem,
 ):
     _model.model_rebuild()

@@ -244,7 +244,7 @@ def run_acceptance(environment: Mapping[str, str]) -> dict[str, object]:
     run_cross_stack_smoke(environment)
     return {
         "status": "PASS",
-        "baseline": "agent-platform-v1-dev-baseline-2026-08-r5",
+        "baseline": "agent-platform-v1-dev-baseline-2026-08-r7",
         "integration_tests": integration_tests,
         "cross_stack_smoke": "PASS",
     }

@@ -1,8 +1,9 @@
 """Application-owned database transaction boundaries."""
 
 from types import TracebackType
-from typing import Self
+from typing import Literal, Self
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.contracts.public import TenantContext
@@ -16,9 +17,14 @@ class TenantUnitOfWork:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         tenant_context: TenantContext,
+        *,
+        isolation_level: Literal["REPEATABLE READ", "SERIALIZABLE"] | None = None,
+        read_only: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._tenant_context = tenant_context
+        self._isolation_level = isolation_level
+        self._read_only = read_only
         self._session: AsyncSession | None = None
 
     @property
@@ -32,6 +38,12 @@ class TenantUnitOfWork:
         self._session = session
         try:
             await session.begin()
+            if self._isolation_level is not None:
+                await session.execute(
+                    text(f"SET TRANSACTION ISOLATION LEVEL {self._isolation_level}")
+                )
+            if self._read_only:
+                await session.execute(text("SET TRANSACTION READ ONLY"))
             await bind_tenant_context(session, self._tenant_context)
         except BaseException:
             await session.rollback()

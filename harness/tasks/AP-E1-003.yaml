@@ -1,0 +1,71 @@
+task_id: AP-E1-003
+title: ModelProvider、ModelConfig、Secret Reference 与连通性异步操作
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/agent-platform-openapi-v1.yaml
+    - docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+scope:
+  includes:
+    - ModelProvider CRUD、启停、Secret Reference 校验和异步连通性请求
+    - ModelConfig CRUD、发布、回滚、版本 Diff、引用查询和 Provider 可用性校验
+    - 同事务 Operation(ACCEPTED)、Outbox 与审计记录，前端按 status_url 轮询
+    - Vue 3 Composition API、Element Plus、Vue Query 的供应商与模型配置页面
+  excludes:
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+    - 真实供应商网络请求、错误/用量归一化和流式 Model Gateway
+    - OpenAI、Qwen、DeepSeek Adapter 及真实 Secret Backend 解析
+    - 把 Secret 明文写入数据库、日志、审计、Operation 或浏览器存储
+data:
+  migrations:
+    - 0006_model_permissions
+  rollback:
+    - 0006 downgrade only removes ModelProvider and ModelConfig tenant-admin permissions
+security:
+  - provider_type 仅允许 openai、qwen、deepseek，外部 Base URL 必须使用 HTTPS
+  - secret_ref 只接受安全的 tenant-scoped secret URI，不解析、不回显 Secret 值
+  - ModelConfig 的 Provider 必须同租户存在；发布时 Provider 必须可用
+  - 服务端 TenantAccess/RBAC 和 FORCE RLS 是最终授权边界
+async_operation:
+  event_type: model_provider.connection_test_requested
+  operation_status: ACCEPTED
+  completion_owner: AP-E1-004/AP-E1-005 Gateway and provider adapters
+  payload_policy:
+    - 只包含 operation_id、provider_id、provider_type、base_url、secret_ref、timeout_seconds
+    - 不包含 Secret 值，不由现有 Temporal Probe Dispatcher 消费
+file_scope:
+  allowed:
+    - backend/migrations/versions/0006_model_resource_permissions.py
+    - backend/packages/application/resources/**
+    - backend/packages/application/iam/management.py
+    - backend/packages/application/public.py
+    - backend/packages/domain/iam/permissions.py
+    - backend/packages/infrastructure/database/resources.py
+    - backend/apps/api/app.py
+    - backend/apps/api/routes/models.py
+    - backend/tests/**
+    - frontend/src/**
+    - harness/tasks/AP-E1-003.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E1-001, AP-E1-002, AP-E0-006, AP-E0-007]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+acceptance:
+  - ModelProvider 和 ModelConfig 冻结 operationId、ETag、幂等与权限语义均可用
+  - 连通性测试持久化 ACCEPTED Operation 与同事务 Outbox，重复请求可安全重放
+  - Secret 只以引用形式保存和展示，日志、审计与错误中没有 Secret 明文
+  - ModelConfig 创建、更新和发布拒绝不存在或不可用的跨租户 Provider
+  - Vue 页面覆盖 loading、empty、error、冲突、重复操作和 Operation 轮询
+open_questions: []

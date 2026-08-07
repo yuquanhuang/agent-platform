@@ -9,10 +9,12 @@ from packages.application.outbox.dispatcher import (
     WorkflowStarter,
     WorkflowStartResult,
 )
+from packages.application.outbox.router import OutboxEventRouter
 
 __all__ = [
     "OutboxDispatchSummary",
     "OutboxDispatcher",
+    "OutboxEventRouter",
     "OutboxStore",
     "PermanentOutboxError",
     "RetryableOutboxError",

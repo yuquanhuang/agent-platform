@@ -1,0 +1,65 @@
+task_id: AP-E1-007
+title: Agent Draft API、ResourceBinding 校验与引用约束
+status: completed
+current_substage_status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r6
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - path: docs/agent-platform/agent-platform-openapi-v1.yaml
+      sha256: 2025f9f8847e93fbc12986645f77ec76eee2e8774c549608f44aa52281f8f326
+    - path: docs/agent-platform/Agent平台核心接口与事件契约.md
+      sha256: 991202261a43f217ba164161548c1c862d9fca696c7f0f8ddcfa293f1fbd3369
+    - path: docs/agent-platform/Agent平台数据库详细设计.md
+      sha256: ff8aeb757668a3760da13114f138b0595e07a32b0fa2ecd30a522e4e3f5c26d3
+requirements: [FR-AGT-001, FR-MDL-005, FR-MDL-006, FR-CON-002]
+scope:
+  includes:
+    - createAgent/listAgents/getAgent/updateAgent/copyAgent/disableAgent/deleteAgent
+    - Agent Definition/Binding PostgreSQL 模型、迁移、RLS、权限与审计
+    - 强 ETag、幂等创建/复制/停用/删除和软删除 Operation
+    - 旧单 Model binding 规范化为 primary
+    - 多 Model binding 主路由、连续 fallback、错误码和版本策略校验
+    - Prompt/ModelConfig/子 Agent 绑定存在性及固定版本校验
+    - 被其他 Agent Draft 引用或存在活动 Deployment 时拒绝删除
+  excludes:
+    - Agent Draft Vue 编辑器
+    - Agent 发布、AgentVersion、AgentSnapshot 和 Runtime Bundle
+    - Schedule、Session、Deployment 尚未进入当前阶段的表与工作流实现
+    - Gateway 运行时读取 Agent Draft
+data:
+  migrations: [0010_agent_draft]
+  rollback:
+    - 删除本阶段 Agent 权限、agent_binding 和 agent_definition
+    - 不修改既有 Resource Version、Model Binding Snapshot 或 Usage 事实
+security:
+  - tenant_id 仅来自认证上下文，Repository 查询显式 tenant 条件并启用 FORCE RLS
+  - 服务端执行 agent:* 权限、ETag、幂等和引用检查
+  - 审计只记录字段、角色、错误码和原因摘要，不记录 Secret 或完整配置正文
+compatibility:
+  - 单 Model binding 未提供 binding_role 时持久化为 primary
+  - ModelConfig 保持单 Provider，不增加平行 fallback 配置入口
+  - AgentSnapshot 由 AP-E2-001 编译确定版本和不可变绑定快照
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+  latest_result:
+    quality_gate: make check-all
+    backend: 217 passed, 0 skipped
+    frontend: 18 tests passed; format, lint, typecheck and build passed
+    contracts: R6 integrity, 167 operationIds and 16 generated files passed
+    integration: PostgreSQL 16 and Temporal test environment passed with zero skips
+acceptance:
+  - 7 个冻结 Agent Draft operationId 注册并返回冻结 DTO/ETag/Operation 形状
+  - 创建、复制、停用和删除幂等重放不产生重复副作用
+  - 更新使用 If-Match，冲突返回 RESOURCE_VERSION_CONFLICT
+  - 多模型缺角色、重复 primary、fallback 跳级、超过两级和禁用错误码均失败关闭
+  - 固定绑定只接受同租户资源的已存在不可变 Version
+  - 跨租户不可见，入站 Agent 引用和活动 Deployment 阻止删除
+open_questions: []

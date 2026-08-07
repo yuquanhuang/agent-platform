@@ -1,6 +1,6 @@
 # Agent 平台开发文档索引
 
-> 文档版本：V1.6  
+> 文档版本：V1.8
 > 文档状态：开发输入基线
 
 ## 1. 文档集合与阅读顺序
@@ -128,7 +128,7 @@ Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 
 机器可读契约与自然语言示例冲突时不得继续编码，必须先更新基线和变更记录。
 
-当前冻结版本：核心 OpenAPI 1.2.0，资源管理 OpenAPI 1.1.0。准确文件版本和 SHA-256 以 `agent-platform-baseline.yaml` 为准。
+当前冻结版本：核心 OpenAPI 1.4.0，资源管理 OpenAPI 1.1.0。准确文件版本和 SHA-256 以 `agent-platform-baseline.yaml` 为准。
 
 ## 9. 版本变更摘要
 
@@ -179,3 +179,17 @@ Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 - 固定首个开发任务为 `AP-E0-001` 契约完整性与校验门禁。
 - 独立保留 Epic 4 RunEvent/SSE 边界；Epic 3 只定义和产生 RuntimeEventCandidate Port。
 - 产品范围、机器契约、技术选型和 Epic 0～9 顺序未变化。
+
+### Frozen Baseline 2026-08-R6
+
+- Core OpenAPI 的 `ResourceBinding` 增加可选的模型路由角色、`model-routing/v1` 配置版本和受控 fallback 错误码；旧单 Model binding 继续兼容并由服务端规范化为 `primary`。
+- 多 Model binding 必须恰好一个 `primary`，fallback 最多两级且角色连续；仅 `RATE_LIMITED`、`PROVIDER_UNAVAILABLE` 可配置 fallback，未知或已提交状态始终禁止切换。
+- Agent 发布阶段负责把 ModelConfig Version、不可变 `model_binding_snapshot`、路由顺序和错误码策略编译进 AgentSnapshot；Gateway 不读取 Agent Draft 或 Provider Draft。
+- 同步提升 AI Coding、执行计划、追踪矩阵、数据库、前端和测试契约版本，并重新冻结完整文件 SHA-256。
+
+### Frozen Baseline 2026-08-R7
+
+- Core OpenAPI 新增只读 `previewAgentPublish`，用于按 Runtime Target 展示 transient Snapshot 与当前 ACTIVE Deployment Snapshot 的脱敏 Diff。
+- Preview 明确无版本、Snapshot、Release、Outbox、幂等和发布审计副作用；正式发布继续事务内重编译和 Draft CAS。
+- 冻结 AgentVersion 列表/详情、Snapshot Diff 与 Vue 发布页面的组合流程，AP-E2-006 回滚保持后续独立任务。
+- 同步更新 AI Coding 总纲、执行计划、追踪矩阵、前端和测试契约，并重新冻结 SHA-256。

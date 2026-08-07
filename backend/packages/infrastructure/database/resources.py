@@ -4,13 +4,17 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import JsonValue
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.application.public import RequestMetadata
+from packages.contracts.generated.resource_content import (
+    ResourceContentModelConfig,
+    ResourceContentModelProvider,
+)
 from packages.contracts.generated.resources_models import (
     ActionRequest,
     ResourceCopyRequest,
@@ -25,6 +29,7 @@ from packages.contracts.public import (
     resource_version_conflict,
     validation_error,
 )
+from packages.domain.outbox import OutboxEvent, OutboxStatus
 from packages.domain.public import (
     MutationOutcome,
     OperationRecord,
@@ -49,10 +54,12 @@ from packages.infrastructure.database.idempotency import (
 )
 from packages.infrastructure.database.models import (
     AuditLogModel,
+    ModelBindingSnapshotModel,
     OperationRecordModel,
     ResourceDefinitionModel,
     ResourceVersionModel,
 )
+from packages.infrastructure.database.outbox import SqlAlchemyOutboxWriter
 from packages.infrastructure.database.uow import TenantUnitOfWork
 
 
@@ -97,6 +104,13 @@ class SqlAlchemyResourceRegistry:
             )
             if existing is not None:
                 raise resource_state_conflict("Resource code is already in use.")
+            await _validate_resource_dependencies(
+                session,
+                tenant_id=tenant_id,
+                resource_type=resource_type,
+                content=content,
+                require_provider_enabled=False,
+            )
             now = datetime.now(UTC)
             model = ResourceDefinitionModel(
                 tenant_id=tenant_id,
@@ -242,6 +256,14 @@ class SqlAlchemyResourceRegistry:
                 return None
             if model.resource_version != expected_version:
                 raise resource_version_conflict()
+            if content is not None:
+                await _validate_resource_dependencies(
+                    session,
+                    tenant_id=model.tenant_id,
+                    resource_type=resource_type,
+                    content=content,
+                    require_provider_enabled=False,
+                )
             if request.name is not None:
                 model.name = request.name
             if "description" in request.model_fields_set:
@@ -311,6 +333,13 @@ class SqlAlchemyResourceRegistry:
             content = _validated_content(
                 resource_type, parse_resource_content(definition.current_draft_json)
             )
+            provider_dependency = await _validate_resource_dependencies(
+                session,
+                tenant_id=tenant_id,
+                resource_type=resource_type,
+                content=content,
+                require_provider_enabled=True,
+            )
             content_hash = canonical_content_hash(content)
             duplicate = await session.scalar(
                 select(ResourceVersionModel.id).where(
@@ -354,6 +383,13 @@ class SqlAlchemyResourceRegistry:
             definition.updated_by = actor_id
             definition.updated_at = now
             await session.flush()
+            await _create_model_binding_snapshot(
+                session,
+                tenant_id=tenant_id,
+                model_config_content=content,
+                version=version_model,
+                provider_dependency=provider_dependency,
+            )
             result = _version_record(version_model)
             await _add_audit(
                 session,
@@ -550,6 +586,112 @@ class SqlAlchemyResourceRegistry:
             )
             return MutationOutcome(value=result)
 
+    async def request_model_provider_connection_test(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_id: UUID,
+        idempotency_key: str,
+        request_hash: str,
+        metadata: RequestMetadata,
+    ) -> MutationOutcome[OperationRecord] | None:
+        """Persist a deferred connection-test request without resolving its Secret."""
+
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            record_id, replay = await claim_idempotency(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type="model_provider.connection_test",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return MutationOutcome(replay=replay)
+            definition = await session.scalar(
+                select(ResourceDefinitionModel)
+                .where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == "model_provider",
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if definition is None:
+                return None
+            if definition.status == "DISABLED":
+                raise resource_state_conflict(
+                    "A disabled Model Provider cannot be connection-tested."
+                )
+            content = parse_resource_content(definition.current_draft_json)
+            if not isinstance(content, ResourceContentModelProvider):
+                raise resource_state_conflict(
+                    "Model Provider content is not available for connection testing."
+                )
+            now = datetime.now(UTC)
+            operation = OperationRecordModel(
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type="model_provider.connection_test",
+                status="ACCEPTED",
+                resource_type="model_provider",
+                resource_id=resource_id,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(operation)
+            await session.flush()
+            event = OutboxEvent(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                aggregate_type="model_provider",
+                aggregate_id=resource_id,
+                event_type="model_provider.connection_test_requested",
+                payload={
+                    "operation_id": str(operation.id),
+                    "provider_id": str(resource_id),
+                    "provider_type": content.provider_type,
+                    "base_url": content.base_url,
+                    "secret_ref": content.secret_ref,
+                    "timeout_seconds": content.timeout_seconds,
+                },
+                payload_schema_version=1,
+                status=OutboxStatus.PENDING,
+                attempts=0,
+                next_attempt_at=now,
+                created_at=now,
+            )
+            SqlAlchemyOutboxWriter(session, context).add(event)
+            result = _operation_record(operation)
+            await _add_audit(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action="model_provider.connection_test.requested",
+                resource_type="model_provider",
+                resource_id=resource_id,
+                metadata=metadata,
+                change={"operation_id": str(operation.id)},
+            )
+            response_body: dict[str, object] = {
+                "operation_id": str(operation.id),
+                "status": "ACCEPTED",
+                "status_url": f"/api/v1/operations/{operation.id}",
+            }
+            await complete_idempotency(
+                session,
+                record_id,
+                response_status=202,
+                response_body=response_body,
+                response_etag=None,
+                response_ref=str(operation.id),
+            )
+            return MutationOutcome(value=result)
+
     async def delete_definition(
         self,
         context: TenantContext,
@@ -589,6 +731,24 @@ class SqlAlchemyResourceRegistry:
                 return None
             if definition.resource_version != expected_version:
                 raise resource_version_conflict()
+            if resource_type == "model_provider":
+                reference = await session.scalar(
+                    select(ResourceDefinitionModel.id)
+                    .where(
+                        ResourceDefinitionModel.tenant_id == tenant_id,
+                        ResourceDefinitionModel.resource_type == "model_config",
+                        ResourceDefinitionModel.deleted_at.is_(None),
+                        ResourceDefinitionModel.current_draft_json[
+                            "provider_id"
+                        ].as_string()
+                        == str(resource_id),
+                    )
+                    .limit(1)
+                )
+                if reference is not None:
+                    raise resource_state_conflict(
+                        "Model Provider is referenced by an active Model Config."
+                    )
             now = datetime.now(UTC)
             definition.status = "DELETED"
             definition.deleted_at = now
@@ -685,6 +845,16 @@ class SqlAlchemyResourceRegistry:
             )
             if source is None:
                 return None
+            source_content = _validated_content(
+                resource_type, parse_resource_content(source.content_json)
+            )
+            provider_dependency = await _validate_resource_dependencies(
+                session,
+                tenant_id=tenant_id,
+                resource_type=resource_type,
+                content=source_content,
+                require_provider_enabled=True,
+            )
             next_version = (
                 await session.scalar(
                     select(
@@ -718,6 +888,14 @@ class SqlAlchemyResourceRegistry:
             definition.updated_by = actor_id
             definition.updated_at = now
             await session.flush()
+            await _clone_or_create_model_binding_snapshot(
+                session,
+                tenant_id=tenant_id,
+                model_config_content=source_content,
+                source_version_id=source.id,
+                version=version,
+                provider_dependency=provider_dependency,
+            )
             result = _version_record(version)
             await _add_audit(
                 session,
@@ -836,6 +1014,160 @@ def _validated_content(
         return parsed
     except ValueError as exc:
         raise validation_error(str(exc)) from exc
+
+
+async def _validate_resource_dependencies(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    resource_type: ResourceType,
+    content: ResourceContentValue,
+    require_provider_enabled: bool,
+) -> tuple[ResourceDefinitionModel, ResourceContentModelProvider] | None:
+    if resource_type != "model_config":
+        return None
+    if not isinstance(content, ResourceContentModelConfig):
+        raise resource_state_conflict("Model Config content is not available.")
+    try:
+        provider_id = UUID(content.provider_id)
+    except ValueError as exc:
+        raise validation_error(
+            "provider_id must be a valid resource identifier."
+        ) from exc
+    statement = select(ResourceDefinitionModel).where(
+        ResourceDefinitionModel.tenant_id == tenant_id,
+        ResourceDefinitionModel.resource_type == "model_provider",
+        ResourceDefinitionModel.id == provider_id,
+        ResourceDefinitionModel.deleted_at.is_(None),
+    )
+    if require_provider_enabled:
+        statement = statement.with_for_update()
+    provider = await session.scalar(statement)
+    if provider is None:
+        raise resource_state_conflict(
+            "The referenced Model Provider is not available in this tenant."
+        )
+    if require_provider_enabled and provider.status == "DISABLED":
+        raise resource_state_conflict(
+            "A Model Config cannot be published with a disabled Model Provider."
+        )
+    provider_content = _validated_content(
+        "model_provider", parse_resource_content(provider.current_draft_json)
+    )
+    if not isinstance(provider_content, ResourceContentModelProvider):
+        raise resource_state_conflict("Model Provider content is not available.")
+    return provider, provider_content
+
+
+async def _create_model_binding_snapshot(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    model_config_content: ResourceContentValue,
+    version: ResourceVersionModel,
+    provider_dependency: (
+        tuple[ResourceDefinitionModel, ResourceContentModelProvider] | None
+    ),
+) -> None:
+    if not isinstance(model_config_content, ResourceContentModelConfig):
+        return
+    if provider_dependency is None:
+        raise resource_state_conflict("Model Provider content is not available.")
+    provider, provider_content = provider_dependency
+    payload = _model_binding_snapshot_payload(model_config_content, provider_content)
+    session.add(
+        ModelBindingSnapshotModel(
+            tenant_id=tenant_id,
+            model_config_definition_id=version.definition_id,
+            model_config_version_id=version.id,
+            provider_definition_id=provider.id,
+            provider_type=provider_content.provider_type,
+            base_url=provider_content.base_url,
+            secret_ref=provider_content.secret_ref,
+            provider_timeout_seconds=provider_content.timeout_seconds,
+            model_id=model_config_content.model_id,
+            capabilities_json=list(model_config_content.capabilities),
+            default_parameters_json=dict(model_config_content.default_parameters),
+            max_context_tokens=model_config_content.max_context_tokens,
+            rate_limit_rpm=model_config_content.rate_limit_rpm,
+            snapshot_hash=_snapshot_hash(payload),
+            created_at=version.published_at,
+        )
+    )
+    await session.flush()
+
+
+async def _clone_or_create_model_binding_snapshot(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    model_config_content: ResourceContentValue,
+    source_version_id: UUID,
+    version: ResourceVersionModel,
+    provider_dependency: (
+        tuple[ResourceDefinitionModel, ResourceContentModelProvider] | None
+    ),
+) -> None:
+    if not isinstance(model_config_content, ResourceContentModelConfig):
+        return
+    source = await session.scalar(
+        select(ModelBindingSnapshotModel).where(
+            ModelBindingSnapshotModel.tenant_id == tenant_id,
+            ModelBindingSnapshotModel.model_config_version_id == source_version_id,
+        )
+    )
+    if source is None:
+        await _create_model_binding_snapshot(
+            session,
+            tenant_id=tenant_id,
+            model_config_content=model_config_content,
+            version=version,
+            provider_dependency=provider_dependency,
+        )
+        return
+    session.add(
+        ModelBindingSnapshotModel(
+            tenant_id=tenant_id,
+            model_config_definition_id=version.definition_id,
+            model_config_version_id=version.id,
+            provider_definition_id=source.provider_definition_id,
+            provider_type=source.provider_type,
+            base_url=source.base_url,
+            secret_ref=source.secret_ref,
+            provider_timeout_seconds=source.provider_timeout_seconds,
+            model_id=source.model_id,
+            capabilities_json=list(source.capabilities_json),
+            default_parameters_json=dict(source.default_parameters_json),
+            max_context_tokens=source.max_context_tokens,
+            rate_limit_rpm=source.rate_limit_rpm,
+            snapshot_hash=source.snapshot_hash,
+            created_at=version.published_at,
+        )
+    )
+    await session.flush()
+
+
+def _model_binding_snapshot_payload(
+    model_config: ResourceContentModelConfig,
+    provider: ResourceContentModelProvider,
+) -> dict[str, object]:
+    return {
+        "provider_id": model_config.provider_id,
+        "provider_type": provider.provider_type,
+        "base_url": provider.base_url,
+        "secret_ref": provider.secret_ref,
+        "provider_timeout_seconds": provider.timeout_seconds,
+        "model_id": model_config.model_id,
+        "capabilities": list(model_config.capabilities),
+        "default_parameters": dict(model_config.default_parameters),
+        "max_context_tokens": model_config.max_context_tokens,
+        "rate_limit_rpm": model_config.rate_limit_rpm,
+    }
+
+
+def _snapshot_hash(payload: dict[str, object]) -> str:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
 
 
 def _definition_record(model: ResourceDefinitionModel) -> ResourceDefinitionRecord:

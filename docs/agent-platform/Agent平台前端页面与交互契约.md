@@ -1,6 +1,6 @@
 # Agent 平台前端页面与交互契约
 
-> 文档版本：V1.3  
+> 文档版本：V1.5
 > 文档状态：开发输入基线
 
 ## 1. 目标
@@ -31,7 +31,7 @@ V1 固定技术栈：TypeScript、Vue 3 Composition API、Vite、Vue Router 4、
 | `/agents` | Agent 列表 | 是 | `agent:list` |
 | `/agents/new` | 创建 Agent | 是 | `agent:create` |
 | `/agents/:id/edit` | 编辑草稿 | 是 | `agent:update` |
-| `/agents/:id/versions` | 版本与发布 | 是 | `agent:read_version` |
+| `/agents/:id/publish` | 版本与发布 | 是 | `agent:publish` |
 | `/agents/:id/chat` | 对话调试 | 是 | `run:create` |
 | `/prompts` | Prompt 列表 | 是 | `prompt:list` |
 | `/prompts/:id/edit` | Prompt 编辑 | 是 | `prompt:update` |
@@ -121,6 +121,9 @@ tags, active_deployment_id, updated_at
 - model binding：AgentScope 必填；Codex 根据 Runtime Target Policy 解析。
 - prompt binding：必填固定或 publish-time resolve 策略。
 - 模型参数只展示模型能力允许的字段。
+- 单模型不展示 fallback 层级且按主模型保存；增加 fallback 后必须按 `primary → fallback_1 → fallback_2` 连续排序，最多两级。
+- fallback 错误码只允许选择 `RATE_LIMITED`、`PROVIDER_UNAVAILABLE`；超时、预算、认证、权限、配置和未知提交状态不得作为可选项。
+- 模型路由配置只随主 Model binding 提交，前端不得为 fallback binding 或非 Model binding 生成 `configuration`。
 - Codex V1 只展示 ACP STDIO Target。
 
 ### 6.3 Skill、工具和审批
@@ -151,7 +154,13 @@ tags, active_deployment_id, updated_at
 - 权限、网络、Sandbox、模型、Secret Reference Diff。
 - Bundle Compiler、扫描和冒烟测试选项。
 
-提交调用 `publishAgent`，使用 `Idempotency-Key` 和当前 `resource_version`。进入发布状态页后轮询 `getRelease`，不依赖原 HTTP 连接。
+页面首先调用只读 `previewAgentPublish`，并按 Runtime Target 显示当前 Deployment/Snapshot、解析后的不可变资源版本和脱敏 Diff。无 ACTIVE Deployment 时明确显示首次发布；Preview 失败或 Draft `resource_version` 漂移时禁用发布并要求重新加载/预览。
+
+当 `ready_to_publish=false` 时页面必须列出可识别的缺失前置（至少 Sandbox Profile 和 AgentScope ModelConfig），保持发布按钮禁用；不得把后续 Release 才能验证的 Registry、签名、扫描和 Smoke 门禁显示为已经通过。
+
+提交调用 `publishAgent`，使用 `Idempotency-Key` 和 Preview 对应的当前 `resource_version`。页面防止重复提交，进入发布状态后轮询 `getRelease`，成功后读取 `getDeployment`；失败展示冻结 Error Envelope，不依赖原 HTTP 连接、不伪造成功。页面卸载时停止轮询。
+
+版本历史使用 `listAgentVersions` 游标分页和 `getAgentVersion` 查看元数据，选择两个版本后以其 Snapshot ID 调用 `diffAgentSnapshots`。AP-E2-005 不展示回滚按钮。
 
 ## 7. Prompt 页面
 

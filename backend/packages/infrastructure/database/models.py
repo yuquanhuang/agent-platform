@@ -1,6 +1,7 @@
 """Initial IAM persistence mappings required by the tenant foundation."""
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
@@ -10,8 +11,10 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -415,6 +418,723 @@ class OperationRecordModel(Base):
     )
 
 
+class ModelUsageModel(Base):
+    """Immutable tenant-scoped normalized model usage fact."""
+
+    __tablename__ = "model_usage"
+    __table_args__ = (
+        CheckConstraint("input_tokens >= 0", name="input_tokens"),
+        CheckConstraint("output_tokens >= 0", name="output_tokens"),
+        CheckConstraint("reasoning_tokens >= 0", name="reasoning_tokens"),
+        CheckConstraint("cache_read_tokens >= 0", name="cache_read_tokens"),
+        CheckConstraint("cache_write_tokens >= 0", name="cache_write_tokens"),
+        CheckConstraint("cost_amount IS NULL OR cost_amount >= 0", name="cost_amount"),
+        CheckConstraint(
+            "(cost_amount IS NULL) = (cost_currency IS NULL)", name="cost_pair"
+        ),
+        CheckConstraint("finished_at >= started_at", name="time_order"),
+        Index("ix_model_usage__tenant_id_run_id", "tenant_id", "run_id"),
+        Index("ix_model_usage__tenant_id_finished_at", "tenant_id", "finished_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_request_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reasoning_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cache_read_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cache_write_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    token_estimated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(28, 8), nullable=True)
+    cost_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class BudgetReservationModel(Base):
+    """Conservative Run token reservation guarding concurrent model calls."""
+
+    __tablename__ = "budget_reservation"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "idempotency_key",
+            name="uq_budget_reservation__tenant_run_idempotency",
+        ),
+        CheckConstraint(
+            "status IN ('RESERVED', 'CONSUMED', 'RELEASED')", name="status"
+        ),
+        CheckConstraint("reserved_tokens >= 1", name="reserved_tokens"),
+        CheckConstraint(
+            "consumed_tokens IS NULL OR consumed_tokens >= 0", name="consumed_tokens"
+        ),
+        CheckConstraint(
+            "(status = 'CONSUMED') = (consumed_tokens IS NOT NULL)",
+            name="consumed_status",
+        ),
+        CheckConstraint(
+            "(status = 'RESERVED') = (finished_at IS NULL)",
+            name="finished_status",
+        ),
+        Index(
+            "ix_budget_reservation__tenant_run_status_expires",
+            "tenant_id",
+            "run_id",
+            "status",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    model_binding_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    consumed_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ModelRateLimitWindowModel(Base):
+    """Tenant-scoped fixed UTC minute counter for a frozen model route."""
+
+    __tablename__ = "model_rate_limit_window"
+    __table_args__ = (
+        CheckConstraint("request_count >= 1", name="request_count"),
+        Index(
+            "ix_model_rate_limit_window__window_started_at",
+            "window_started_at",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    model_binding_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    request_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class AgentDefinitionModel(Base):
+    """Tenant-scoped editable Agent Draft metadata."""
+
+    __tablename__ = "agent_definition"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_agent_definition__tenant_id_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "active_deployment_id"],
+            ["deployment.tenant_id", "deployment.id"],
+            name="fk_agent_definition__tenant_active_deployment__deployment",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        CheckConstraint("runtime_type IN ('agentscope', 'codex')", name="runtime_type"),
+        CheckConstraint("visibility IN ('private', 'tenant')", name="visibility"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'ACTIVE', 'DISABLED', 'DELETING', 'DELETED')",
+            name="status",
+        ),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        CheckConstraint("jsonb_typeof(tags_json) = 'array'", name="tags_json"),
+        Index(
+            "uq_agent_definition__tenant_code_active",
+            "tenant_id",
+            "code",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_agent_definition__tenant_status_created_at",
+            "tenant_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(CITEXT(), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    runtime_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'private'")
+    )
+    tags_json: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    owner_user_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    default_language: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'zh-CN'")
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'DRAFT'")
+    )
+    active_deployment_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_by: Mapped[UUID | None] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=True
+    )
+
+
+class AgentBindingModel(Base):
+    """Tenant-scoped resource binding owned by an Agent Draft."""
+
+    __tablename__ = "agent_binding"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_definition.tenant_id", "agent_definition.id"],
+            name="fk_agent_binding__tenant_agent__agent_definition",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "resource_type IN ('prompt', 'skill', 'mcp', 'model', 'knowledge', "
+            "'sandbox', 'agent')",
+            name="resource_type",
+        ),
+        CheckConstraint(
+            "version_policy IN ('fixed', 'resolve_on_publish')",
+            name="version_policy",
+        ),
+        CheckConstraint(
+            "(version_policy = 'fixed' AND fixed_version_id IS NOT NULL) OR "
+            "(version_policy = 'resolve_on_publish' AND fixed_version_id IS NULL)",
+            name="version_policy_version",
+        ),
+        CheckConstraint(
+            "binding_role IS NULL OR binding_role IN "
+            "('primary', 'fallback_1', 'fallback_2')",
+            name="binding_role",
+        ),
+        CheckConstraint(
+            "resource_type = 'model' OR "
+            "(binding_role IS NULL AND configuration_json IS NULL AND "
+            "configuration_schema_version IS NULL)",
+            name="model_routing_fields",
+        ),
+        CheckConstraint(
+            "configuration_json IS NULL OR "
+            "(binding_role = 'primary' AND "
+            "configuration_schema_version = 'model-routing/v1' AND "
+            "jsonb_typeof(configuration_json) = 'object')",
+            name="routing_configuration",
+        ),
+        CheckConstraint(
+            "binding_role = 'primary' OR "
+            "(configuration_json IS NULL AND configuration_schema_version IS NULL)",
+            name="fallback_configuration",
+        ),
+        Index(
+            "uq_agent_binding__agent_resource_role",
+            "agent_id",
+            "resource_type",
+            "resource_id",
+            text("coalesce(binding_role, '')"),
+            unique=True,
+        ),
+        Index(
+            "uq_agent_binding__agent_model_role",
+            "agent_id",
+            "binding_role",
+            unique=True,
+            postgresql_where=text(
+                "resource_type = 'model' AND binding_role IS NOT NULL"
+            ),
+        ),
+        Index("ix_agent_binding__tenant_agent", "tenant_id", "agent_id"),
+        Index(
+            "ix_agent_binding__tenant_resource",
+            "tenant_id",
+            "resource_type",
+            "resource_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    agent_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    version_policy: Mapped[str] = mapped_column(String(24), nullable=False)
+    fixed_version_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    binding_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    configuration_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    configuration_schema_version: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+
+
+class AgentVersionModel(Base):
+    """Immutable published version metadata for one Agent Draft."""
+
+    __tablename__ = "agent_version"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_definition.tenant_id", "agent_definition.id"],
+            name="fk_agent_version__tenant_agent__agent_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_from_version_id"],
+            ["agent_version.tenant_id", "agent_version.id"],
+            name="fk_agent_version__tenant_created_from__agent_version",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_version__tenant_id_id"),
+        UniqueConstraint(
+            "agent_id", "version_no", name="uq_agent_version__agent_id_version_no"
+        ),
+        CheckConstraint("version_no >= 1", name="version_no"),
+        Index(
+            "ix_agent_version__tenant_agent_version_no",
+            "tenant_id",
+            "agent_id",
+            "version_no",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    agent_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    version_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_from_version_id: Mapped[UUID | None] = mapped_column(
+        UUID_TYPE, nullable=True
+    )
+    release_note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+
+
+class AgentSnapshotModel(Base):
+    """Append-only canonical configuration compiled from one Agent Version."""
+
+    __tablename__ = "agent_snapshot"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_version_id"],
+            ["agent_version.tenant_id", "agent_version.id"],
+            name="fk_agent_snapshot__tenant_version__agent_version",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_snapshot__tenant_id_id"),
+        UniqueConstraint(
+            "agent_version_id", name="uq_agent_snapshot__agent_version_id"
+        ),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        CheckConstraint(
+            "compiler_input_hash ~ '^sha256:[a-f0-9]{64}$'",
+            name="compiler_input_hash",
+        ),
+        CheckConstraint("jsonb_typeof(content_json) = 'object'", name="content_json"),
+        Index("ix_agent_snapshot__tenant_created_at", "tenant_id", "created_at"),
+        Index(
+            "ix_agent_snapshot__content_json_gin",
+            "content_json",
+            postgresql_using="gin",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    agent_version_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    compiler_input_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+
+
+class ReleaseModel(Base):
+    """Tenant-scoped asynchronous Agent publication state."""
+
+    __tablename__ = "release"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_definition.tenant_id", "agent_definition.id"],
+            name="fk_release__tenant_agent__agent_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "snapshot_id"],
+            ["agent_snapshot.tenant_id", "agent_snapshot.id"],
+            name="fk_release__tenant_snapshot__agent_snapshot",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "requested_snapshot_id"],
+            ["agent_snapshot.tenant_id", "agent_snapshot.id"],
+            name="fk_release__tenant_requested_snapshot__agent_snapshot",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_release__tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            "agent_id",
+            "snapshot_id",
+            name="uq_release__tenant_id_agent_snapshot",
+        ),
+        UniqueConstraint("operation_id", name="uq_release__operation_id"),
+        UniqueConstraint("workflow_id", name="uq_release__workflow_id"),
+        UniqueConstraint(
+            "activation_fencing_token",
+            name="uq_release__activation_fencing_token",
+        ),
+        CheckConstraint(
+            "expected_agent_version IS NULL OR expected_agent_version >= 1",
+            name="expected_agent_version",
+        ),
+        CheckConstraint(
+            "release_kind IN ('PUBLISH', 'ROLLBACK')",
+            name="release_kind",
+        ),
+        CheckConstraint(
+            "(release_kind = 'PUBLISH' AND expected_agent_version IS NOT NULL "
+            "AND requested_snapshot_id IS NULL) OR "
+            "(release_kind = 'ROLLBACK' AND expected_agent_version IS NULL "
+            "AND requested_snapshot_id IS NOT NULL)",
+            name="release_source",
+        ),
+        CheckConstraint(
+            "status IN ('REQUESTED', 'VALIDATING', 'COMPILING', 'SCANNING', "
+            "'SMOKE_TESTING', 'ACTIVATING', 'SUCCEEDED', 'FAILED', 'CANCELLED')",
+            name="status",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(runtime_targets_json) = 'array' "
+            "AND jsonb_array_length(runtime_targets_json) >= 1",
+            name="runtime_targets_json",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(deployment_ids_json) = 'array'",
+            name="deployment_ids_json",
+        ),
+        CheckConstraint(
+            "error_detail_json IS NULL OR jsonb_typeof(error_detail_json) = 'object'",
+            name="error_detail_json",
+        ),
+        Index(
+            "ix_release__tenant_agent_created_at", "tenant_id", "agent_id", "created_at"
+        ),
+        Index(
+            "ix_release__tenant_status_created_at", "tenant_id", "status", "created_at"
+        ),
+        Index(
+            "ix_release__tenant_requested_snapshot",
+            "tenant_id",
+            "requested_snapshot_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    agent_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    requested_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    operation_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("operation_record.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    release_kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'PUBLISH'")
+    )
+    expected_agent_version: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    requested_snapshot_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    runtime_targets_json: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    release_note: Mapped[str] = mapped_column(String(2000), nullable=False)
+    run_smoke_test: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    activate_on_success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'REQUESTED'")
+    )
+    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    activation_fencing_token: Mapped[int] = mapped_column(
+        BigInteger, Identity(), nullable=False
+    )
+    snapshot_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    deployment_ids_json: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_detail_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class RuntimeBundleModel(Base):
+    """Stored immutable Runtime Bundle plus its security scan result."""
+
+    __tablename__ = "runtime_bundle"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "snapshot_id"],
+            ["agent_snapshot.tenant_id", "agent_snapshot.id"],
+            name="fk_runtime_bundle__tenant_snapshot__agent_snapshot",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_runtime_bundle__tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "snapshot_id",
+            "id",
+            name="uq_runtime_bundle__tenant_snapshot_id",
+        ),
+        UniqueConstraint(
+            "snapshot_id",
+            "runtime_type",
+            "compiler_version",
+            "content_hash",
+            name="uq_runtime_bundle__snapshot_runtime_compiler_hash",
+        ),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        CheckConstraint("size_bytes >= 0", name="size_bytes"),
+        CheckConstraint(
+            "scan_status IN ('PENDING', 'PASSED', 'FAILED')", name="scan_status"
+        ),
+        CheckConstraint("jsonb_typeof(manifest_json) = 'object'", name="manifest_json"),
+        Index("ix_runtime_bundle__tenant_snapshot", "tenant_id", "snapshot_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    snapshot_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    runtime_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    compiler_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    compiler_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    manifest_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    object_uri: Mapped[str] = mapped_column(String(2048), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    signature_ref: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    sbom_ref: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    scan_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'PENDING'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class DeploymentModel(Base):
+    """Immutable Deployment identity with atomically switched lifecycle state."""
+
+    __tablename__ = "deployment"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "release_id", "agent_id", "snapshot_id"],
+            [
+                "release.tenant_id",
+                "release.id",
+                "release.agent_id",
+                "release.snapshot_id",
+            ],
+            name="fk_deployment__tenant_release_agent_snapshot__release",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_definition.tenant_id", "agent_definition.id"],
+            name="fk_deployment__tenant_agent__agent_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "snapshot_id"],
+            ["agent_snapshot.tenant_id", "agent_snapshot.id"],
+            name="fk_deployment__tenant_snapshot__agent_snapshot",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "snapshot_id", "bundle_id"],
+            [
+                "runtime_bundle.tenant_id",
+                "runtime_bundle.snapshot_id",
+                "runtime_bundle.id",
+            ],
+            name="fk_deployment__tenant_snapshot_bundle__runtime_bundle",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_deployment__tenant_id_id"),
+        UniqueConstraint(
+            "release_id",
+            "runtime_target_id",
+            name="uq_deployment__release_runtime_target",
+        ),
+        CheckConstraint(
+            "status IN ('STAGED', 'ACTIVE', 'DEGRADED', 'RETIRED', 'FAILED')",
+            name="status",
+        ),
+        CheckConstraint(
+            "compatibility_hash ~ '^sha256:[a-f0-9]{64}$'",
+            name="compatibility_hash",
+        ),
+        CheckConstraint("activation_fencing_token >= 1", name="fencing_token"),
+        Index(
+            "uq_deployment__tenant_agent_runtime_target_active",
+            "tenant_id",
+            "agent_id",
+            "runtime_target_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+        Index(
+            "ix_deployment__tenant_agent_created_at",
+            "tenant_id",
+            "agent_id",
+            "created_at",
+        ),
+        Index(
+            "ix_deployment__tenant_runtime_target_status",
+            "tenant_id",
+            "runtime_target_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    release_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    snapshot_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    bundle_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    runtime_target_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'STAGED'")
+    )
+    compatibility_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    activation_fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    retired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class ResourceDefinitionModel(Base):
     """Tenant-scoped editable resource metadata and current draft."""
 
@@ -511,6 +1231,7 @@ class ResourceVersionModel(Base):
             "version_no",
             name="uq_resource_version__definition_id_version_no",
         ),
+        UniqueConstraint("tenant_id", "id", name="uq_resource_version__tenant_id_id"),
         CheckConstraint(
             "publication_kind IN ('PUBLISH', 'ROLLBACK')",
             name="publication_kind",
@@ -562,6 +1283,92 @@ class ResourceVersionModel(Base):
     )
     published_by: Mapped[UUID] = mapped_column(
         UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+
+
+class ModelBindingSnapshotModel(Base):
+    """Immutable provider binding frozen with a Model Config version."""
+
+    __tablename__ = "model_binding_snapshot"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "model_config_definition_id"],
+            ["resource_definition.tenant_id", "resource_definition.id"],
+            name="fk_model_binding_snapshot__config_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "model_config_version_id"],
+            ["resource_version.tenant_id", "resource_version.id"],
+            name="fk_model_binding_snapshot__config_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "provider_definition_id"],
+            ["resource_definition.tenant_id", "resource_definition.id"],
+            name="fk_model_binding_snapshot__provider_definition",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "model_config_version_id",
+            name="uq_model_binding_snapshot__model_config_version_id",
+        ),
+        CheckConstraint(
+            "provider_type IN ('openai', 'qwen', 'deepseek')", name="provider_type"
+        ),
+        CheckConstraint("provider_timeout_seconds BETWEEN 1 AND 600", name="timeout"),
+        CheckConstraint(
+            "jsonb_typeof(capabilities_json) = 'array'", name="capabilities_json"
+        ),
+        CheckConstraint(
+            "jsonb_typeof(default_parameters_json) = 'object'",
+            name="default_parameters_json",
+        ),
+        CheckConstraint(
+            "max_context_tokens IS NULL OR max_context_tokens >= 1",
+            name="max_context_tokens",
+        ),
+        CheckConstraint(
+            "rate_limit_rpm IS NULL OR rate_limit_rpm >= 1", name="rate_limit_rpm"
+        ),
+        CheckConstraint(
+            "snapshot_hash ~ '^sha256:[a-f0-9]{64}$'", name="snapshot_hash"
+        ),
+        Index(
+            "ix_model_binding_snapshot__tenant_model_config_definition",
+            "tenant_id",
+            "model_config_definition_id",
+        ),
+        Index(
+            "ix_model_binding_snapshot__tenant_provider_definition",
+            "tenant_id",
+            "provider_definition_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    model_config_definition_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    model_config_version_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    provider_definition_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    provider_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    secret_ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    provider_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    capabilities_json: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    default_parameters_json: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False
+    )
+    max_context_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    rate_limit_rpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    snapshot_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
 

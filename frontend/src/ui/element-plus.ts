@@ -21,6 +21,8 @@ import 'element-plus/es/components/popconfirm/style/css';
 import 'element-plus/es/components/select/style/css';
 import 'element-plus/es/components/skeleton/style/css';
 import 'element-plus/es/components/space/style/css';
+import 'element-plus/es/components/steps/style/css';
+import 'element-plus/es/components/step/style/css';
 import 'element-plus/es/components/switch/style/css';
 import 'element-plus/es/components/table/style/css';
 import 'element-plus/es/components/table-column/style/css';
@@ -51,6 +53,8 @@ export {
   ElSelect,
   ElSkeleton,
   ElSpace,
+  ElStep,
+  ElSteps,
   ElSwitch,
   ElTable,
   ElTableColumn,

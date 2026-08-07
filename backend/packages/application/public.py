@@ -1,5 +1,11 @@
 """Public exports for the application layer."""
 
+from packages.application.agents import AgentManagementService, AgentRegistry
+from packages.application.bundles import (
+    AgentScopeBundleCompilationService,
+    BundleArtifactReader,
+    BundleInputReader,
+)
 from packages.application.health import HealthService
 from packages.application.iam.public import (
     CurrentIdentityService,
@@ -8,6 +14,12 @@ from packages.application.iam.public import (
     IdentityReader,
 )
 from packages.application.metadata import RequestMetadata
+from packages.application.model_gateway import (
+    MODEL_PROVIDER_CONNECTION_TEST_EVENT,
+    ModelGatewayService,
+    ModelProviderConnectionTestHandler,
+    ProviderAdapterRegistry,
+)
 from packages.application.outbox import (
     OutboxDispatcher,
     OutboxDispatchSummary,
@@ -17,8 +29,27 @@ from packages.application.outbox import (
     WorkflowStarter,
     WorkflowStartResult,
 )
+from packages.application.publishing import (
+    RELEASE_REQUESTED_EVENT,
+    DeploymentAccessResolver,
+    DeploymentManagementService,
+    DeploymentStore,
+    PublicationQueryAccessResolver,
+    PublicationQueryService,
+    PublicationQueryStore,
+    ReleaseAccessResolver,
+    ReleaseManagementService,
+    ReleaseStore,
+    SnapshotAccessResolver,
+    SnapshotCompilationService,
+    SnapshotCompilationStore,
+    SnapshotReader,
+    publish_workflow_id,
+)
 from packages.application.resources import (
     CompositeResourceReferenceReader,
+    ModelManagementService,
+    ModelRegistry,
     PromptManagementService,
     PromptRegistry,
     ResourceReferenceProvider,
@@ -27,23 +58,49 @@ from packages.application.resources import (
 )
 
 __all__ = [
+    "MODEL_PROVIDER_CONNECTION_TEST_EVENT",
+    "RELEASE_REQUESTED_EVENT",
+    "AgentManagementService",
+    "AgentRegistry",
+    "AgentScopeBundleCompilationService",
+    "BundleArtifactReader",
+    "BundleInputReader",
     "CompositeResourceReferenceReader",
     "CurrentIdentityService",
+    "DeploymentAccessResolver",
+    "DeploymentManagementService",
+    "DeploymentStore",
     "HealthService",
     "IamManagementService",
     "IamPersistence",
     "IdentityReader",
+    "ModelGatewayService",
+    "ModelManagementService",
+    "ModelProviderConnectionTestHandler",
+    "ModelRegistry",
     "OutboxDispatchSummary",
     "OutboxDispatcher",
     "OutboxStore",
     "PermanentOutboxError",
     "PromptManagementService",
     "PromptRegistry",
+    "ProviderAdapterRegistry",
+    "PublicationQueryAccessResolver",
+    "PublicationQueryService",
+    "PublicationQueryStore",
+    "ReleaseAccessResolver",
+    "ReleaseManagementService",
+    "ReleaseStore",
     "RequestMetadata",
     "ResourceReferenceProvider",
     "RetryableOutboxError",
+    "SnapshotAccessResolver",
+    "SnapshotCompilationService",
+    "SnapshotCompilationStore",
+    "SnapshotReader",
     "TenantAccessResolver",
     "WorkflowStartResult",
     "WorkflowStarter",
     "canonical_request_hash",
+    "publish_workflow_id",
 ]

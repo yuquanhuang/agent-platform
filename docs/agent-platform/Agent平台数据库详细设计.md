@@ -1,6 +1,6 @@
 # Agent 平台数据库详细设计
 
-> 文档版本：V1.1  
+> 文档版本：V1.2
 > 文档状态：开发输入基线  
 > 数据库：PostgreSQL 16+  
 > ORM：SQLAlchemy 2.x Async  
@@ -207,6 +207,10 @@ created_at/by, updated_at/by
 - `version_policy`：FIXED/RESOLVE_ON_PUBLISH。
 - FIXED 时 `fixed_version_id` 必填；RESOLVE_ON_PUBLISH 时必须为空。
 - 唯一：`agent_id + resource_type + resource_id + coalesce(binding_role,'')`。
+- Model binding 的 `binding_role` 仅允许 `PRIMARY/FALLBACK_1/FALLBACK_2`；单 Model binding 省略角色时应用层规范化为 `PRIMARY`，多 Model binding 必须恰好一个主路由且 fallback 连续、最多两级。
+- `configuration_schema_version` 当前仅允许 `model-routing/v1`，`configuration_json` 仅允许主 Model binding 保存受控 `fallback_error_codes`；非 Model binding 和 fallback binding 不得保存模型路由配置。
+- 应用层在同一事务校验角色和路由配置；数据库增加同一 Agent 单个角色的条件唯一约束，防止并发写入重复主路由或 fallback 层级。
+- Agent 发布时将确定的 ModelConfig Version、路由顺序、错误码策略和对应不可变 `model_binding_snapshot` 编译进 AgentSnapshot，Draft 表不作为运行时读取源。
 
 ### 6.3 agent_version、agent_snapshot
 

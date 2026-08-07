@@ -491,9 +491,18 @@ class IamManagementService:
         if record is None:
             raise resource_not_found()
         resource = record.resource_type
-        if resource not in {"member", "role", "prompt"} or not access.allows(
-            resource, "read"
-        ):
+        if resource == "release":
+            if not access.allows("agent", "read"):
+                raise permission_denied()
+            return _operation(record)
+        if resource not in {
+            "member",
+            "role",
+            "prompt",
+            "model_provider",
+            "model_config",
+            "agent",
+        } or not access.allows(resource, "read"):
             raise permission_denied()
         return _operation(record)
 

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Agent Platform Core API
-  version: 1.2.0
+  version: 1.4.0
   description: Core development contract for Agent, Release, Session, Run, Event, Approval and Artifact.
 servers:
   - url: /
@@ -206,6 +206,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReleaseAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/agents/{agent_id}/publish-preview:
+    parameters:
+      - $ref: '#/components/parameters/AgentId'
+    post:
+      tags: [Releases]
+      operationId: previewAgentPublish
+      description: Read-only publication preview; it never creates a version, Snapshot or Release.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishAgentPreviewRequest'
+      responses:
+        '200':
+          description: Resolved Draft publication preview grouped by Runtime Target.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishAgentPreview'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /api/v1/releases/{release_id}:
@@ -1050,9 +1072,20 @@ components:
             type: string
             maxLength: 32
         bindings:
+          $ref: '#/components/schemas/AgentBindingList'
+    ModelRoutingBindingConfiguration:
+      type: object
+      additionalProperties: false
+      required: [fallback_error_codes]
+      properties:
+        fallback_error_codes:
           type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
           items:
-            $ref: '#/components/schemas/ResourceBinding'
+            type: string
+            enum: [RATE_LIMITED, PROVIDER_UNAVAILABLE]
     ResourceBinding:
       type: object
       additionalProperties: false
@@ -1068,6 +1101,158 @@ components:
           enum: [fixed, resolve_on_publish]
         version_id:
           type: [string, 'null']
+        binding_role:
+          type: [string, 'null']
+          enum: [primary, fallback_1, fallback_2, null]
+        configuration_schema_version:
+          type: [string, 'null']
+          enum: [model-routing/v1, null]
+        configuration:
+          oneOf:
+            - $ref: '#/components/schemas/ModelRoutingBindingConfiguration'
+            - type: 'null'
+      allOf:
+        - if:
+            required: [resource_type]
+            properties:
+              resource_type:
+                not: { const: model }
+          then:
+            properties:
+              binding_role: { type: 'null' }
+              configuration_schema_version: { type: 'null' }
+              configuration: { type: 'null' }
+        - if:
+            required: [binding_role]
+            properties:
+              binding_role: { type: string }
+          then:
+            properties:
+              resource_type: { const: model }
+        - if:
+            required: [configuration_schema_version]
+            properties:
+              configuration_schema_version: { const: model-routing/v1 }
+          then:
+            required: [binding_role, configuration]
+            properties:
+              resource_type: { const: model }
+              binding_role: { const: primary }
+              configuration:
+                $ref: '#/components/schemas/ModelRoutingBindingConfiguration'
+        - if:
+            required: [configuration]
+            properties:
+              configuration: { type: object }
+          then:
+            required: [binding_role, configuration_schema_version]
+            properties:
+              resource_type: { const: model }
+              binding_role: { const: primary }
+              configuration_schema_version: { const: model-routing/v1 }
+    AgentBindingList:
+      type: array
+      items:
+        $ref: '#/components/schemas/ResourceBinding'
+      allOf:
+        - not:
+            contains:
+              type: object
+              required: [resource_type]
+              properties:
+                resource_type: { const: model }
+            minContains: 4
+        - not:
+            contains:
+              type: object
+              required: [resource_type, binding_role]
+              properties:
+                resource_type: { const: model }
+                binding_role: { const: primary }
+            minContains: 2
+        - not:
+            contains:
+              type: object
+              required: [resource_type, binding_role]
+              properties:
+                resource_type: { const: model }
+                binding_role: { const: fallback_1 }
+            minContains: 2
+        - not:
+            contains:
+              type: object
+              required: [resource_type, binding_role]
+              properties:
+                resource_type: { const: model }
+                binding_role: { const: fallback_2 }
+            minContains: 2
+        - if:
+            contains:
+              type: object
+              required: [resource_type]
+              properties:
+                resource_type: { const: model }
+            minContains: 2
+          then:
+            contains:
+              type: object
+              required: [resource_type, binding_role]
+              properties:
+                resource_type: { const: model }
+                binding_role: { const: primary }
+            minContains: 1
+            maxContains: 1
+            items:
+              allOf:
+                - if:
+                    required: [resource_type]
+                    properties:
+                      resource_type: { const: model }
+                  then:
+                    required: [binding_role]
+                    properties:
+                      binding_role:
+                        type: string
+                        enum: [primary, fallback_1, fallback_2]
+        - if:
+            contains:
+              type: object
+              required: [resource_type, binding_role]
+              properties:
+                resource_type: { const: model }
+                binding_role: { const: fallback_1 }
+          then:
+            contains:
+              type: object
+              required:
+                - resource_type
+                - binding_role
+                - configuration_schema_version
+                - configuration
+              properties:
+                resource_type: { const: model }
+                binding_role: { const: primary }
+                configuration_schema_version: { const: model-routing/v1 }
+                configuration:
+                  $ref: '#/components/schemas/ModelRoutingBindingConfiguration'
+            minContains: 1
+            maxContains: 1
+        - if:
+            contains:
+              type: object
+              required: [resource_type, binding_role]
+              properties:
+                resource_type: { const: model }
+                binding_role: { const: fallback_2 }
+          then:
+            contains:
+              type: object
+              required: [resource_type, binding_role]
+              properties:
+                resource_type: { const: model }
+                binding_role: { const: fallback_1 }
+            minContains: 1
+            maxContains: 1
     Agent:
       type: object
       additionalProperties: false
@@ -1084,8 +1269,7 @@ components:
           maxItems: 20
           items: { type: string, maxLength: 32 }
         bindings:
-          type: array
-          items: { $ref: '#/components/schemas/ResourceBinding' }
+          $ref: '#/components/schemas/AgentBindingList'
         status: { type: string, enum: [DRAFT, ACTIVE, DISABLED, DELETING, DELETED] }
         resource_version: { type: integer, minimum: 1 }
         active_deployment_id: { type: [string, 'null'] }
@@ -1127,6 +1311,84 @@ components:
         activate_on_success:
           type: boolean
           default: true
+    PublishAgentPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_agent_version, runtime_targets]
+      properties:
+        expected_agent_version:
+          type: integer
+          minimum: 1
+        runtime_targets:
+          type: array
+          minItems: 1
+          maxItems: 32
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 255
+    PublishAgentPreview:
+      type: object
+      additionalProperties: false
+      required: [agent_id, expected_agent_version, preview_snapshot_hash, resolved_bindings, targets, ready_to_publish]
+      properties:
+        agent_id:
+          type: string
+        expected_agent_version:
+          type: integer
+          minimum: 1
+        preview_snapshot_hash:
+          type: string
+          pattern: '^sha256:[a-f0-9]{64}$'
+        resolved_bindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResolvedPublishBinding'
+        targets:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PublishAgentPreviewTarget'
+        ready_to_publish:
+          type: boolean
+          description: True only when Snapshot prerequisites are present; Release supply-chain and deployment gates are evaluated again after submission.
+    ResolvedPublishBinding:
+      type: object
+      additionalProperties: false
+      required: [resource_type, resource_id, version_id, version_no, content_hash]
+      properties:
+        resource_type:
+          type: string
+          enum: [prompt, skill, mcp, model, sandbox, agent]
+        resource_id:
+          type: string
+        version_id:
+          type: string
+        version_no:
+          type: integer
+          minimum: 1
+        content_hash:
+          type: string
+          pattern: '^sha256:[a-f0-9]{64}$'
+        binding_role:
+          type: [string, 'null']
+          enum: [primary, fallback_1, fallback_2, null]
+    PublishAgentPreviewTarget:
+      type: object
+      additionalProperties: false
+      required: [runtime_target_id, current_deployment_id, current_snapshot_id, changes]
+      properties:
+        runtime_target_id:
+          type: string
+        current_deployment_id:
+          type: [string, 'null']
+        current_snapshot_id:
+          type: [string, 'null']
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SnapshotDiffChangesItem'
     Release:
       type: object
       additionalProperties: false
@@ -1230,16 +1492,18 @@ components:
         changes:
           type: array
           items:
-            type: object
-            additionalProperties: false
-            required: [category, path, change_type]
-            properties:
-              category: { enum: [resource_version, permission, network, sandbox, model, secret_reference, runtime] }
-              path: { type: string }
-              change_type: { enum: [added, removed, changed] }
-              before: {}
-              after: {}
-              sensitive: { type: boolean, default: false }
+            $ref: '#/components/schemas/SnapshotDiffChangesItem'
+    SnapshotDiffChangesItem:
+      type: object
+      additionalProperties: false
+      required: [category, path, change_type]
+      properties:
+        category: { enum: [resource_version, permission, network, sandbox, model, secret_reference, runtime] }
+        path: { type: string }
+        change_type: { enum: [added, removed, changed] }
+        before: {}
+        after: {}
+        sensitive: { type: boolean, default: false }
     Reference:
       type: object
       additionalProperties: false

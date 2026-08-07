@@ -1,0 +1,54 @@
+task_id: AP-E1-009
+title: AgentScope 2.0.x 兼容 Spike 与运行时边界验证
+status: in_progress
+current_substage_status: awaiting_existing_ci_registry_build
+baseline: agent-platform-v1-dev-baseline-2026-08-r6
+requirements: [FR-RT-001, FR-RT-002, FR-RT-003, FR-RT-004, FR-RT-005, FR-RT-006]
+scope:
+  includes:
+    - 锁定 AgentScope >=2.0,<2.1 的精确 patch 并记录 wheel SHA-256
+    - 验证 Python 3.12、异步文本流、Thinking、Tool Call、外部工具执行和取消接口
+    - 验证 AgentScope 原始事件到 RuntimeEventCandidate 的安全映射边界
+    - 验证 AgentScope 模型调用只能通过既有 Model Gateway Port
+    - 形成 RuntimeAdapter Contract Test 的 AgentScope 兼容基线
+    - 评估运行镜像 Digest 的冻结输入和发布阻塞条件
+    - 提供由现有 CI 消费的受控 AgentScope Runtime Dockerfile
+  excludes:
+    - 启用 runtime-worker-agentscope 生产进程
+    - 实现 AgentRun Workflow、Event Service、Sandbox Manager 或 Bundle Compiler
+    - 直接调用 AgentScope 内置 OpenAI、Anthropic、DashScope 等 Provider Client
+    - 修改冻结 OpenAPI、RunSpec、RunEvent、Bundle Manifest 或基线 SHA-256
+compatibility:
+  - AgentScope 对象只允许存在于 backend/packages/runtimes 的适配层
+  - RuntimeEventCandidate 不携带 AgentScope metadata、Credential、原始异常或 Secret
+  - 动态模型消息和工具 Schema 必须先写入不可变引用，再进入 Model Gateway
+  - AgentScope Memory/Session 不作为平台 Session 或 Run 的事实来源
+security:
+  - 不执行真实供应商请求，不读取或保存任何 API Key
+  - Tool Call 只验证事件与外部执行暂停接口，不在本阶段执行本地工具
+  - 不以本地文件、内存状态或 AgentScope 状态代替平台 Artifact/Event/Session 事实
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+results:
+  compatibility_tests: 13_passed
+  image_contract_tests: 2_passed
+  backend_check: 226_passed_5_environment_skipped
+  full_chain_check: 233_passed_0_skipped
+  frontend_check: 24_passed
+  contract_baseline: agent-platform-v1-dev-baseline-2026-08-r6_verified
+  runtime_worker_enabled: false
+acceptance:
+  - uv.lock 精确解析 AgentScope 2.0.x patch 且兼容 Python 3.12
+  - API 探针覆盖文本、Thinking、Tool Call、外部执行和取消所需符号及签名
+  - 事件转换结果通过冻结 RuntimeEventCandidate TypeAdapter 校验
+  - 相同 AgentScope event id 产生稳定 source_event_id，敏感 metadata 不进入候选事件
+  - Model Bridge 测试证明只调用 Model Gateway Port，不实例化 AgentScope Provider Model
+  - 缺失审批、Artifact 或恢复事实时失败关闭，不伪造平台记录
+open_questions:
+  - 现有 CI/制品仓库完成构建、扫描、签名和推送后，需回填可拉取的 registry manifest digest；本地 image id 不得冒充生产 digest

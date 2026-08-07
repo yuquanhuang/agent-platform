@@ -74,6 +74,13 @@ deployment composition layer must construct `SqlAlchemyIamPersistence`, wrap it
 with `IamManagementService`, and inject it into `create_app`; without that
 explicit composition the IAM routes fail closed with `DEPENDENCY_UNAVAILABLE`.
 
+Release, Deployment, version history, Snapshot Diff and read-only publication
+preview have a production composition boundary in `apps.api.composition`. The
+deployment layer resolves `AP_DATABASE_DSN_REF`, builds the async Session Factory,
+loads trusted Runtime Target configuration, then calls
+`create_database_publication_app`; the default import-time app remains
+fail-closed and never guesses Secret or Runtime Target configuration.
+
 ## Temporal, Outbox and observability foundation
 
 `temporal-worker-control` and `temporal-worker-run` are now real independent

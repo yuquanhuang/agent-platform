@@ -340,7 +340,7 @@ class SchemaRenderer:
         ):
             return f"type {name} = {self.python_type(schema, name)}"
         schema_type = schema.get("type")
-        if schema_type not in {"object", None} and "allOf" not in schema:
+        if schema_type not in {"object", None}:
             return f"type {name} = {self.python_type(schema, name)}"
 
         flattened = merge_object_schema(schema, self.source.document)
@@ -377,7 +377,7 @@ class SchemaRenderer:
         ):
             return f"export type {name} = {self.typescript_type(schema, name)};"
         schema_type = schema.get("type")
-        if schema_type not in {"object", None} and "allOf" not in schema:
+        if schema_type not in {"object", None}:
             return f"export type {name} = {self.typescript_type(schema, name)};"
 
         flattened = merge_object_schema(schema, self.source.document)

@@ -1,0 +1,53 @@
+task_id: AP-E2-006
+title: 历史 Snapshot 回滚 Release 与发布回滚 E2E
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r7
+scope:
+  includes:
+    - 实现冻结 rollbackAgent，以历史不可变 Snapshot 创建新的 Release 和 Operation
+    - 在 Release 内部事实中区分普通发布与回滚来源，不用 Draft 版本字段承载回滚语义
+    - 复用 Temporal、Bundle、供应链校验、Smoke、Deployment 激活和单调 fencing 链路
+    - 验证目标 Snapshot 属于当前 tenant 和 Agent，跨租户或跨 Agent 请求不泄露存在性
+    - 在 Vue 版本历史中增加受控回滚确认、状态轮询和新 Deployment 展示
+    - 完成发布失败保护、成功发布、历史 Snapshot 回滚和旧 Deployment 退役 E2E
+  excludes:
+    - 修改历史 AgentVersion、AgentSnapshot、Release 或 Deployment
+    - 将当前 Agent Draft 回写为历史 Snapshot 内容
+    - 为回滚创建伪造 AgentVersion 或跳过 Registry、签名、SBOM、扫描、Smoke、fencing 门禁
+    - Session/Run 固定 Deployment、Runtime Worker 流量执行和历史 Run 查询
+decisions:
+  - 保持 R7 rollbackAgent 公共请求和 ReleaseAccepted 响应不变
+  - Release 内部新增 PUBLISH/ROLLBACK 来源与 requested_snapshot_id，expected_agent_version 仅用于普通发布
+  - 回滚直接消费历史不可变 Snapshot，不执行 Draft CAS，也不创建新的 AgentVersion/Snapshot
+  - 回滚默认执行 Smoke Test 并在成功后激活，继续使用新的 Release fencing token 创建新 Deployment
+compatibility:
+  - 既有 Release 数据迁移为 PUBLISH；现有 Outbox/Temporal payload 通过默认字段保持兼容
+  - publishAgent 行为、Preview 语义、Release/Deployment 公共 DTO 和状态机保持不变
+  - 数据库变更采用新增列和放宽 nullable；降级到 0013 保留 Release/Deployment，但会丢失回滚来源分类
+verification:
+  commands:
+    - targeted backend and frontend tests
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+results:
+  targeted_backend_tests: passed
+  postgresql_publish_rollback_e2e: 1_passed
+  temporal_workflow_integration: 4_passed
+  full_chain_check: 297_passed_0_skipped
+  frontend_check: 31_passed
+  contract_baseline: agent-platform-v1-dev-baseline-2026-08-r7_verified
+  operation_ids: 168_unique
+  generated_contract_files: 16_current
+  dependencies_added: none
+  migration_added: 0014_release_rollback
+acceptance:
+  - rollbackAgent 只接受当前 tenant、指定 Agent 的历史 Snapshot，并写入独立回滚审计事实
+  - 回滚产生新的 Release、Operation 和 Deployment，不修改或复活旧记录
+  - 回滚失败时当前 ACTIVE Deployment 保持服务；成功时使用 fencing 原子退役旧 Deployment
+  - 回滚重复请求按 Idempotency-Key 稳定重放，Temporal 重试不重复产生 Deployment
+  - Vue 明确展示目标版本和 Snapshot，确认后轮询新 Release 并展示实际 Deployment
+follow_up:
+  - Sandbox Profile 管理入口仍需独立任务实现；历史 Snapshot 本身必须已包含可编译 Sandbox 绑定
+  - 外部 CI 仍需回填 AgentScope Registry manifest digest；缺失时发布和回滚均继续失败关闭

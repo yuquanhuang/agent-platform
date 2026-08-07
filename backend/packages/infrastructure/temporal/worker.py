@@ -12,6 +12,8 @@ from packages.application.temporal import (
     CONTROL_PLANE_TASK_QUEUE,
     RUN_ORCHESTRATOR_TASK_QUEUE,
     PlatformProbeWorkflow,
+    PublishAgentWorkflow,
+    ReleaseWorkflowActivities,
     platform_probe_activity,
 )
 from packages.contracts.temporal import TemporalWorkerKind
@@ -28,6 +30,27 @@ class ProbeWorkerDefinition:
     task_queue: str
     workflows: Sequence[type]
     activities: Sequence[Callable[..., object]]
+
+
+def release_control_worker_definition(
+    publish_activities: ReleaseWorkflowActivities,
+) -> ProbeWorkerDefinition:
+    """Register the Release workflow only with its explicitly composed Activities."""
+
+    return ProbeWorkerDefinition(
+        kind=TemporalWorkerKind.CONTROL,
+        task_queue=CONTROL_PLANE_TASK_QUEUE,
+        workflows=(PlatformProbeWorkflow, PublishAgentWorkflow),
+        activities=(
+            platform_probe_activity,
+            publish_activities.validate_release,
+            publish_activities.compile_release_bundles,
+            publish_activities.scan_release_bundles,
+            publish_activities.smoke_test_release,
+            publish_activities.activate_release,
+            publish_activities.fail_release,
+        ),
+    )
 
 
 def probe_worker_definition(kind: TemporalWorkerKind) -> ProbeWorkerDefinition:

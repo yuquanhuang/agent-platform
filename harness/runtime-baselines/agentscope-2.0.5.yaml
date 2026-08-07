@@ -1,0 +1,32 @@
+baseline_id: agentscope-runtime-spike-2.0.5
+status: compatibility_verified_registry_pending
+package:
+  name: agentscope
+  constraint: ">=2.0,<2.1"
+  resolved_version: 2.0.5
+  wheel_sha256: ae440075c8d72b21a0e6b54458b9c6b9d1d9594f1e3f885611df1ed93950d444
+  python: "3.12"
+adapter_contract_version: "1.0-spike"
+dependency_footprint:
+  note: AgentScope 传递引入 OpenAI、Anthropic、DashScope、MCP、NumPy 等依赖，但平台适配器禁止直接实例化供应商 Model Client
+  local_dev_compatibility: macOS x86_64 Python 需要 cryptography<49 以获取预编译 wheel；uv 通用锁当前统一解析为 48.0.1，现有 CI 构建时必须复验 Linux wheel 和安全扫描
+capabilities:
+  text_stream: supported
+  thinking: supported
+  tool_call: supported
+  external_tool_execution: supported_with_platform_bridge
+  cancel: supported_via_task_cancellation
+  structured_output: supported_via_tool_bridge
+  approval_pause: requires_platform_approval_bridge
+  artifacts: requires_platform_artifact_bridge
+  plan: not_native
+  session_reuse: not_approved
+  resume_after_worker_restart: not_approved
+image:
+  manifest_digest: null
+  status: awaiting_existing_ci_registry_build
+  dockerfile: infra/images/runtime-agentscope/Dockerfile
+  build_context: .
+  base_image_policy: python_and_uv_images_must_be_supplied_by_ci_at_manifest_digest
+  required_attestations: [sbom, vulnerability_scan, license_scan, signature]
+  rule: local_image_id_must_not_be_used_as_a_production_manifest_digest

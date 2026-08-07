@@ -5,8 +5,15 @@ from uuid import UUID
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, ApplicationError
 
-from packages.contracts.temporal import WorkflowProbeInput, WorkflowProbeResult
+from packages.contracts.temporal import (
+    PublishAgentWorkflowInput,
+    PublishAgentWorkflowResult,
+    PublishReleaseFailureInput,
+    WorkflowProbeInput,
+    WorkflowProbeResult,
+)
 
 CONTROL_PLANE_TASK_QUEUE = "control-plane"
 RUN_ORCHESTRATOR_TASK_QUEUE = "run-orchestrator"
@@ -48,3 +55,63 @@ class PlatformProbeWorkflow:
                 maximum_attempts=5,
             ),
         )
+
+
+@workflow.defn(name="PublishAgentWorkflow")
+class PublishAgentWorkflow:
+    """Replay-safe orchestration; all business state changes live in Activities."""
+
+    @workflow.run
+    async def run(self, input: PublishAgentWorkflowInput) -> PublishAgentWorkflowResult:
+        try:
+            await workflow.execute_activity(
+                "validate_release_v1",
+                input,
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+            await workflow.execute_activity(
+                "compile_release_bundles_v1",
+                input,
+                start_to_close_timeout=timedelta(minutes=10),
+                heartbeat_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+            await workflow.execute_activity(
+                "scan_release_bundles_v1",
+                input,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+            if input.run_smoke_test:
+                await workflow.execute_activity(
+                    "smoke_test_release_v1",
+                    input,
+                    start_to_close_timeout=timedelta(minutes=15),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
+            await workflow.execute_activity(
+                "activate_release_v1",
+                input,
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+        except ActivityError as error:
+            cause = error.cause
+            error_code = (
+                cause.type
+                if isinstance(cause, ApplicationError) and cause.type
+                else "RELEASE_STAGE_FAILED"
+            )
+            await workflow.execute_activity(
+                "fail_release_v1",
+                PublishReleaseFailureInput(
+                    **input.model_dump(),
+                    error_code=error_code[:128],
+                    error_message="The Release workflow stage failed.",
+                ),
+                start_to_close_timeout=timedelta(minutes=1),
+                retry_policy=RetryPolicy(maximum_attempts=5),
+            )
+            raise
+        return PublishAgentWorkflowResult(release_id=input.release_id)

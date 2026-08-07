@@ -130,6 +130,31 @@ async def test_tenant_unit_of_work_binds_then_commits_and_closes(
 
 
 @pytest.mark.asyncio
+async def test_tenant_unit_of_work_can_enforce_read_only_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_session = MagicMock(spec=AsyncSession)
+    fake_session.begin = AsyncMock()
+    fake_session.execute = AsyncMock()
+    fake_session.commit = AsyncMock()
+    fake_session.rollback = AsyncMock()
+    fake_session.close = AsyncMock()
+    session = cast(AsyncSession, fake_session)
+    factory = cast(async_sessionmaker[AsyncSession], MagicMock(return_value=session))
+    binder = AsyncMock()
+    monkeypatch.setattr(uow_module, "bind_tenant_context", binder)
+
+    async with TenantUnitOfWork(factory, tenant_context(), read_only=True):
+        pass
+
+    execute = cast(AsyncMock, session.execute)
+    assert execute.await_count == 1
+    assert execute.await_args is not None
+    assert str(execute.await_args.args[0]) == "SET TRANSACTION READ ONLY"
+    binder.assert_awaited_once_with(session, tenant_context())
+
+
+@pytest.mark.asyncio
 async def test_tenant_unit_of_work_rolls_back_on_use_case_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

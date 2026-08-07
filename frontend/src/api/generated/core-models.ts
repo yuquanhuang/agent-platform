@@ -48,7 +48,11 @@ export interface AgentUpdateRequest {
   readonly description?: string;
   readonly visibility?: "private" | "tenant";
   readonly tags?: ReadonlyArray<string>;
-  readonly bindings?: ReadonlyArray<ResourceBinding>;
+  readonly bindings?: AgentBindingList;
+}
+
+export interface ModelRoutingBindingConfiguration {
+  readonly fallback_error_codes: ReadonlyArray<"RATE_LIMITED" | "PROVIDER_UNAVAILABLE">;
 }
 
 export interface ResourceBinding {
@@ -56,7 +60,12 @@ export interface ResourceBinding {
   readonly resource_id: string;
   readonly version_policy: "fixed" | "resolve_on_publish";
   readonly version_id?: string | null;
+  readonly binding_role?: "primary" | "fallback_1" | "fallback_2" | null;
+  readonly configuration_schema_version?: "model-routing/v1" | null;
+  readonly configuration?: ModelRoutingBindingConfiguration | null;
 }
+
+export type AgentBindingList = ReadonlyArray<ResourceBinding>;
 
 export interface Agent {
   readonly id: string;
@@ -66,7 +75,7 @@ export interface Agent {
   readonly runtime_type: "agentscope" | "codex";
   readonly visibility: "private" | "tenant";
   readonly tags: ReadonlyArray<string>;
-  readonly bindings: ReadonlyArray<ResourceBinding>;
+  readonly bindings: AgentBindingList;
   readonly status: "DRAFT" | "ACTIVE" | "DISABLED" | "DELETING" | "DELETED";
   readonly resource_version: number;
   readonly active_deployment_id?: string | null;
@@ -86,6 +95,36 @@ export interface PublishAgentRequest {
   readonly release_note: string;
   readonly run_smoke_test?: boolean;
   readonly activate_on_success?: boolean;
+}
+
+export interface PublishAgentPreviewRequest {
+  readonly expected_agent_version: number;
+  readonly runtime_targets: ReadonlyArray<string>;
+}
+
+export interface PublishAgentPreview {
+  readonly agent_id: string;
+  readonly expected_agent_version: number;
+  readonly preview_snapshot_hash: string;
+  readonly resolved_bindings: ReadonlyArray<ResolvedPublishBinding>;
+  readonly targets: ReadonlyArray<PublishAgentPreviewTarget>;
+  readonly ready_to_publish: boolean;
+}
+
+export interface ResolvedPublishBinding {
+  readonly resource_type: "prompt" | "skill" | "mcp" | "model" | "sandbox" | "agent";
+  readonly resource_id: string;
+  readonly version_id: string;
+  readonly version_no: number;
+  readonly content_hash: string;
+  readonly binding_role?: "primary" | "fallback_1" | "fallback_2" | null;
+}
+
+export interface PublishAgentPreviewTarget {
+  readonly runtime_target_id: string;
+  readonly current_deployment_id: string | null;
+  readonly current_snapshot_id: string | null;
+  readonly changes: ReadonlyArray<SnapshotDiffChangesItem>;
 }
 
 export interface Release {
@@ -133,6 +172,15 @@ export interface SnapshotDiff {
   readonly from_snapshot_id: string;
   readonly to_snapshot_id: string;
   readonly changes: ReadonlyArray<SnapshotDiffChangesItem>;
+}
+
+export interface SnapshotDiffChangesItem {
+  readonly category: "resource_version" | "permission" | "network" | "sandbox" | "model" | "secret_reference" | "runtime";
+  readonly path: string;
+  readonly change_type: "added" | "removed" | "changed";
+  readonly before?: JSONValue;
+  readonly after?: JSONValue;
+  readonly sensitive?: boolean;
 }
 
 export interface Reference {
@@ -421,6 +469,8 @@ export type PublishAgentAgentId = string;
 
 export type PublishAgentIdempotencyKey = string;
 
+export type PreviewAgentPublishAgentId = string;
+
 export type GetReleaseReleaseId = string;
 
 export type RollbackAgentAgentId = string;
@@ -553,15 +603,6 @@ export interface CurrentIdentityMembershipsItem {
   readonly status: "ACTIVE" | "DISABLED";
   readonly role_ids: ReadonlyArray<string>;
   readonly membership_version: number;
-}
-
-export interface SnapshotDiffChangesItem {
-  readonly category: "resource_version" | "permission" | "network" | "sandbox" | "model" | "secret_reference" | "runtime";
-  readonly path: string;
-  readonly change_type: "added" | "removed" | "changed";
-  readonly before?: JSONValue;
-  readonly after?: JSONValue;
-  readonly sensitive?: boolean;
 }
 
 export interface RunInputAttachmentsItem {

@@ -1,0 +1,69 @@
+task_id: AP-E1-005
+title: OpenAI、Qwen、DeepSeek Provider Adapter 与供应商契约测试
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/schemas/model-gateway-v1.schema.json
+scope:
+  includes:
+    - OpenAI-compatible 共享 HTTP/SSE 传输与三家独立 Provider Profile
+    - OpenAI、Qwen、DeepSeek Adapter 的普通响应、流式响应和连接测试
+    - Provider 请求、错误、finish reason、request id 和 Usage 字段映射
+    - prompt_ref/tools_ref 请求物化端口与 Provider 输出写入 output_ref 端口
+    - 三家参数化契约测试、取消、超时、限流、认证和协议错误测试
+  excludes:
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+    - 真实供应商凭证、在线付费调用和正式模型费用表
+    - quota/budget/rate-limit 持久化与 AP-E1-006 策略实现
+    - 未确认的 model_binding_snapshot 持久化和生产 ModelBindingReader
+    - Agent Draft、AgentScope Runtime 或前端页面开发
+security:
+  - Provider Secret 仅通过 SecretStr 注入 Authorization Header，不进入错误、日志或测试快照
+  - Base URL 禁止凭证、Query、Fragment 和非 HTTPS 外部地址；HTTP 仅允许 loopback
+  - 禁止自动跟随重定向，错误体仅解析受限错误码并返回安全统一消息
+  - 网络连接失败可判定 not_submitted；读取/写入超时与不明状态禁止自动 fallback
+provider_profiles:
+  openai:
+    protocol: openai_chat_completions
+    request_id_headers: [x-request-id]
+  qwen:
+    protocol: dashscope_openai_compatible
+    request_id_headers: [x-dashscope-request-id, x-request-id]
+  deepseek:
+    protocol: deepseek_openai_compatible
+    request_id_headers: [x-request-id]
+file_scope:
+  allowed:
+    - backend/packages/domain/model_gateway/**
+    - backend/packages/application/model_gateway/**
+    - backend/packages/infrastructure/model_gateway/**
+    - backend/packages/**/public.py
+    - backend/tests/application/model_gateway/**
+    - backend/tests/infrastructure/model_gateway/**
+    - backend/tests/integration/resources/test_resource_registry.py
+    - harness/tasks/AP-E1-005.yaml
+    - harness/AI_CODING_PROGRESS.md
+  forbidden:
+    - docs/agent-platform/agent-platform-openapi-*.yaml
+    - docs/agent-platform/schemas/**
+    - docs/agent-platform/agent-platform-baseline.yaml
+dependencies: [AP-E1-004, AP-E1-003]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+acceptance:
+  - 同一套参数化测试对 OpenAI、Qwen、DeepSeek Adapter 全部通过
+  - 普通文本、工具调用、流式 Delta、Usage 和 Provider Request ID 映射正确
+  - 401/403、429、5xx、连接失败、超时、取消和畸形响应均归一化且不泄露 Secret
+  - Adapter 不读取业务 ORM、不持久化平台事实、不创建平行公共契约
+  - AP-E1-004 Gateway fallback、Usage Store、连接测试 Handler 和 Probe Outbox 无回归
+open_questions:
+  - 真实供应商启用模型、在线凭证验证和正式费用表仍待配置；本任务使用离线 HTTP Mock 契约测试。

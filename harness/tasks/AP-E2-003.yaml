@@ -1,0 +1,53 @@
+task_id: AP-E2-003
+title: Release Workflow、异步 Operation 和发布失败保护
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r6
+scope:
+  includes:
+    - 实现冻结 publishAgent/getRelease，并以 Idempotency-Key 创建 Release、Operation 和 Outbox
+    - 使用确定性 publish/{tenant_id}/{release_id} 启动 Temporal Workflow
+    - 复用 AP-E2-001 Snapshot 和 AP-E2-002 AgentScope Bundle 编译，不回读 Draft
+    - 持久化 runtime_bundle，并为对象存储、签名、SBOM、扫描和 Sandbox Smoke 定义故障关闭端口
+    - 在激活前任何失败时终结 Release/Operation，保持旧 ACTIVE Deployment 不变
+  excludes:
+    - AP-E2-004 Deployment 表、原子激活、fencing 和历史状态
+    - AP-E2-005 发布 Diff、版本历史和 Vue 发布页面
+    - AP-E2-006 回滚 Release 和发布/回滚 E2E
+    - 修改 R6 OpenAPI、RunSpec、RunEvent、Bundle Manifest Schema 或基线 SHA-256
+decisions:
+  - API 事务只写 Release、Operation 和 Outbox，不直接调用 Temporal
+  - Outbox Starter 使用 USE_EXISTING 与 REJECT_DUPLICATE；失败 Release 必须创建新 Release 才能重试
+  - activate_on_success=false 仍经过 ACTIVATING 最终化状态，但不创建 Deployment
+  - activate_on_success=true 在 AP-E2-004 激活 Adapter 未配置时失败关闭，不伪造 Deployment
+  - AgentScope Registry manifest digest、Bundle signature、SBOM、scan 和可选 smoke 均为发布门禁
+compatibility:
+  - Snapshot 继续由 AP-E2-001 的 Repeatable Read/CAS/幂等边界创建
+  - Bundle 继续只消费不可变 Snapshot、Resource Version、Model Binding Snapshot 和 Artifact 字节
+  - Release Operation 允许复用 agent:read 查询权限，不新增冻结权限字符串
+verification:
+  commands:
+    - make backend-check
+    - make contract-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+results:
+  targeted_release_tests: passed
+  postgresql_release_integration: 1_passed
+  temporal_workflow_integration: 3_passed
+  backend_check: 266_passed_7_environment_skipped
+  full_chain_check: 273_passed_0_skipped
+  frontend_check: 24_passed
+  contract_baseline: agent-platform-v1-dev-baseline-2026-08-r6_verified
+  generated_contract_files: 16_current
+  dependencies_added: none
+  migration_added: 0012_release_bundle
+acceptance:
+  - 同一 Idempotency-Key 重放同一 Release，且 Outbox 重投不会启动第二个 Workflow
+  - Release 状态只能按冻结状态机 CAS 前进，失败同步终结 Operation
+  - Bundle 身份和 object_uri 幂等，签名/SBOM/扫描缺失时不能进入成功状态
+  - 激活前失败不修改 Agent active_deployment_id，也不创建伪造 Deployment
+follow_up:
+  - AP-E2-004 实现 Deployment STAGED/ACTIVE/RETIRED、fencing 和原子激活 Adapter
+  - 外部 CI 回填 AgentScope Registry manifest digest 后配置生产 Runtime Target
+  - 生产对象存储、签名/SBOM、扫描和 Sandbox Smoke Adapter 由部署环境显式注入；未配置时继续失败关闭

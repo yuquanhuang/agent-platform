@@ -1,0 +1,56 @@
+task_id: AP-E2-004
+title: Deployment 激活、历史状态和并发保护
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r6
+scope:
+  includes:
+    - 实现冻结 Deployment STAGED/ACTIVE/DEGRADED/RETIRED/FAILED 领域状态和 getDeployment
+    - 新增 tenant-scoped Deployment 持久化、历史记录、复合外键、RLS 和单 ACTIVE 部分唯一索引
+    - 复用 AP-E2-003 ReleaseDeploymentActivator，以单事务完成多 Runtime Target 预校验、旧 ACTIVE 退役和新 Deployment 激活
+    - 使用单调 Release activation fencing token、Agent 行锁和确定性 Deployment ID 防止并发与 Activity 重试产生双 ACTIVE
+    - 同步 agent_definition.active_deployment_id 查询物化字段，但不把它作为发布事实来源
+  excludes:
+    - AP-E2-005 发布 Diff、版本历史列表和 Vue 发布页面
+    - AP-E2-006 回滚 Release 和发布/回滚 E2E
+    - Session/Run 选择或固定 Deployment、Runtime Worker 启动与流量切换
+    - 修改 R6 OpenAPI、RunSpec、RunEvent、Bundle Manifest Schema 或基线 SHA-256
+decisions:
+  - Deployment 身份由 tenant_id、release_id 和 runtime_target_id 确定性生成，同一 Release Activity 重试返回相同 ID
+  - Release 持有数据库生成的单调 activation_fencing_token；较旧 Release 不得覆盖较新的 ACTIVE Deployment
+  - 激活先校验全部目标、Snapshot、Bundle、scan 和 Registry manifest digest，再在同一事务切换全部目标
+  - 数据库部分唯一索引作为 agent_id、runtime_target_id 单 ACTIVE 的最终保护
+  - active_deployment_id 仅物化按 runtime_target_id 排序后的默认 Deployment，权威集合以 Deployment ACTIVE 状态为准
+compatibility:
+  - 不在 Temporal Workflow 内直接写 Deployment，继续通过 AP-E2-003 Port 调用数据库 Adapter
+  - Snapshot 和 Runtime Bundle 继续只读不可变 AP-E2-001/AP-E2-002 产物
+  - getDeployment 复用 agent:read，不增加冻结权限字符串或公共字段
+  - AP-E1-009 Registry digest 未回填时仍失败关闭，不创建或切换 ACTIVE Deployment
+verification:
+  commands:
+    - targeted tests
+    - make backend-check
+    - make contract-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+results:
+  targeted_tests: 42_passed
+  postgresql_rls: 1_passed
+  postgresql_release_deployment_integration: 1_passed
+  backend_check: 279_passed_7_environment_skipped
+  full_chain_check: 286_passed_0_skipped
+  frontend_check: 24_passed
+  contract_baseline: agent-platform-v1-dev-baseline-2026-08-r6_verified
+  generated_contract_files: 16_current
+  dependencies_added: none
+  migration_added: 0013_deployment_activation
+acceptance:
+  - 首次激活创建 ACTIVE Deployment；再次发布原子退役旧记录并保留完整历史
+  - 多目标激活全成全败，任一预校验失败时既有 ACTIVE 集合保持不变
+  - 同一 Release 重试返回相同 Deployment ID，并发或过期 Release 不能产生两个 ACTIVE
+  - 跨租户查询和写入由显式 tenant 条件、复合外键和 FORCE RLS 同时阻断
+follow_up:
+  - AP-E2-005 消费 Deployment/Release 历史实现发布 Diff、历史列表和 Vue 页面
+  - AP-E2-006 以历史 Snapshot 创建新 Release 实现回滚，不复活旧 Deployment 记录
+  - 生产最小权限数据库角色需对 Release identity sequence 保有 USAGE/SELECT 权限
+  - 外部 CI 回填 AgentScope Registry manifest digest 前继续阻止生产 Deployment 激活

@@ -1,6 +1,6 @@
 # Agent 平台 AI Coding 开发总纲
 
-> 文档版本：V1.5  
+> 文档版本：V1.7
 > 文档状态：开发输入基线  
 > 基线清单：[agent-platform-baseline.yaml](./agent-platform-baseline.yaml)
 
@@ -195,6 +195,10 @@ Schema/状态机
 - Vue Router 4 统一管理路由、权限守卫和 Feature Flag，不在页面中实现平行权限模型。
 - Pinia 管理客户端状态，`@tanstack/vue-query` 管理服务端状态；禁止把 API 实体复制到两个状态源。
 - API Client 和 DTO 从 OpenAPI 生成，RunEvent Type 从 JSON Schema 生成或使用同一源码。
+- Agent Model `ResourceBinding` 的角色和 `model-routing/v1` 配置以 Core OpenAPI 为唯一来源；单模型兼容规范化、多模型角色连续性和受控错误码必须由后端再次校验，前端校验不能替代服务端授权和约束。
+- Agent 发布编译确定的 ModelConfig Version、不可变 `model_binding_snapshot` 和路由策略；Gateway、Runtime 和后续 Snapshot 逻辑禁止读取 Agent/Provider Draft。
+- 发布页面的 `previewAgentPublish` 必须复用正式发布的解析与编译规则，但只生成内存 transient Snapshot；不得写版本、Snapshot、Release、Outbox、幂等或发布审计。正式发布仍需事务内重编译和 CAS。
+- Snapshot Diff 必须确定性排序并脱敏；Secret、Provider credential、完整 Prompt 和未知复杂敏感值不得进入浏览器响应。
 - SSE/AG-UI 状态归并必须独立于组件生命周期，并覆盖重复、乱序、缺口和重连测试。
 - 前端任务至少执行 Prettier、ESLint、`vue-tsc --noEmit`、相关 Vitest/Vue Test Utils 测试和生产构建。
 
@@ -205,7 +209,7 @@ Schema/状态机
 ```yaml
 task_id: AP-E<epic>-NNN
 title: 明确、单一的交付目标
-baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline: agent-platform-v1-dev-baseline-2026-08-r7
 baseline_integrity:
   hash_algorithm: sha256
   verified_files: []

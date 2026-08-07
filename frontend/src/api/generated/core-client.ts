@@ -14,6 +14,7 @@ export const operationIds = [
   'copyAgent',
   'disableAgent',
   'publishAgent',
+  'previewAgentPublish',
   'getRelease',
   'rollbackAgent',
   'listAgentVersions',
@@ -220,6 +221,22 @@ export class CoreApiClient {
       headers: {
         'Idempotency-Key': String(input.idempotencyKey),
       },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async previewAgentPublish(
+    input: {
+      readonly agentId: Models.PreviewAgentPublishAgentId;
+      readonly body: Models.PublishAgentPreviewRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.PublishAgentPreview> {
+    const path = '/api/v1/agents/{agent_id}/publish-preview'.replace('{agent_id}', encodeURIComponent(String(input.agentId)));
+    return await this.transport.request<Models.PublishAgentPreview>({
+      method: 'POST',
+      path,
       body: input.body,
       signal: input.signal,
     });

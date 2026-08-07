@@ -1,6 +1,6 @@
 # Agent 平台开发执行计划
 
-> 文档版本：V1.2
+> 文档版本：V1.4
 > 文档状态：开发输入计划
 > 适用范围：当前 `docs/agent-platform` 需求、架构、契约和测试文档
 
@@ -101,7 +101,7 @@ frontend/
 2. **Epic 编号冲突已处理**：总纲、索引、执行计划和追踪矩阵统一使用 Epic 0～9，独立保留 RunEvent/SSE Epic 4。
 3. **前端未初始化不是前置阻塞**：Vue 脚手架、包管理器、生成 Client 和前端门禁属于 Epic 0 的正式交付。
 4. **后端最小骨架不是前置阻塞**：模块边界、配置、迁移、测试和进程入口属于 Epic 0 的正式交付。
-5. **计划基线已处理**：本计划已纳入文档索引和 R5 基线，相关版本、SHA-256 和变更摘要同步更新。
+5. **计划基线已处理**：本计划已纳入文档索引和 R6 基线，相关版本、SHA-256 和变更摘要同步更新。
 6. **Python 门禁环境已处理**：根 Makefile 使用 `uv run python`，避免系统 Python 与项目虚拟环境依赖不一致；Black 固定 `py312`、Pyright 启用 strict，并增加最小健康测试。`make backend-check` 已通过。前端门禁仍因尚无 `package.json` 退出，作为 Epic 0 前端骨架交付处理，不通过关闭门禁绕过。
 7. **契约门禁待 Epic 0 落地**：当前 `make contract-check` 尚未配置实际命令，项目环境也缺少 YAML、JSON Schema 和 OpenAPI 校验依赖，因此“跳过”不视为通过。Epic 0 的首个任务必须补齐离线可复现的契约校验和生成 Diff，再开始业务功能。
 
@@ -155,7 +155,7 @@ Epic 是阶段里程碑，不作为一次 AI Coding 的任务粒度。单个任�
 4. `AP-E1-004`：Model Gateway 请求、流式响应、错误和用量归一化。
 5. `AP-E1-005`：OpenAI、Qwen、DeepSeek Adapter 及供应商契约测试。
 6. `AP-E1-006`：预算、限流、Token/费用统计和受控 fallback。
-7. `AP-E1-007`：Agent Draft API、校验、复制、停用和引用约束。
+7. `AP-E1-007`：Agent Draft API、ResourceBinding 规范化/多模型路由校验、复制、停用和引用约束。
 8. `AP-E1-008`：Agent Draft Vue 编辑器和 Epic 1 纵向验收。
 9. `AP-E1-009`：AgentScope 2.0.x 兼容 Spike，固定精确 patch 和镜像 Digest；不形成生产旁路。
 
@@ -165,7 +165,7 @@ Epic 是阶段里程碑，不作为一次 AI Coding 的任务粒度。单个任�
 2. `AP-E2-002`：AgentScope Bundle 和 Bundle Manifest 编译/校验。
 3. `AP-E2-003`：Release Workflow、异步 Operation 和发布失败保护。
 4. `AP-E2-004`：Deployment 激活、历史状态和并发保护。
-5. `AP-E2-005`：发布 Diff、版本历史和前端发布页面。
+5. `AP-E2-005`：更新 R7 契约，实现无副作用发布预览、脱敏 Snapshot Diff、版本历史和 Vue 发布页面；正式发布仍事务内重编译和 CAS。
 6. `AP-E2-006`：回滚产生新 Release，并完成发布/回滚 E2E。
 
 ### Epic 3：Session、Run 与 Temporal
@@ -246,7 +246,7 @@ Epic 9 每项能力必须使用独立 Feature Flag，并继续拆成“契约/�
 ```yaml
 task_id: AP-E0-001
 title: 实现契约完整性与校验门禁
-baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline: agent-platform-v1-dev-baseline-2026-08-r7
 scope:
   includes:
     - scripts/

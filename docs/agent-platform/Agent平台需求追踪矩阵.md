@@ -1,6 +1,6 @@
 # Agent 平台需求追踪矩阵
 
-> 文档版本：V1.5  
+> 文档版本：V1.7
 > 文档状态：开发输入基线
 
 ## 1. 使用方式
@@ -68,9 +68,9 @@
 |---|---|---|---|---|
 | Epic 0 身份租户 | FR-IAM-001～006 | getCurrentIdentity/createTenant/getTenant/updateTenant/disableTenant/createMember/getMember/updateMember/deleteMember/createRole/getRole/updateRole/deleteRole | tenant、app_user、tenant_member、role_binding | 两租户权限矩阵、membership_version 失效 |
 | Epic 0 契约代码生成 | FR-RT-001、FR-RUN-003 | RunSpec/RunEvent JSON Schema | 无 | Schema Golden、生成 Diff |
-| Epic 1 Model Gateway | FR-MDL-001～007 | Model Gateway 契约、OpenAI/Qwen/DeepSeek Adapter、ModelProvider/ModelConfig CRUD、testModelProviderConnection、publishModelConfig | resource_definition/version、model_usage、budget | 三供应商契约、限流、预算、fallback、连通性 |
-| Epic 1 Agent Draft | FR-AGT-001 | createAgent/listAgents/getAgent/updateAgent/copyAgent/disableAgent/deleteAgent | agent_definition、agent_binding | ETag、引用删除、权限 |
-| Epic 2 发布 | FR-AGT-002～006、FR-RES-006～007 | publishAgent/getRelease/rollbackAgent/listAgentVersions/getDeployment | agent_version、snapshot、bundle、release、deployment | AC-001、AC-007 |
+| Epic 1 Model Gateway | FR-MDL-001～007 | Model Gateway 契约、OpenAI/Qwen/DeepSeek Adapter、ModelProvider/ModelConfig CRUD、testModelProviderConnection、publishModelConfig、Agent Model `ResourceBinding` 路由策略 | resource_definition/version、model_binding_snapshot、model_usage、budget | 三供应商契约、限流、预算、受控 fallback、不可变绑定、连通性 |
+| Epic 1 Agent Draft | FR-AGT-001、FR-MDL-005～006 | createAgent/listAgents/getAgent/updateAgent/copyAgent/disableAgent/deleteAgent、AgentBindingList | agent_definition、agent_binding | ETag、幂等、引用删除、权限、旧单模型兼容、多模型角色/顺序/错误码负向校验 |
+| Epic 2 发布 | FR-AGT-002～006、FR-RES-006～007 | previewAgentPublish/publishAgent/getRelease/rollbackAgent/listAgentVersions/getAgentVersion/diffAgentSnapshots/getDeployment | agent_version、snapshot、bundle、release、deployment | AC-001、AC-007、预览无副作用、Diff 脱敏和 Draft 漂移保护 |
 | Epic 3 Session/Run | FR-RUN-001～006、FR-CON-001～006 | listSessions/createSession/getSession/updateSession/archiveSession/deleteSession/listSessionMessages/listSessionRuns/createRun/getRun/cancelRun/retryRun | chat_session、chat_message、agent_run、run_attempt、outbox | AC-002、AC-003、Session 历史/分支/归档 |
 | Epic 4 Event Store | FR-RUN-003～004、FR-CON-005 | appendRunEventCandidates/listRunEvents/streamRunEvents | run_event、run_event_counter | 并发序号、重连、终态冲突 |
 | Epic 5 Sandbox | FR-SBX-001～007 | Sandbox 内部 API、SandboxPolicy | sandbox_instance、lease、workspace | 隔离、资源耗尽、对账 |

@@ -2,6 +2,8 @@
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
+from packages.contracts.model_gateway import ModelUsage
+
 
 class PlatformMetrics:
     """Own a registry so application factories and tests never duplicate metrics."""
@@ -43,6 +45,24 @@ class PlatformMetrics:
             "Outbox messages claimed by the latest bounded poll.",
             registry=self.registry,
         )
+        self.model_gateway_requests = Counter(
+            "agent_platform_model_gateway_requests_total",
+            "Normalized Model Gateway request outcomes.",
+            labelnames=("provider", "mode", "outcome"),
+            registry=self.registry,
+        )
+        self.model_gateway_fallbacks = Counter(
+            "agent_platform_model_gateway_fallbacks_total",
+            "Safe Model Gateway fallback transitions.",
+            labelnames=("source_provider", "target_provider"),
+            registry=self.registry,
+        )
+        self.model_gateway_tokens = Counter(
+            "agent_platform_model_gateway_tokens_total",
+            "Normalized model tokens by type and estimation status.",
+            labelnames=("provider", "token_type", "estimated"),
+            registry=self.registry,
+        )
 
     def observe_http(self, *, method: str, status_code: int, duration: float) -> None:
         status_class = f"{status_code // 100}xx"
@@ -60,3 +80,32 @@ class PlatformMetrics:
         ):
             if count:
                 self.outbox_dispatch.labels(outcome=outcome).inc(count)
+
+    def observe_model_gateway_request(
+        self, *, provider: str, mode: str, outcome: str
+    ) -> None:
+        self.model_gateway_requests.labels(
+            provider=provider, mode=mode, outcome=outcome
+        ).inc()
+
+    def observe_model_gateway_fallback(
+        self, *, source_provider: str, target_provider: str
+    ) -> None:
+        self.model_gateway_fallbacks.labels(
+            source_provider=source_provider, target_provider=target_provider
+        ).inc()
+
+    def observe_model_gateway_usage(self, *, provider: str, usage: ModelUsage) -> None:
+        for token_type, count in (
+            ("input", usage.input_tokens),
+            ("output", usage.output_tokens),
+            ("reasoning", usage.reasoning_tokens),
+            ("cache_read", usage.cache_read_tokens),
+            ("cache_write", usage.cache_write_tokens),
+        ):
+            if count:
+                self.model_gateway_tokens.labels(
+                    provider=provider,
+                    token_type=token_type,
+                    estimated=str(usage.estimated).lower(),
+                ).inc(count)

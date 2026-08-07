@@ -2,7 +2,7 @@
 
 import pytest
 
-from packages.domain.public import Permission, PermissionSet
+from packages.domain.public import TENANT_ADMIN_PERMISSIONS, Permission, PermissionSet
 
 
 def test_permission_uses_frozen_resource_action_format() -> None:
@@ -33,3 +33,8 @@ def test_permission_set_is_unique_and_evaluates_exact_action() -> None:
 def test_permission_set_rejects_duplicates() -> None:
     with pytest.raises(ValueError, match="unique"):
         PermissionSet.parse(("member:create", "member:create"))
+
+
+def test_tenant_admin_includes_agent_draft_permissions() -> None:
+    for action in ("create", "read", "list", "update", "delete", "disable", "publish"):
+        assert TENANT_ADMIN_PERMISSIONS.allows("agent", action)

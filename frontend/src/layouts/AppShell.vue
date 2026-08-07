@@ -28,8 +28,17 @@ const { sidebarCollapsed } = storeToRefs(appShellStore);
         <ElMenuItem index="/">
           <span>系统状态</span>
         </ElMenuItem>
+        <ElMenuItem index="/agents">
+          <span>Agent 管理</span>
+        </ElMenuItem>
         <ElMenuItem index="/prompts">
           <span>Prompt 管理</span>
+        </ElMenuItem>
+        <ElMenuItem index="/models/providers">
+          <span>模型供应商</span>
+        </ElMenuItem>
+        <ElMenuItem index="/models/configs">
+          <span>模型配置</span>
         </ElMenuItem>
       </ElMenu>
     </ElAside>

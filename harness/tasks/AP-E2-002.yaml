@@ -1,0 +1,56 @@
+task_id: AP-E2-002
+title: AgentScope Bundle 与 Bundle Manifest 编译和校验
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r6
+requirements: [FR-AGT-004, FR-RT-001, FR-RT-002, FR-RT-006]
+scope:
+  includes:
+    - 只从不可变 Agent Snapshot、Resource Version、Model Binding Snapshot 和 Skill Artifact 字节装配 Bundle
+    - 生成 deterministic runtime.yaml、Prompt、Skill、MCP、安全策略、file-manifest.json 和 manifest.json
+    - 按冻结 bundle-manifest-v1.schema.json 生成并校验 Manifest
+    - 校验路径、文件 Hash/大小/权限、资源 Hash、模型路由、子 Agent 图、Secret Reference 和安全策略 Hash
+    - 提供租户隔离的 PostgreSQL Resource Version/Model Binding Snapshot Reader
+    - 保持 AgentScope 对象、供应商 Secret 明文和可变 Draft 在编译边界之外
+  excludes:
+    - Release Workflow、publishAgent API、Operation 和 Temporal 编排
+    - runtime_bundle 持久化、对象存储上传、签名、SBOM 和安全扫描
+    - Deployment 激活、Runtime Worker、Sandbox 冒烟测试和前端发布页面
+    - 修改 R6 OpenAPI、RunSpec、RunEvent、Bundle Manifest Schema 或基线 SHA-256
+decisions:
+  - manifest.json 不自引用；Manifest files 覆盖全部 payload 和 file-manifest.json，manifest.json 由 Bundle 外层校验
+  - content_hash 使用 canonical JSON 覆盖 runtime、compiler、Snapshot identity、文件、绑定和安全 Hash；排除 created_at、signature_ref 和 sbom_ref
+  - bundle_id 由 content_hash 内容寻址生成，相同不可变输入得到相同 Bundle identity
+  - runtime.yaml 使用 canonical JSON 字节；JSON 是 YAML 1.2 合法子集，可避免平台相关序列化差异
+  - 模型运行配置只保留 Gateway binding snapshot ID/Hash，不把 Provider Secret 注入 AgentScope Runtime
+  - 根 Agent 缺少不可变 Sandbox Profile 时失败关闭，不生成伪造默认策略
+compatibility:
+  - AP-E2-001 后续资源停用不影响历史 Snapshot 的可重复编译；Reader 不检查 mutable Definition Draft 状态
+  - AP-E1-009 Registry digest 不属于冻结 Bundle Manifest，继续由生产 Release/Deployment 前置门禁检查
+  - Skill Artifact 通过只读 Port 获取；具体对象存储 Adapter 和 runtime_bundle 持久化留给 Release/Store 阶段
+verification:
+  commands:
+    - make backend-check
+    - make contract-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test ../.venv/bin/python3 -m pytest tests/integration/resources/test_resource_registry.py -q
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - git diff --check
+    - uv lock --check
+results:
+  bundle_targeted_tests: 11_passed
+  postgresql_resource_integration: 1_passed
+  backend_check: 245_passed_5_environment_skipped
+  full_chain_check: 250_passed_0_skipped
+  frontend_check: 24_passed
+  contract_baseline: agent-platform-v1-dev-baseline-2026-08-r6_verified
+  generated_contract_files: 16_current
+  dependencies_added: none
+  migrations_added: none
+acceptance:
+  - 相同 Snapshot、资源和 Artifact 字节生成相同文件集合、Bundle ID 和 content_hash
+  - Bundle Manifest 通过冻结 Draft 2020-12 Schema，并额外校验唯一排序、Hash 和文件集合语义
+  - 篡改文件、资源 Hash、模型路由、跨租户输入、递归图、危险路径或缺失 Sandbox 均失败关闭
+  - Skill secret-purpose 只进入权限策略，MCP Secret Reference 只以 secret:// 引用进入 Manifest
+  - Bundle 编译和验证不启用 Runtime Worker，不访问 Registry、供应商网络或 Secret 明文
+follow_up:
+  - AP-E2-003 接入 Release Workflow、RuntimeBundle Store、对象存储 Artifact Reader、签名/SBOM/扫描和发布失败保护
+  - 生产发布前补齐 Sandbox Profile 管理入口并回填 AP-E1-009 Registry manifest digest

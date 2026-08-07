@@ -3,17 +3,25 @@
 from fastapi import FastAPI
 
 from apps.api.http import RequestContextMiddleware, install_exception_handlers
+from apps.api.routes.agents import create_agent_router
 from apps.api.routes.auth import create_auth_router
 from apps.api.routes.health import create_health_router
 from apps.api.routes.iam import create_iam_router
 from apps.api.routes.metrics import create_metrics_router
+from apps.api.routes.models import create_model_router
 from apps.api.routes.prompts import create_prompt_router
+from apps.api.routes.releases import create_release_router
 from packages.application.public import (
+    AgentManagementService,
     CurrentIdentityService,
+    DeploymentManagementService,
     HealthService,
     IamManagementService,
     IdentityReader,
+    ModelManagementService,
     PromptManagementService,
+    PublicationQueryService,
+    ReleaseManagementService,
 )
 from packages.contracts.public import IdentityProvider
 from packages.infrastructure.auth.public import MockIdentityProvider
@@ -27,7 +35,12 @@ def create_app(
     identity_reader: IdentityReader | None = None,
     identity_provider: IdentityProvider | None = None,
     iam_service: IamManagementService | None = None,
+    agent_service: AgentManagementService | None = None,
+    model_service: ModelManagementService | None = None,
     prompt_service: PromptManagementService | None = None,
+    release_service: ReleaseManagementService | None = None,
+    deployment_service: DeploymentManagementService | None = None,
+    publication_query_service: PublicationQueryService | None = None,
     metrics: PlatformMetrics | None = None,
 ) -> FastAPI:
     """Build the API application without connecting to external dependencies."""
@@ -59,7 +72,21 @@ def create_app(
         create_iam_router(resolved_identity_provider, iam_service)
     )
     application.include_router(
+        create_agent_router(resolved_identity_provider, agent_service)
+    )
+    application.include_router(
         create_prompt_router(resolved_identity_provider, prompt_service)
+    )
+    application.include_router(
+        create_model_router(resolved_identity_provider, model_service)
+    )
+    application.include_router(
+        create_release_router(
+            resolved_identity_provider,
+            release_service,
+            deployment_service,
+            publication_query_service,
+        )
     )
     application.include_router(
         create_metrics_router(

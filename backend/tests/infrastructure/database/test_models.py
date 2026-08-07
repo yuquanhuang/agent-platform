@@ -1,6 +1,6 @@
 """IAM metadata constraint and index tests."""
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
+from sqlalchemy import JSON, CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 
 from packages.infrastructure.database.public import Base
 
@@ -21,12 +21,22 @@ def index_names(table_name: str) -> set[str]:
 def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
     assert {
         "app_user",
+        "agent_binding",
+        "agent_definition",
+        "agent_snapshot",
+        "agent_version",
         "audit_log",
+        "budget_reservation",
         "idempotency_record",
+        "model_binding_snapshot",
+        "model_rate_limit_window",
         "operation_record",
         "outbox_event",
         "resource_definition",
         "resource_version",
+        "release",
+        "runtime_bundle",
+        "deployment",
         "role",
         "role_binding",
         "role_permission",
@@ -45,6 +55,19 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         "outbox_event": "ix_outbox_event__tenant_id_id",
         "resource_definition": "uq_resource_definition__tenant_id_id",
         "resource_version": "ix_resource_version__tenant_definition_published_at",
+        "model_usage": "ix_model_usage__tenant_id_run_id",
+        "model_binding_snapshot": (
+            "ix_model_binding_snapshot__tenant_model_config_definition"
+        ),
+        "budget_reservation": ("ix_budget_reservation__tenant_run_status_expires"),
+        "model_rate_limit_window": ("ix_model_rate_limit_window__window_started_at"),
+        "agent_definition": "uq_agent_definition__tenant_id_id",
+        "agent_binding": "ix_agent_binding__tenant_agent",
+        "agent_version": "uq_agent_version__tenant_id_id",
+        "agent_snapshot": "uq_agent_snapshot__tenant_id_id",
+        "release": "uq_release__tenant_id_id",
+        "runtime_bundle": "uq_runtime_bundle__tenant_id_id",
+        "deployment": "uq_deployment__tenant_id_id",
     }
 
     for table_name, expected_index in expected_tenant_indexes.items():
@@ -53,6 +76,248 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         assert expected_index in index_names(table_name) | constraint_names(
             table_name, UniqueConstraint
         )
+
+
+def test_model_usage_metadata_has_normalized_usage_fields_and_indexes() -> None:
+    table = Base.metadata.tables["model_usage"]
+    assert {
+        "tenant_id",
+        "run_id",
+        "provider",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "token_estimated",
+        "cost_amount",
+        "cost_currency",
+    } <= set(table.c.keys())
+    assert {
+        "ix_model_usage__tenant_id_run_id",
+        "ix_model_usage__tenant_id_finished_at",
+    } <= index_names("model_usage")
+
+
+def test_model_binding_snapshot_freezes_provider_and_model_configuration() -> None:
+    table = Base.metadata.tables["model_binding_snapshot"]
+
+    assert {
+        "tenant_id",
+        "model_config_definition_id",
+        "model_config_version_id",
+        "provider_definition_id",
+        "provider_type",
+        "base_url",
+        "secret_ref",
+        "provider_timeout_seconds",
+        "model_id",
+        "capabilities_json",
+        "default_parameters_json",
+        "max_context_tokens",
+        "rate_limit_rpm",
+        "snapshot_hash",
+    } <= set(table.c.keys())
+    assert "uq_model_binding_snapshot__model_config_version_id" in constraint_names(
+        "model_binding_snapshot", UniqueConstraint
+    )
+    assert {
+        "fk_model_binding_snapshot__config_definition",
+        "fk_model_binding_snapshot__config_version",
+        "fk_model_binding_snapshot__provider_definition",
+    } <= constraint_names("model_binding_snapshot", ForeignKeyConstraint)
+
+
+def test_model_gateway_admission_metadata_is_tenant_scoped() -> None:
+    reservation = Base.metadata.tables["budget_reservation"]
+    window = Base.metadata.tables["model_rate_limit_window"]
+
+    assert {
+        "tenant_id",
+        "run_id",
+        "user_id",
+        "agent_id",
+        "model_binding_id",
+        "idempotency_key",
+        "reserved_tokens",
+        "consumed_tokens",
+        "status",
+        "expires_at",
+        "finished_at",
+    } <= set(reservation.c.keys())
+    assert "uq_budget_reservation__tenant_run_idempotency" in constraint_names(
+        "budget_reservation", UniqueConstraint
+    )
+    assert {column.name for column in window.primary_key.columns} == {
+        "tenant_id",
+        "model_binding_id",
+        "provider",
+        "window_started_at",
+    }
+    assert window.c.request_count.nullable is False
+
+
+def test_agent_draft_metadata_has_cas_bindings_and_route_uniqueness() -> None:
+    definition = Base.metadata.tables["agent_definition"]
+    binding = Base.metadata.tables["agent_binding"]
+
+    assert {
+        "tenant_id",
+        "code",
+        "runtime_type",
+        "visibility",
+        "tags_json",
+        "owner_user_id",
+        "status",
+        "active_deployment_id",
+        "resource_version",
+        "deleted_at",
+    } <= set(definition.c.keys())
+    assert {
+        "tenant_id",
+        "agent_id",
+        "resource_type",
+        "resource_id",
+        "version_policy",
+        "fixed_version_id",
+        "binding_role",
+        "configuration_json",
+        "configuration_schema_version",
+    } <= set(binding.c.keys())
+    assert {
+        "uq_agent_binding__agent_resource_role",
+        "uq_agent_binding__agent_model_role",
+        "ix_agent_binding__tenant_resource",
+    } <= index_names("agent_binding")
+    configuration_type = binding.c.configuration_json.type
+    assert isinstance(configuration_type, JSON)
+    assert configuration_type.none_as_null is True
+    assert "fk_agent_binding__tenant_agent__agent_definition" in constraint_names(
+        "agent_binding", ForeignKeyConstraint
+    )
+
+
+def test_agent_snapshot_metadata_is_versioned_and_immutable_by_shape() -> None:
+    version = Base.metadata.tables["agent_version"]
+    snapshot = Base.metadata.tables["agent_snapshot"]
+
+    assert {
+        "tenant_id",
+        "agent_id",
+        "version_no",
+        "created_from_version_id",
+        "release_note",
+        "created_by",
+    } <= set(version.c.keys())
+    assert {
+        "tenant_id",
+        "agent_version_id",
+        "schema_version",
+        "content_json",
+        "content_hash",
+        "compiler_input_hash",
+        "created_by",
+    } <= set(snapshot.c.keys())
+    assert "uq_agent_version__agent_id_version_no" in constraint_names(
+        "agent_version", UniqueConstraint
+    )
+    assert "uq_agent_snapshot__agent_version_id" in constraint_names(
+        "agent_snapshot", UniqueConstraint
+    )
+    assert {
+        "fk_agent_version__tenant_agent__agent_definition",
+        "fk_agent_version__tenant_created_from__agent_version",
+    } <= constraint_names("agent_version", ForeignKeyConstraint)
+    assert "fk_agent_snapshot__tenant_version__agent_version" in constraint_names(
+        "agent_snapshot", ForeignKeyConstraint
+    )
+
+
+def test_release_and_runtime_bundle_metadata_support_durable_workflow_state() -> None:
+    release = Base.metadata.tables["release"]
+    bundle = Base.metadata.tables["runtime_bundle"]
+
+    assert {
+        "tenant_id",
+        "agent_id",
+        "requested_by",
+        "operation_id",
+        "release_kind",
+        "expected_agent_version",
+        "requested_snapshot_id",
+        "runtime_targets_json",
+        "run_smoke_test",
+        "activate_on_success",
+        "status",
+        "workflow_id",
+        "snapshot_id",
+        "deployment_ids_json",
+        "error_code",
+        "error_detail_json",
+        "started_at",
+        "finished_at",
+    } <= set(release.c.keys())
+    assert {
+        "tenant_id",
+        "snapshot_id",
+        "runtime_type",
+        "compiler_name",
+        "compiler_version",
+        "manifest_schema_version",
+        "manifest_json",
+        "content_hash",
+        "object_uri",
+        "size_bytes",
+        "signature_ref",
+        "sbom_ref",
+        "scan_status",
+    } <= set(bundle.c.keys())
+    assert "fk_release__tenant_snapshot__agent_snapshot" in constraint_names(
+        "release", ForeignKeyConstraint
+    )
+    assert "fk_runtime_bundle__tenant_snapshot__agent_snapshot" in constraint_names(
+        "runtime_bundle", ForeignKeyConstraint
+    )
+    assert "uq_runtime_bundle__snapshot_runtime_compiler_hash" in constraint_names(
+        "runtime_bundle", UniqueConstraint
+    )
+
+
+def test_deployment_metadata_enforces_history_fencing_and_single_active() -> None:
+    deployment = Base.metadata.tables["deployment"]
+    release = Base.metadata.tables["release"]
+
+    assert {
+        "tenant_id",
+        "release_id",
+        "agent_id",
+        "snapshot_id",
+        "bundle_id",
+        "runtime_target_id",
+        "status",
+        "compatibility_hash",
+        "activation_fencing_token",
+        "activated_at",
+        "retired_at",
+    } <= set(deployment.c.keys())
+    assert "activation_fencing_token" in release.c
+    assert "uq_deployment__tenant_agent_runtime_target_active" in index_names(
+        "deployment"
+    )
+    assert "uq_deployment__release_runtime_target" in constraint_names(
+        "deployment", UniqueConstraint
+    )
+    assert {
+        "fk_deployment__tenant_release_agent_snapshot__release",
+        "fk_deployment__tenant_agent__agent_definition",
+        "fk_deployment__tenant_snapshot__agent_snapshot",
+        "fk_deployment__tenant_snapshot_bundle__runtime_bundle",
+    } <= constraint_names("deployment", ForeignKeyConstraint)
+    assert (
+        "fk_agent_definition__tenant_active_deployment__deployment"
+        in constraint_names("agent_definition", ForeignKeyConstraint)
+    )
 
 
 def test_membership_has_authorization_and_resource_versions() -> None:

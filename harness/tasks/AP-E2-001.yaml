@@ -1,0 +1,48 @@
+task_id: AP-E2-001
+title: Snapshot 编译与不可变引用
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r6
+requirements: [FR-AGT-002, FR-AGT-003, FR-AGT-006, FR-RES-006, FR-RES-007]
+scope:
+  includes:
+    - 在一致性事务快照内把 Agent Draft Binding 解析为具体不可变版本
+    - 生成 agent_version 和 canonical agent_snapshot
+    - 冻结 ModelConfig Version、路由顺序、fallback_error_codes 和 model_binding_snapshot
+    - 解析已发布子 Agent Snapshot 并拒绝直接或传递递归依赖
+    - 提供 Draft/Snapshot 资源引用查询 Provider
+    - 提供租户隔离的 Agent Version/Snapshot 读取 Port，供后续 Bundle Compiler 使用
+    - 覆盖幂等、CAS、并发保护、RLS 和数据库级不可变约束
+  excludes:
+    - Bundle、Bundle Manifest 和 Runtime Worker
+    - Release Workflow、publishAgent API 和 Temporal 编排
+    - Deployment 激活、Diff API、回滚和前端发布页面
+    - 修改 R6 OpenAPI、RunSpec、RunEvent 或冻结基线 SHA-256
+decisions:
+  - resolve_on_publish 只选择启用 Definition 下最新 PUBLISHED Version
+  - fixed 绑定也必须指向当前可发布 Definition 的 PUBLISHED Version
+  - child Agent 必须已有不可变 Snapshot；未发布、跨租户和递归依赖失败关闭
+  - knowledge 尚未进入 Resource Registry，Snapshot 编译不创建占位版本
+  - expected_draft_resource_version 指 Agent Draft CAS；agent_version.version_no 指发布序号
+compatibility:
+  - Snapshot 只保存 Secret Reference 所属不可变 binding snapshot 的 ID/Hash，不保存 Secret 明文
+  - Runtime 和 Gateway 后续只消费 Snapshot/Version，不回读 Agent、ModelConfig 或 Provider Draft
+  - AP-E1-009 Registry manifest digest 外部回填不阻塞本阶段纯 Snapshot 开发
+verification:
+  commands:
+    - make backend-check
+    - make contract-check
+    - make check-all
+    - git diff --check
+results:
+  domain_application_database_tests: 29_passed
+  backend_check: 234_passed_5_environment_skipped
+  full_chain_check: 239_passed_0_skipped
+  frontend_check: 24_passed
+  contract_baseline: agent-platform-v1-dev-baseline-2026-08-r6_verified
+  generated_contract_files: 16_current
+  dependencies_added: none
+acceptance:
+  - 相同输入 canonical content_hash 和 compiler_input_hash 稳定
+  - 发布后修改 Draft 或 Provider Draft 不改变历史 Snapshot
+  - Agent Version、Snapshot 和模型 binding snapshot 均为不可变引用
+  - Snapshot 引用通过既有 ResourceReferenceProvider 暴露，不建立平行事实表

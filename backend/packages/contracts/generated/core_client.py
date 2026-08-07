@@ -23,6 +23,7 @@ OPERATION_IDS = frozenset(
         "copyAgent",
         "disableAgent",
         "publishAgent",
+        "previewAgentPublish",
         "getRelease",
         "rollbackAgent",
         "listAgentVersions",
@@ -244,6 +245,24 @@ class CoreApiClient:
             body=body,
         )
         return TypeAdapter(models.ReleaseAccepted).validate_python(payload)
+
+    async def preview_agent_publish(
+        self,
+        *,
+        agent_id: models.PreviewAgentPublishAgentId,
+        body: models.PublishAgentPreviewRequest,
+    ) -> models.PublishAgentPreview:
+        path = "/api/v1/agents/{agent_id}/publish-preview".replace(
+            "{agent_id}", quote(str(agent_id), safe="")
+        )
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=None,
+            body=body,
+        )
+        return TypeAdapter(models.PublishAgentPreview).validate_python(payload)
 
     async def get_release(
         self,

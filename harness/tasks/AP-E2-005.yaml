@@ -1,0 +1,57 @@
+task_id: AP-E2-005
+title: 发布预览、Snapshot Diff、版本历史和 Vue 发布页面
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r7
+scope:
+  includes:
+    - 将核心 OpenAPI 升级到 1.4.0，并冻结无副作用 previewAgentPublish 契约
+    - 实现 tenant-scoped AgentVersion 列表、详情和不可变 Snapshot Diff
+    - 在一次一致性读取中复用正式发布解析和编译规则生成 transient Snapshot 预览
+    - 按 Runtime Target 对比当前 ACTIVE Deployment Snapshot，并对敏感内容做摘要或脱敏
+    - 实现 Vue 发布页、版本历史、发布状态轮询和 Agent 编辑页发布入口
+    - 提供数据库支持的 API 组合边界，避免新增能力只能通过测试注入使用
+  excludes:
+    - AP-E2-006 rollbackAgent 实现和回滚按钮
+    - Session/Run Deployment 固定、Runtime Worker 启动和流量切换
+    - Secret、Provider credential、完整 Prompt 或 transient Snapshot 正文展示
+    - 新增 Release 列表或 Runtime Target 管理公共 API
+decisions:
+  - 发布预览使用 POST 请求表达 Draft 版本和 Runtime Target 集合，但必须只读、无幂等记录和发布审计事实
+  - Preview 仅供展示；正式发布继续在事务内重新编译并执行 Draft CAS
+  - Diff 对 canonical JSON 做确定性比较，复杂或敏感值只返回稳定摘要
+  - 多 Runtime Target 分别对比其当前 ACTIVE Deployment Snapshot；首次发布按 added 展示
+compatibility:
+  - 保留既有 publishAgent、getRelease、getDeployment 和 R6 DTO 语义
+  - 新增契约和字段保持向后兼容，生成 DTO 仍由 OpenAPI 单一来源产生
+  - 不修改 Release/Deployment 状态机，不把 Preview 结果持久化为 Snapshot
+verification:
+  commands:
+    - targeted backend and frontend tests
+    - make backend-check
+    - make frontend-check
+    - make contract-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+results:
+  targeted_backend_tests: 15_passed
+  postgresql_publication_query_integration: 1_passed
+  backend_check: 285_passed_7_environment_skipped
+  full_chain_check: 292_passed_0_skipped
+  frontend_check: 29_passed
+  contract_baseline: agent-platform-v1-dev-baseline-2026-08-r7_verified
+  operation_ids: 168_unique
+  generated_contract_files: 16_current
+  dependencies_added: none
+  migrations_added: none
+acceptance:
+  - 打开或刷新发布页不创建 AgentVersion、AgentSnapshot、Release、Outbox 或发布审计记录
+  - Draft 漂移、资源解析失败或权限不足时 Preview/Publish 均失败关闭
+  - 历史查询和 Diff 只返回当前 tenant、指定 Agent 的不可变版本事实
+  - 默认部署组合能够装配真实 PostgreSQL 查询服务；缺少部署依赖时明确失败关闭
+  - Vue 页面覆盖加载、首次发布、变更预览、历史比较、重复提交、成功和失败状态
+follow_up:
+  - AP-E2-006 使用历史 Snapshot 创建新的回滚 Release，不复活旧 Deployment
+  - Sandbox Profile 管理入口未进入当前阶段；ready_to_publish 会明确阻止缺少根 Sandbox 绑定的发布
+  - 外部 CI 仍需回填 AgentScope Registry manifest digest，正式 Release 的供应链门禁继续失败关闭
+  - 部署层需解析 AP_DATABASE_DSN_REF、加载 Runtime Target 配置并调用 create_database_publication_app

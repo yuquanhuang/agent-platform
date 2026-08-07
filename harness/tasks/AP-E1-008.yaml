@@ -1,0 +1,63 @@
+task_id: AP-E1-008
+title: Agent Draft Vue 编辑器与 Epic 1 纵向验收
+status: completed
+current_substage_status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r6
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - path: docs/agent-platform/agent-platform-openapi-v1.yaml
+      sha256: 2025f9f8847e93fbc12986645f77ec76eee2e8774c549608f44aa52281f8f326
+    - path: docs/agent-platform/Agent平台前端页面与交互契约.md
+      sha256: 02a14abb10a723570fbc93cd8832e68d1fdb830ef164cf5e3719045e4b71c28c
+    - path: docs/agent-platform/Agent平台开发执行计划.md
+      sha256: dc18b79f8c752360cbd937283fe75d82459e377a5ade0c146ae62500da9ff2f8
+requirements: [FR-AGT-001, FR-MDL-005, FR-MDL-006, FR-CON-002]
+scope:
+  includes:
+    - /agents 列表、搜索、状态筛选、分页和创建/复制/停用/删除入口
+    - /agents/:id/edit 六步 Agent Draft 编辑器
+    - Prompt 与 ModelConfig 已发布 Version 选择
+    - primary/fallback_1/fallback_2 连续路由和受控错误码配置
+    - 子 Agent resolve_on_publish 绑定
+    - ETag 冲突恢复、重复提交保护和未保存离开提示
+    - 补齐冻结 listAgentReferences 只读端点并在删除前展示引用
+    - Epic 1 Prompt/Model/Agent Draft 真实 PostgreSQL 与 Temporal 纵向回归
+  excludes:
+    - Agent 发布、版本、Snapshot、Bundle、Release 与 Deployment 页面
+    - Session、Run、对话和 RunEvent/SSE
+    - 尚未实现生产 API 的 Skill、MCP、知识库、Sandbox 与预算表单提交
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+compatibility:
+  - 复用生成 CoreApiClient/DTO、统一鉴权 Transport、Vue Query 和 Element Plus
+  - 单模型按 primary 保存；多模型只生成连续角色和主路由配置
+  - 固定 Prompt/ModelConfig 绑定只提交真实已发布 Version ID
+security:
+  - 浏览器不保存 Secret、Token 或完整敏感配置
+  - 前端权限与按钮状态不替代服务端 RBAC、RLS、ETag 和引用约束
+  - 未实现能力明确标记不可用，不创建伪造资源 ID 或配置入口
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+  latest_result:
+    quality_gate: make check-all
+    backend: 218 passed, 0 skipped
+    frontend: 24 tests passed; format, lint, typecheck and build passed
+    contracts: R6 integrity, 167 operationIds and 16 generated files passed
+    integration: PostgreSQL 16 and Temporal test environment passed with zero skips
+    browser: 列表与编辑器加载/失败态布局通过；内置浏览器拦截 /api/*，数据态由组件测试覆盖
+acceptance:
+  - Agent 列表完整处理 loading、empty、error 和操作提交状态
+  - 可创建 Agent 并进入编辑页，保存基本信息和有效 ResourceBinding
+  - Prompt/ModelConfig fixed binding 只能选择实际已发布版本
+  - fallback 最多两级且只允许 RATE_LIMITED、PROVIDER_UNAVAILABLE
+  - ETag 冲突不覆盖用户本地修改并提供重新加载入口
+  - 删除前展示冻结 ReferencePage，存在引用时前端阻止提交
+  - 真实 PostgreSQL/Temporal 全仓门禁零 skip 通过
+open_questions: []

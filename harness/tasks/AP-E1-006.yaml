@@ -1,0 +1,63 @@
+task_id: AP-E1-006
+title: Model Gateway 预算、限流、Token/费用与受控 fallback
+status: in_progress
+current_substage_status: code_complete_and_postgresql_verified
+baseline: agent-platform-v1-dev-baseline-2026-08-r5
+baseline_integrity:
+  hash_algorithm: sha256
+  verified_files:
+    - docs/agent-platform/agent-platform-baseline.yaml
+    - docs/agent-platform/schemas/model-gateway-v1.schema.json
+scope:
+  current_substage:
+    - model_binding_snapshot 与 ModelConfig 发布/回滚原子冻结
+    - 生产 SqlAlchemyModelBindingReader 和冻结默认参数消费
+    - ModelConfig rate_limit_rpm 的 PostgreSQL 固定窗口限流
+    - Run 级 Token 预算预约、结算、过期恢复和并发串行化
+    - fallback 最大层级和允许错误码显式配置
+    - 费用预算在无可信费用表时失败关闭
+  later_substages:
+    - tenant/user/agent 周期 budget_policy 与 quota_policy 配置
+    - 正式版本化供应商费用表和精确费用预估
+    - 多实例容量压测、策略管理入口和运行对账
+  excludes:
+    - 修改冻结 OpenAPI、JSON Schema、基线版本或 SHA-256
+    - 虚构 OpenAI、Qwen、DeepSeek 模型费用
+    - Agent Draft、AgentSnapshot、Run API 或前端页面
+    - Redis 集群限流实现和 Admission Controller 全局并发策略
+data:
+  migrations:
+    - 0008_model_binding_snapshot
+    - 0009_model_gateway_admission
+  rollback:
+    - 0009 removes only Gateway budget reservations and rate windows
+    - 0008 removes binding snapshots and its resource_version tenant key
+security:
+  - Snapshot 冻结 Secret Reference，不保存 Secret 明文
+  - 预算和限流查询必须显式 tenant 条件并启用 FORCE RLS
+  - 未知费用不得按零费用放行带 cost_budget 的请求
+  - 本地限流不得伪装成供应商可 fallback 错误
+fallback:
+  max_levels: 2
+  default: disabled unless binding explicitly configures allowed error codes
+  forbidden_submission_states: [submitted, unknown]
+verification:
+  commands:
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - make check
+    - make check-all
+    - git diff --check
+    - uv lock --check
+acceptance:
+  - ModelConfig 发布与快照写入同事务，失败时全部回滚
+  - Provider 更新不改变既有快照，ModelConfig 回滚复制源版本快照
+  - 生产 ModelBindingReader 只读取同租户不可变快照
+  - RPM 超限返回安全 GATEWAY_RATE_LIMITED 且不触发 fallback
+  - 并发 Run Token 预约不会共同突破剩余预算
+  - 费用不可计算时 cost_budget 请求失败关闭
+  - fallback 仅在绑定允许、层级未超限且 not_submitted 时发生
+open_questions:
+  - tenant/user/agent 周期策略的管理 API 未进入冻结 OpenAPI，后续子阶段先通过基础设施配置和测试装配。
+  - 正式模型费用表仍待 AI 平台架构师配置；配置前费用预算请求失败关闭。

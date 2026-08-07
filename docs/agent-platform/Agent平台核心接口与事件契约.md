@@ -1,6 +1,6 @@
 # Agent 平台核心接口与事件契约
 
-> 文档版本：V1.2  
+> 文档版本：V1.4
 > 文档状态：开发输入基线  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
 > 关联架构：[Agent平台架构与流程设计](./Agent平台架构与流程设计.md)
@@ -188,12 +188,21 @@ DELETE /api/v1/agents/{agent_id}
 ### 6.2 发布
 
 ```text
+POST /api/v1/agents/{agent_id}/publish-preview
 POST /api/v1/agents/{agent_id}/publish
 GET  /api/v1/releases/{release_id}
 POST /api/v1/agents/{agent_id}/rollback
 GET  /api/v1/agents/{agent_id}/versions
+GET  /api/v1/agents/{agent_id}/versions/{version_id}
+GET  /api/v1/agents/{agent_id}/diff
 GET  /api/v1/deployments/{deployment_id}
 ```
+
+`publish-preview` 是无副作用查询：在一次一致性读取中解析指定 Draft 版本，复用正式发布的 Snapshot 编译规则，并按 Runtime Target 对比当前 ACTIVE Deployment Snapshot。它不得创建 AgentVersion、AgentSnapshot、Release、Outbox、幂等记录或发布审计事实；Secret、Provider credential、完整 Prompt 和其他敏感正文只返回引用或稳定摘要。
+
+`ready_to_publish` 只有在 Snapshot 必需绑定满足时为 true：根 Agent 必须绑定已发布 Sandbox Profile，AgentScope 还必须绑定已发布 ModelConfig。它不代表 Registry digest、签名、SBOM、扫描、Smoke 或激活已经通过，这些供应链和部署门禁在正式 Release 中重新校验。
+
+Preview 仅供发布确认。正式 `publishAgent` 必须重新读取 Draft、解析绑定、编译 Snapshot 并执行 `expected_agent_version` CAS，不得直接信任客户端提交或缓存的 Preview 结果。
 
 发布请求：
 
@@ -592,6 +601,11 @@ Fallback 规则：
 - 不跨越模型能力要求。
 - 不在未知提交状态下重复 Tool Result 或用户请求。
 - 每次 fallback 产生可观测事件，但不得暴露供应商密钥和内部地址。
+- fallback 属于 Agent 的 Model `ResourceBinding` 路由策略，不扩展单 Provider 的 ModelConfig 契约。
+- 单 Model binding 未设置 `binding_role` 时服务端规范化为 `primary`；多 Model binding 必须显式声明且恰好包含一个 `primary`，可连续增加 `fallback_1`、`fallback_2`。
+- `configuration_schema_version` 固定为 `model-routing/v1`，配置仅允许位于主 binding，`fallback_error_codes` 仅允许 `RATE_LIMITED`、`PROVIDER_UNAVAILABLE`。
+- 本地限流、Token/费用预算、认证、权限、能力和配置错误禁止 fallback；`PROVIDER_TIMEOUT` 以及 `submitted/unknown` 提交状态禁止 fallback。
+- AgentSnapshot 编译时解析确定的 ModelConfig Version，并冻结每一路由关联的不可变 `model_binding_snapshot`；运行时不得读取 Agent Draft、ModelConfig Draft 或 Provider Draft。
 
 ## 14. Approval 契约
 
