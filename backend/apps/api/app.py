@@ -5,12 +5,19 @@ from fastapi import FastAPI
 from apps.api.http import RequestContextMiddleware, install_exception_handlers
 from apps.api.routes.agents import create_agent_router
 from apps.api.routes.auth import create_auth_router
+from apps.api.routes.events import InternalServiceIdentityProvider, create_event_router
 from apps.api.routes.health import create_health_router
 from apps.api.routes.iam import create_iam_router
 from apps.api.routes.metrics import create_metrics_router
 from apps.api.routes.models import create_model_router
 from apps.api.routes.prompts import create_prompt_router
 from apps.api.routes.releases import create_release_router
+from apps.api.routes.runs import create_run_router
+from apps.api.routes.sessions import create_session_router
+from packages.application.event_service import (
+    RunEventIngestionService,
+    RunEventQueryService,
+)
 from packages.application.public import (
     AgentManagementService,
     CurrentIdentityService,
@@ -18,10 +25,13 @@ from packages.application.public import (
     HealthService,
     IamManagementService,
     IdentityReader,
+    MessageHistoryService,
     ModelManagementService,
     PromptManagementService,
     PublicationQueryService,
     ReleaseManagementService,
+    RunManagementService,
+    SessionManagementService,
 )
 from packages.contracts.public import IdentityProvider
 from packages.infrastructure.auth.public import MockIdentityProvider
@@ -41,6 +51,12 @@ def create_app(
     release_service: ReleaseManagementService | None = None,
     deployment_service: DeploymentManagementService | None = None,
     publication_query_service: PublicationQueryService | None = None,
+    session_service: SessionManagementService | None = None,
+    message_history_service: MessageHistoryService | None = None,
+    run_service: RunManagementService | None = None,
+    run_event_query_service: RunEventQueryService | None = None,
+    internal_service_identity_provider: InternalServiceIdentityProvider | None = None,
+    event_ingestion_service: RunEventIngestionService | None = None,
     metrics: PlatformMetrics | None = None,
 ) -> FastAPI:
     """Build the API application without connecting to external dependencies."""
@@ -86,6 +102,24 @@ def create_app(
             release_service,
             deployment_service,
             publication_query_service,
+        )
+    )
+    application.include_router(
+        create_session_router(
+            resolved_identity_provider, session_service, message_history_service
+        )
+    )
+    application.include_router(
+        create_run_router(
+            resolved_identity_provider,
+            run_service,
+            run_event_query_service,
+        )
+    )
+    application.include_router(
+        create_event_router(
+            internal_service_identity_provider,
+            event_ingestion_service,
         )
     )
     application.include_router(

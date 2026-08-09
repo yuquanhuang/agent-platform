@@ -1,6 +1,6 @@
 # agent平台架构与流程设计
 
-> 文档版本：V1.6  
+> 文档版本：V1.8
 > 文档状态：开发输入基线  
 > 文档索引：[Agent平台开发文档索引](./Agent平台开发文档索引.md)  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
@@ -663,11 +663,13 @@ flowchart TD
     LOCK --> DEPLOY["解析当前 Deployment"]
     DEPLOY --> SNAP["读取 Snapshot 与 Runtime Target"]
     SNAP --> MSG["写入 User Message"]
-    MSG --> RUN["创建 AgentRun: CREATED"]
-    RUN --> SPEC["构造 RunSpec"]
-    SPEC --> WF["启动 AgentRunWorkflow"]
-    WF --> QUEUED["状态 QUEUED"]
-    QUEUED --> RETURN["返回 run_id 与事件订阅地址"]
+    MSG --> RUN["创建 AgentRun: CREATED / assistant_message_id=NULL"]
+    RUN --> OUTBOX["写 run_requested Outbox 并提交"]
+    OUTBOX --> RETURN["返回 run_id 与事件订阅地址"]
+    OUTBOX -. "幂等分发" .-> WF["启动 AgentRunWorkflow"]
+    WF --> MAP["持久化 Workflow ID / Temporal Run ID / 启动结果"]
+    MAP --> SPEC["Activity 读取事实并构造 RunSpec"]
+    SPEC --> QUEUED["状态 QUEUED"]
 ```
 
 Session Run Guard 默认限制同一 Session 同时只有一个主 Run；需要并发时通过消息分支创建新的逻辑 Session 或 Branch。
@@ -1047,7 +1049,7 @@ GET  /api/v1/sessions/{id}/messages
 POST /api/v1/runs
 GET  /api/v1/runs/{id}
 GET  /api/v1/runs/{id}/events
-GET  /api/v1/runs/{id}/stream
+GET  /api/v1/runs/{id}/events/stream
 POST /api/v1/runs/{id}/cancel
 POST /api/v1/runs/{id}/retry
 POST /api/v1/approvals/{id}/decision
@@ -1068,12 +1070,15 @@ Runtime Worker 与平台可使用消息队列或内部 gRPC/HTTP，契约仍以 
 
 1. 校验 Session。
 2. 写 User Message。
-3. 写 Assistant/Run Message。
-4. 创建 AgentRun，状态 CREATED。
-5. 更新 Session Cursor。
-6. 写 Outbox Event。
+3. 创建 `assistant_message_id = NULL` 的 AgentRun，状态 CREATED。
+4. 将 Session Cursor 更新到 User Message。
+5. 写 Outbox Event。
 
 事务提交后由 Outbox Worker 启动 Temporal Workflow，避免“数据库有 Run 但任务未启动”或相反情况。
+
+Outbox Worker 只有在 Workflow 启动成功或确定性 ID 已存在、且启动映射已经幂等写入 AgentRun 后才标记事件 PUBLISHED。若 Temporal 已启动但映射写入失败，事件保持可重试；Reconciler 使用同一确定性 Workflow ID 恢复，不创建第二个 Workflow。长时间 CANCELLING 只允许重发 Cancel Signal 或报告不一致，不依据对账查询直接写 CANCELLED。
+
+Runtime 返回有效最终结果后，终态 Activity 在独立短事务中 INSERT Assistant Message、一次性绑定 Run 并推进 Cursor；失败、取消或超时且没有有效最终结果时不伪造 Assistant Message。Message 内容和父链在任何阶段都不允许 UPDATE/DELETE。
 
 ### 23.2 事件写入
 

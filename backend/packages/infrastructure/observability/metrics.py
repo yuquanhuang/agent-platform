@@ -45,6 +45,12 @@ class PlatformMetrics:
             "Outbox messages claimed by the latest bounded poll.",
             registry=self.registry,
         )
+        self.run_reconciliation = Counter(
+            "agent_platform_run_reconciliation_total",
+            "Stalled Run reconciliation outcomes.",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
         self.model_gateway_requests = Counter(
             "agent_platform_model_gateway_requests_total",
             "Normalized Model Gateway request outcomes.",
@@ -80,6 +86,25 @@ class PlatformMetrics:
         ):
             if count:
                 self.outbox_dispatch.labels(outcome=outcome).inc(count)
+
+    def observe_run_reconciliation(
+        self,
+        *,
+        examined: int,
+        mappings_recorded: int,
+        requests_requeued: int,
+        cancellations_signalled: int,
+        unresolved: int,
+    ) -> None:
+        for outcome, count in (
+            ("examined", examined),
+            ("mapping_recorded", mappings_recorded),
+            ("request_requeued", requests_requeued),
+            ("cancellation_signalled", cancellations_signalled),
+            ("unresolved", unresolved),
+        ):
+            if count:
+                self.run_reconciliation.labels(outcome=outcome).inc(count)
 
     def observe_model_gateway_request(
         self, *, provider: str, mode: str, outcome: str

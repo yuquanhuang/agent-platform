@@ -35,3 +35,22 @@ def test_model_gateway_metrics_exclude_tenant_run_and_model_labels() -> None:
     assert "tenant_id" not in payload
     assert "run_id" not in payload
     assert "model=" not in payload
+
+
+def test_run_reconciliation_metrics_use_only_bounded_outcomes() -> None:
+    metrics = PlatformMetrics()
+    metrics.observe_run_reconciliation(
+        examined=3,
+        mappings_recorded=1,
+        requests_requeued=1,
+        cancellations_signalled=1,
+        unresolved=1,
+    )
+
+    payload = generate_latest(metrics.registry).decode()
+
+    assert 'outcome="mapping_recorded"' in payload
+    assert 'outcome="unresolved"' in payload
+    assert "tenant_id" not in payload
+    assert "run_id" not in payload
+    assert "workflow_id" not in payload

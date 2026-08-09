@@ -1,0 +1,53 @@
+task_id: AP-E3-007
+title: RuntimeEventCandidate Fake 与 Epic 3 纵向验收
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - 为 Run Runtime Executor 增加显式 RuntimeEventCandidate 发布 Port，Candidate 不进入 Temporal Workflow History
+    - 使用测试 Fake 产生冻结 Candidate，并通过独立 Fake Publisher 观测身份、attempt、fencing 和 source_event_id
+    - 使用真实 PostgreSQL、Temporal Test Environment、正式 Outbox Router 和 HTTP createRun/getRun 轮询完成成功纵向闭环
+    - 验证 Session、不可变 USER/ASSISTANT Message、RunAttempt、Workflow 映射、Outbox 和 latest_sequence_no 既有语义
+    - 回归取消、重试、UNKNOWN 不重放 Prompt、旧 fencing 拒绝和 AgentScope 事件转换
+  excludes:
+    - RunEvent 表、sequence_no 分配、Event Store、Redis 通知、SSE 和 AG-UI（Epic 4）
+    - 生产 AgentScope Runtime Worker、对象存储 RunSpec 编译器和 Event Service Client 装配
+    - Epic 7 的深度终态修复、告警和恢复演练
+decisions:
+  - RuntimeEventCandidate Publisher 是 Activity 内存中的显式 Port；Candidate 直接从 Runtime Executor 发布，不作为 Activity 返回值写入 Temporal History
+  - RunExecutionRequest 携带 SecretStr fencing token，仅在 Activity/Runtime/Publisher 内存中短暂使用，数据库继续只保存 Hash
+  - getRun 是 Epic 3 唯一验收轮询入口；latest_sequence_no 在 Epic 4 前保持 0
+  - 成功 Run 只追加一次 ASSISTANT Message；失败、取消和超时无有效结果时不创建回复
+compatibility:
+  - 公共 OpenAPI、Run DTO、RunSpec、RunEvent Schema 和前端生成代码不变
+  - 新增的是后端内部 Port 和测试 Fake；生产 Worker 未完成依赖装配时继续失败关闭
+verification:
+  commands:
+    - targeted backend tests
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 pytest tests/integration/resources/test_resource_registry.py -q
+    - AP_TEST_TEMPORAL=1 pytest tests/integration/temporal/test_probe_workflow.py -q
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - Fake Runtime 发布的 Candidate 全部通过冻结 TypeAdapter，重复 source_event_id 不产生第二次外部副作用
+  - Candidate 发布携带正确 tenant、run、attempt 和 fencing，且未进入 Workflow result/history 或数据库 RunEvent
+  - HTTP createRun 返回 CREATED，正式 Outbox 启动 Workflow 并回写映射，getRun 轮询最终返回 SUCCEEDED
+  - 纵向成功只产生一条 USER 和一条 ASSISTANT Message，二者均不可 UPDATE/DELETE，Session Cursor 指向最终回复
+  - RunAttempt 为 COMPLETED，Outbox 为 PUBLISHED，Workflow 映射完整，latest_sequence_no 仍为 0
+  - 取消、重试、UNKNOWN、旧 fencing、RLS/权限和既有前后端契约无回归
+results:
+  - 新增 RuntimeEventCandidatePublisher 内部 Port；RunExecutionRequest 仅在 Activity 内存携带 SecretStr fencing token
+  - Fake Runtime 发布 4 类冻结 Candidate，重复 source_event_id 的第 5 次发布由 Fake Publisher 幂等收敛
+  - 真实 HTTP createRun、正式 Outbox Router、Temporal Workflow、PostgreSQL 最终化和 getRun 轮询纵向闭环通过
+  - Candidate 未进入 Workflow History，未创建 run_event 表，latest_sequence_no 保持 0
+  - 成功链路只追加一条 USER 和一条 ASSISTANT Message，Session Cursor、Attempt、Workflow 映射和 Outbox 状态正确，消息不可变触发器有效
+  - 定向单元与 Adapter 17 passed；真实 PostgreSQL 1 passed；真实 Temporal 8 passed
+  - 真实 PostgreSQL/Temporal make check-all 后端 375 passed、前端 38 passed
+  - R9 31 个完整性文件、168 个 operationId、16 个生成文件零漂移；未新增依赖或迁移
+follow_up:
+  - AP-E4-001 创建 RunEvent 表和计数器，随后由 Event Service 实现 Publisher
+  - Epic 7 补生产 RunSpec/AgentScope/Event Publisher 装配、告警和恢复演练

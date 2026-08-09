@@ -1,6 +1,6 @@
 # Agent 平台 Temporal 工作流与活动契约
 
-> 文档版本：V1.2  
+> 文档版本：V1.4
 > 文档状态：开发输入基线  
 > SDK：Temporal Python SDK
 
@@ -135,6 +135,8 @@ load_and_validate_run
 | `finalize_run` | terminal candidate | Run terminal | run_id+terminal_type | 可重试、CAS |
 | `release_resources` | handles | ReleaseResult | resource+lease token | 可重试 |
 
+`finalize_run` 对 Message 使用追加语义：只有 RuntimeCompletion 携带通过契约校验的最终结果时，Activity 才 INSERT ASSISTANT Message，并在同一数据库事务内将 Run 的 `assistant_message_id` 从 NULL 一次性绑定到该消息、推进 Session Cursor 和写入终态状态。Activity 重放必须返回已绑定的同一 Message，不得生成重复消息或 UPDATE/DELETE 历史 Message。无有效最终结果的失败、取消或超时只更新 Run 终态和脱敏错误，不创建伪造回复。
+
 ### 5.5 Runtime 长 Activity
 
 `execute_runtime` 通过 heartbeat 保存：
@@ -258,9 +260,9 @@ Continue-As-New 输入保存业务 ID、状态摘要、attempt、等待对象和
 
 1. 以确定 Workflow ID 调用 Start。
 2. 已存在相同 ID 视为成功。
-3. 记录 Temporal Run ID 和启动结果。
+3. 在 Outbox 标记 PUBLISHED 前，将确定性 Workflow ID、Temporal Run ID、`STARTED/ALREADY_EXISTS` 和确认时间写入 AgentRun；同一 Workflow 的重复回写幂等，冲突映射失败关闭。
 4. 超过重试阈值进入 DEAD 并告警。
-5. Reconciler 扫描长时间无 Workflow 的 CREATED/REQUESTED 记录并幂等补启动。
+5. Reconciler 扫描长时间 CREATED/CANCELLING：Temporal 不存在时恢复原 Run Outbox 启动意图，存在时补启动映射；CANCELLING 只重发幂等 Cancel Signal 或报告终态不一致，不直接写 CANCELLED。
 
 ## 13. 测试要求
 

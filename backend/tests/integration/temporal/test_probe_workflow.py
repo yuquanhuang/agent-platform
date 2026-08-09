@@ -1,7 +1,9 @@
-"""Opt-in real Temporal test environment execution for the probe workflow."""
+"""Opt-in real Temporal test environment execution for platform workflows."""
 
+import asyncio
 import os
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -11,25 +13,50 @@ from temporalio.client import WorkflowFailureError
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker
+from temporalio.worker import Replayer, Worker
 
 from packages.application.temporal import (
     CONTROL_PLANE_TASK_QUEUE,
     RUN_ORCHESTRATOR_TASK_QUEUE,
+    AgentRunWorkflow,
     PlatformProbeWorkflow,
     PublishAgentWorkflow,
+    agent_run_workflow_id,
     platform_probe_activity,
     probe_workflow_id,
 )
 from packages.contracts.temporal import (
+    AgentRunWorkflowInput,
+    AssistantTextPart,
+    CancelAgentRuntimeInput,
+    CancelRunSignal,
+    ExecuteAgentRunInput,
+    FinalizeAgentRunCancellationInput,
+    FinalizeAgentRunInput,
+    FinalizeAgentRunResult,
+    InspectAgentRuntimeInput,
     PublishAgentWorkflowInput,
     PublishReleaseFailureInput,
+    RecoverAgentRunInput,
+    RunPreparationResult,
+    RunSpecReference,
+    RuntimeCancellationResult,
+    RuntimeCompletion,
+    RuntimeInspection,
     TemporalWorkerKind,
     WorkflowProbeInput,
 )
 
 FAILED_RELEASE_ID = UUID("99999999-9999-4999-8999-999999999999")
 FAILED_RELEASES: list[PublishReleaseFailureInput] = []
+AGENT_RUN_ID = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+ASSISTANT_MESSAGE_ID = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+FAILED_AGENT_RUN_ID = UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+RECOVERY_AGENT_RUN_ID = UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+UNKNOWN_AGENT_RUN_ID = UUID("ffffffff-ffff-4fff-8fff-ffffffffffff")
+_run_execution_gate: asyncio.Event | None = None
+RUN_FINALIZATIONS: list[FinalizeAgentRunInput] = []
+RUN_EXECUTION_ATTEMPTS: dict[UUID, list[int]] = {}
 
 
 @activity.defn(name="validate_release_v1")
@@ -65,6 +92,130 @@ async def fake_activate_release(input: PublishAgentWorkflowInput) -> None:
 @activity.defn(name="fail_release_v1")
 async def fake_fail_release(input: PublishReleaseFailureInput) -> None:
     FAILED_RELEASES.append(input)
+
+
+@activity.defn(name="prepare_agent_run_v1")
+async def fake_prepare_agent_run(
+    input: AgentRunWorkflowInput,
+) -> RunPreparationResult:
+    if input.run_id == FAILED_AGENT_RUN_ID:
+        raise ApplicationError(
+            "RunSpec compilation failed.",
+            type="RUN_SPEC_UNAVAILABLE",
+            non_retryable=True,
+        )
+    return RunPreparationResult(
+        run_id=input.run_id,
+        execution_attempt=1,
+        run_spec=RunSpecReference(
+            uri=f"immutable://run-spec/{input.run_id}/1",
+            content_hash="sha256:" + "a" * 64,
+            size_bytes=1024,
+        ),
+        timeout_seconds=30,
+        runtime_type="agentscope",
+    )
+
+
+@activity.defn(name="execute_agent_run_v1")
+async def fake_execute_agent_run(input: ExecuteAgentRunInput) -> RuntimeCompletion:
+    RUN_EXECUTION_ATTEMPTS.setdefault(input.run_id, []).append(input.execution_attempt)
+    if (
+        input.run_id in {RECOVERY_AGENT_RUN_ID, UNKNOWN_AGENT_RUN_ID}
+        and input.execution_attempt == 1
+    ):
+        raise ApplicationError(
+            "Runtime worker was lost.",
+            type="RUNTIME_EXECUTION_FAILED",
+            non_retryable=True,
+        )
+    gate = _run_execution_gate
+    if gate is not None:
+        await gate.wait()
+    return RuntimeCompletion(
+        status="SUCCEEDED",
+        assistant_content_parts=(AssistantTextPart(text="completed"),),
+        result_quality="NORMAL",
+        runtime_handle_ref=f"runtime://{input.run_id}/{input.execution_attempt}",
+    )
+
+
+@activity.defn(name="finalize_agent_run_v1")
+async def fake_finalize_agent_run(
+    input: FinalizeAgentRunInput,
+) -> FinalizeAgentRunResult:
+    RUN_FINALIZATIONS.append(input)
+    return FinalizeAgentRunResult(
+        run_id=input.run_id,
+        status=input.completion.status,
+        assistant_message_id=(
+            ASSISTANT_MESSAGE_ID if input.completion.status == "SUCCEEDED" else None
+        ),
+    )
+
+
+@activity.defn(name="inspect_agent_runtime_v1")
+async def fake_inspect_agent_runtime(
+    input: InspectAgentRuntimeInput,
+) -> RuntimeInspection:
+    if input.run_id == RECOVERY_AGENT_RUN_ID:
+        return RuntimeInspection(
+            run_id=input.run_id,
+            execution_attempt=input.execution_attempt,
+            status="LOST",
+            safe_to_retry=True,
+        )
+    if input.run_id == UNKNOWN_AGENT_RUN_ID:
+        return RuntimeInspection(
+            run_id=input.run_id,
+            execution_attempt=input.execution_attempt,
+            status="UNKNOWN",
+        )
+    return RuntimeInspection(
+        run_id=input.run_id,
+        execution_attempt=input.execution_attempt,
+        status="RUNNING",
+    )
+
+
+@activity.defn(name="recover_agent_run_v1")
+async def fake_recover_agent_run(input: RecoverAgentRunInput) -> RunPreparationResult:
+    return RunPreparationResult(
+        run_id=input.run_id,
+        execution_attempt=input.lost_execution_attempt + 1,
+        run_spec=RunSpecReference(
+            uri=f"immutable://run-spec/{input.run_id}/{input.lost_execution_attempt + 1}",
+            content_hash="sha256:" + "b" * 64,
+            size_bytes=1024,
+        ),
+        timeout_seconds=30,
+        runtime_type="agentscope",
+    )
+
+
+@activity.defn(name="cancel_agent_runtime_v1")
+async def fake_cancel_agent_runtime(
+    input: CancelAgentRuntimeInput,
+) -> RuntimeCancellationResult:
+    return RuntimeCancellationResult(
+        run_id=input.run_id,
+        execution_attempt=input.execution_attempt,
+        status="CANCELLED",
+    )
+
+
+@activity.defn(name="finalize_agent_run_cancellation_v1")
+async def fake_finalize_agent_run_cancellation(
+    input: FinalizeAgentRunCancellationInput,
+) -> FinalizeAgentRunResult:
+    return FinalizeAgentRunResult(
+        run_id=input.run_id,
+        status=(
+            "CANCELLED"
+            if input.cancellation.status in {"CANCELLED", "ALREADY_STOPPED"}
+            else "FAILED"
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -258,3 +409,186 @@ async def test_publish_workflow_terminalizes_release_after_stage_failure() -> No
     assert len(FAILED_RELEASES) == 1
     assert FAILED_RELEASES[0].release_id == FAILED_RELEASE_ID
     assert FAILED_RELEASES[0].error_code == "BUNDLE_SCAN_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_agent_run_workflow_query_and_duplicate_cancel_signal() -> None:
+    if os.getenv("AP_TEST_TEMPORAL") != "1":
+        pytest.skip("AP_TEST_TEMPORAL=1 is required for Temporal integration test")
+    global _run_execution_gate
+    _run_execution_gate = asyncio.Event()
+    tenant_id = UUID("11111111-1111-4111-8111-111111111111")
+    input = AgentRunWorkflowInput(
+        tenant_id=tenant_id,
+        run_id=AGENT_RUN_ID,
+        request_id="req-agent-run-integration",
+        trace_id="trace-agent-run-integration",
+    )
+    download_dir = Path(tempfile.gettempdir()) / "agent-platform-temporal-test"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    async with (
+        await WorkflowEnvironment.start_time_skipping(
+            data_converter=pydantic_data_converter,
+            download_dest_dir=str(download_dir),
+        ) as environment,
+        Worker(
+            environment.client,
+            task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+            workflows=[AgentRunWorkflow],
+            activities=[
+                fake_prepare_agent_run,
+                fake_execute_agent_run,
+                fake_inspect_agent_runtime,
+                fake_cancel_agent_runtime,
+                fake_recover_agent_run,
+                fake_finalize_agent_run,
+                fake_finalize_agent_run_cancellation,
+            ],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            AgentRunWorkflow.run,
+            input,
+            id=agent_run_workflow_id(tenant_id, AGENT_RUN_ID),
+            task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+        )
+        state = None
+        for _ in range(100):
+            state = await handle.query(AgentRunWorkflow.run_state)
+            if state.status == "RUNNING":
+                break
+            await asyncio.sleep(0.01)
+        assert state is not None and state.status == "RUNNING"
+        signal = CancelRunSignal(
+            signal_id="cancel-run-integration-1",
+            requested_by=UUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
+            requested_at=datetime(2026, 8, 8, tzinfo=UTC),
+            reason="test intent only",
+        )
+        await handle.signal(AgentRunWorkflow.cancel_run, signal)
+        await handle.signal(AgentRunWorkflow.cancel_run, signal)
+        signalled_state = await handle.query(AgentRunWorkflow.run_state)
+        assert signalled_state.cancel_requested is True
+        assert signalled_state.status == "CANCELLING"
+        _run_execution_gate.set()
+        result = await handle.result()
+        terminal_state = await handle.query(AgentRunWorkflow.run_state)
+        history = await handle.fetch_history()
+
+    _run_execution_gate = None
+    replay = await Replayer(
+        workflows=[AgentRunWorkflow], data_converter=pydantic_data_converter
+    ).replay_workflow(history)
+    assert result.status == "CANCELLED"
+    assert result.assistant_message_id is None
+    assert terminal_state.status == "CANCELLED"
+    assert terminal_state.cancel_requested is True
+    assert replay.replay_failure is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run_id", "expected_status", "expected_attempts"),
+    [
+        (RECOVERY_AGENT_RUN_ID, "SUCCEEDED", [1, 2]),
+        (UNKNOWN_AGENT_RUN_ID, "FAILED", [1]),
+    ],
+)
+async def test_agent_run_workflow_inspects_before_safe_recovery(
+    run_id: UUID, expected_status: str, expected_attempts: list[int]
+) -> None:
+    if os.getenv("AP_TEST_TEMPORAL") != "1":
+        pytest.skip("AP_TEST_TEMPORAL=1 is required for Temporal integration test")
+    RUN_EXECUTION_ATTEMPTS.pop(run_id, None)
+    tenant_id = UUID("11111111-1111-4111-8111-111111111111")
+    input = AgentRunWorkflowInput(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        request_id=f"req-{run_id}",
+        trace_id=f"trace-{run_id}",
+    )
+    download_dir = Path(tempfile.gettempdir()) / "agent-platform-temporal-test"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    async with (
+        await WorkflowEnvironment.start_time_skipping(
+            data_converter=pydantic_data_converter,
+            download_dest_dir=str(download_dir),
+        ) as environment,
+        Worker(
+            environment.client,
+            task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+            workflows=[AgentRunWorkflow],
+            activities=[
+                fake_prepare_agent_run,
+                fake_execute_agent_run,
+                fake_inspect_agent_runtime,
+                fake_cancel_agent_runtime,
+                fake_recover_agent_run,
+                fake_finalize_agent_run,
+                fake_finalize_agent_run_cancellation,
+            ],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            AgentRunWorkflow.run,
+            input,
+            id=agent_run_workflow_id(tenant_id, run_id),
+            task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+        )
+        result = await handle.result()
+        history = await handle.fetch_history()
+
+    replay = await Replayer(
+        workflows=[AgentRunWorkflow], data_converter=pydantic_data_converter
+    ).replay_workflow(history)
+    assert result.status == expected_status
+    assert RUN_EXECUTION_ATTEMPTS[run_id] == expected_attempts
+    assert replay.replay_failure is None
+
+
+@pytest.mark.asyncio
+async def test_agent_run_workflow_terminalizes_prepare_failure() -> None:
+    if os.getenv("AP_TEST_TEMPORAL") != "1":
+        pytest.skip("AP_TEST_TEMPORAL=1 is required for Temporal integration test")
+    RUN_FINALIZATIONS.clear()
+    tenant_id = UUID("11111111-1111-4111-8111-111111111111")
+    input = AgentRunWorkflowInput(
+        tenant_id=tenant_id,
+        run_id=FAILED_AGENT_RUN_ID,
+        request_id="req-agent-run-failure",
+        trace_id="trace-agent-run-failure",
+    )
+    download_dir = Path(tempfile.gettempdir()) / "agent-platform-temporal-test"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    async with (
+        await WorkflowEnvironment.start_time_skipping(
+            data_converter=pydantic_data_converter,
+            download_dest_dir=str(download_dir),
+        ) as environment,
+        Worker(
+            environment.client,
+            task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+            workflows=[AgentRunWorkflow],
+            activities=[
+                fake_prepare_agent_run,
+                fake_execute_agent_run,
+                fake_inspect_agent_runtime,
+                fake_cancel_agent_runtime,
+                fake_recover_agent_run,
+                fake_finalize_agent_run,
+                fake_finalize_agent_run_cancellation,
+            ],
+        ),
+    ):
+        with pytest.raises(WorkflowFailureError):
+            await environment.client.execute_workflow(
+                AgentRunWorkflow.run,
+                input,
+                id=agent_run_workflow_id(tenant_id, FAILED_AGENT_RUN_ID),
+                task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+            )
+
+    assert len(RUN_FINALIZATIONS) == 1
+    assert RUN_FINALIZATIONS[0].execution_attempt == 1
+    assert RUN_FINALIZATIONS[0].completion.status == "FAILED"
+    assert RUN_FINALIZATIONS[0].completion.error_code == "RUN_SPEC_UNAVAILABLE"

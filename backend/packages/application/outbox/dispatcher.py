@@ -30,6 +30,19 @@ class WorkflowStarter(Protocol):
     async def start(self, event: OutboxEvent) -> WorkflowStartResult: ...
 
 
+class WorkflowStartResultRecorder(Protocol):
+    """Persist a successful external start before the Outbox is acknowledged."""
+
+    async def record(
+        self,
+        context: TenantContext,
+        event: OutboxEvent,
+        result: WorkflowStartResult,
+        *,
+        now: datetime,
+    ) -> None: ...
+
+
 class OutboxStore(Protocol):
     """Each method owns a short database transaction and returns after commit."""
 
@@ -75,6 +88,7 @@ class OutboxDispatcher:
         store: OutboxStore,
         starter: WorkflowStarter,
         *,
+        result_recorder: WorkflowStartResultRecorder | None = None,
         batch_size: int = 50,
         max_attempts: int = 10,
         lease_duration: timedelta = timedelta(seconds=30),
@@ -86,6 +100,7 @@ class OutboxDispatcher:
             raise ValueError("dispatcher timeouts must be positive")
         self._store = store
         self._starter = starter
+        self._result_recorder = result_recorder
         self._batch_size = batch_size
         self._max_attempts = max_attempts
         self._lease_duration = lease_duration
@@ -103,10 +118,12 @@ class OutboxDispatcher:
         published = retried = dead = 0
         for event in claimed:
             try:
-                await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     self._starter.start(event),
                     timeout=self._start_timeout.total_seconds(),
                 )
+                if self._result_recorder is not None:
+                    await self._result_recorder.record(context, event, result, now=now)
             except PermanentOutboxError:
                 await self._store.mark_dead(context, event.id, now=now)
                 dead += 1

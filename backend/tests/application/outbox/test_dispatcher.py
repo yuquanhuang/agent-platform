@@ -102,15 +102,62 @@ class FakeStarter:
         )
 
 
+class FakeRecorder:
+    def __init__(self, store: FakeStore, error: Exception | None = None) -> None:
+        self._store = store
+        self._error = error
+
+    async def record(
+        self,
+        context: TenantContext,
+        event: OutboxEvent,
+        result: WorkflowStartResult,
+        *,
+        now: datetime,
+    ) -> None:
+        del context
+        assert self._store.transaction_active is False
+        self._store.actions.append(("recorded", event.id))
+        assert result.workflow_id == "probe/tenant/probe"
+        assert now == NOW
+        if self._error is not None:
+            raise self._error
+
+
 @pytest.mark.asyncio
 async def test_dispatcher_starts_temporal_after_claim_transaction_commits() -> None:
     store = FakeStore((claimed_event(),))
-    dispatcher = OutboxDispatcher(store, FakeStarter(store))
+    dispatcher = OutboxDispatcher(
+        store,
+        FakeStarter(store),
+        result_recorder=FakeRecorder(store),
+    )
 
     summary = await dispatcher.dispatch_tenant_once(tenant_context(), now=NOW)
 
     assert summary.published == 1
-    assert store.actions == [("claim", str(TENANT_ID)), ("published", EVENT_ID)]
+    assert store.actions == [
+        ("claim", str(TENANT_ID)),
+        ("recorded", EVENT_ID),
+        ("published", EVENT_ID),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_retries_when_start_result_persistence_fails() -> None:
+    store = FakeStore((claimed_event(attempts=2),))
+    dispatcher = OutboxDispatcher(
+        store,
+        FakeStarter(store),
+        result_recorder=FakeRecorder(
+            store, RetryableOutboxError("mapping unavailable")
+        ),
+    )
+
+    summary = await dispatcher.dispatch_tenant_once(tenant_context(), now=NOW)
+
+    assert summary.retried == 1
+    assert store.actions[-1] == ("retry", NOW + timedelta(seconds=2))
 
 
 @pytest.mark.asyncio

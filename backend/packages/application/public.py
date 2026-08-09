@@ -6,12 +6,28 @@ from packages.application.bundles import (
     BundleArtifactReader,
     BundleInputReader,
 )
+from packages.application.event_service import (
+    EVENT_WRITE_PERMISSION,
+    EventWriteAccess,
+    RunEventAppendStore,
+    RunEventIngestionService,
+    RunEventPageRecord,
+    RunEventQueryAccessResolver,
+    RunEventQueryService,
+    RunEventQueryStore,
+    RunEventRecord,
+)
 from packages.application.health import HealthService
 from packages.application.iam.public import (
     CurrentIdentityService,
     IamManagementService,
     IamPersistence,
     IdentityReader,
+)
+from packages.application.messages import (
+    MessageHistoryAccessResolver,
+    MessageHistoryService,
+    MessageHistoryStore,
 )
 from packages.application.metadata import RequestMetadata
 from packages.application.model_gateway import (
@@ -56,10 +72,24 @@ from packages.application.resources import (
     TenantAccessResolver,
     canonical_request_hash,
 )
+from packages.application.runs import (
+    RUN_REQUESTED_EVENT,
+    RunAccessResolver,
+    RunManagementService,
+    RunStore,
+    RunWorkflowControl,
+)
+from packages.application.sessions import (
+    SessionAccessResolver,
+    SessionManagementService,
+    SessionStore,
+)
 
 __all__ = [
+    "EVENT_WRITE_PERMISSION",
     "MODEL_PROVIDER_CONNECTION_TEST_EVENT",
     "RELEASE_REQUESTED_EVENT",
+    "RUN_REQUESTED_EVENT",
     "AgentManagementService",
     "AgentRegistry",
     "AgentScopeBundleCompilationService",
@@ -70,10 +100,14 @@ __all__ = [
     "DeploymentAccessResolver",
     "DeploymentManagementService",
     "DeploymentStore",
+    "EventWriteAccess",
     "HealthService",
     "IamManagementService",
     "IamPersistence",
     "IdentityReader",
+    "MessageHistoryAccessResolver",
+    "MessageHistoryService",
+    "MessageHistoryStore",
     "ModelGatewayService",
     "ModelManagementService",
     "ModelProviderConnectionTestHandler",
@@ -94,6 +128,20 @@ __all__ = [
     "RequestMetadata",
     "ResourceReferenceProvider",
     "RetryableOutboxError",
+    "RunAccessResolver",
+    "RunEventAppendStore",
+    "RunEventIngestionService",
+    "RunEventPageRecord",
+    "RunEventQueryAccessResolver",
+    "RunEventQueryService",
+    "RunEventQueryStore",
+    "RunEventRecord",
+    "RunManagementService",
+    "RunStore",
+    "RunWorkflowControl",
+    "SessionAccessResolver",
+    "SessionManagementService",
+    "SessionStore",
     "SnapshotAccessResolver",
     "SnapshotCompilationService",
     "SnapshotCompilationStore",

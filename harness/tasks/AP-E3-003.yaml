@@ -1,0 +1,50 @@
+task_id: AP-E3-003
+title: Run 创建、幂等、状态机和 Snapshot 绑定
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r7
+scope:
+  includes:
+    - 实现冻结 listSessionRuns、createRun 和 getRun，不修改公共契约
+    - 在同一事务锁定 Session、校验并发、写 USER Message、AgentRun、Outbox、审计和 Session Cursor
+    - Run 固定精确 Deployment、Snapshot 和预算输入，不从 Agent Draft 或后续发布重新解析
+    - 新增 agent_run、run_attempt、状态机约束、幂等、FORCE RLS 和 tenant_admin Run 权限
+    - 在 Session 删除事务补齐非终态 Run 拒绝检查
+    - 完成真实 PostgreSQL 幂等、并发、固定 Snapshot、租户/用户隔离和迁移验证
+  excludes:
+    - AgentRunWorkflow、Activity、Signal、Query、Runtime Adapter 执行和 RunSpec 编译
+    - cancelRun、retryRun、执行接管、fencing token 生成和 RunAttempt 实际分配
+    - RunEvent Store、SSE、AG-UI、Artifact 表、附件内容解析或伪造 Artifact 成功
+    - 在创建事务写入可变或虚假的 ASSISTANT Message 占位
+requirements: [FR-RUN-001, FR-RUN-002, FR-CON-001, FR-CON-004]
+decisions:
+  - 采用人工批准的方案 1，assistant_message_id 暂可为空；AP-E3-004 取得有效终态结果后只 INSERT ASSISTANT Message
+  - 创建事务将 Session Cursor 指向新 USER Message；AP-E3-004 在插入最终 ASSISTANT Message时再次原子推进 Cursor
+  - chat_message 继续绝对禁止 UPDATE/DELETE，不为占位或流式输出增加例外
+  - RunAttempt 表和状态机在本阶段建立，实际 Attempt 由 AP-E3-004 Workflow 分配
+  - Session 默认 Deployment 即使后续 RETIRED 仍可供该历史 Session 固定运行；显式 Deployment 必须属于同 Agent 且处于 ACTIVE 或 DEGRADED
+  - Artifact 事实表尚未实现时，非空 attachments 失败关闭，不保存未授权裸引用
+compatibility:
+  - R7 RunCreateRequest、RunAccepted、Run、RunPage 保持不变，生成 Client/DTO 无需更新
+  - 数据库详细设计中 assistant_message_id 非空描述作为已批准例外，最晚 AP-E3-004 开始前同步正式基线文档
+  - AP-E3-004 必须在最终化事务设置 assistant_message_id，且只能从 NULL 变为同 Run 新插入的 ASSISTANT Message
+verification:
+  commands:
+    - targeted backend tests
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 创建成功时 USER Message、Run、Outbox、审计和 Cursor 要么全部提交，要么全部回滚
+  - 同一 Session/分支存在非终态 Run 时返回 RUN_ALREADY_ACTIVE，数据库约束提供最终防线
+  - 幂等重放返回原 Run；同键不同请求返回 IDEMPOTENCY_KEY_REUSED
+  - Run 固定 Session/显式 Deployment 对应的 Snapshot，发布或回滚不会改变历史 Run
+  - 跨租户、跨用户和无权限请求不可见；仅 ACTIVE Session 可创建 Run，ARCHIVED 保留历史只读，DELETED 不返回 Run
+  - Session 存在非终态 Run 时不得删除，Message 仍不可更新或删除
+results:
+  - 冻结 listSessionRuns、createRun、getRun 已实现，OpenAPI 和生成 DTO 零漂移
+  - 迁移 0017_agent_run、Run/RunAttempt ORM、状态机、RLS、权限和数据库 Guard 已完成
+  - 真实 PostgreSQL 覆盖原子创建、幂等、并发冲突、固定 Snapshot、RETIRED 默认 Deployment、隔离和删除 Guard
+  - make backend-check 为 332 passed/8 skipped；PostgreSQL/Temporal make check-all 为后端 340 passed/0 skipped、前端 38 passed
+  - AP-E3-004 开始前仍需同步正式数据库设计中的 nullable assistant_message_id 和最终化事务说明
+open_questions: []

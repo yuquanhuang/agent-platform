@@ -1,6 +1,6 @@
 # Agent 平台数据库详细设计
 
-> 文档版本：V1.2
+> 文档版本：V1.4
 > 文档状态：开发输入基线  
 > 数据库：PostgreSQL 16+  
 > ORM：SQLAlchemy 2.x Async  
@@ -301,7 +301,7 @@ created_at, updated_at, archived_at, deleted_at
 | session_id | uuid | 否 | Session |
 | branch_id | uuid | 是 | 分支 |
 | user_message_id | uuid | 否 | 用户消息 |
-| assistant_message_id | uuid | 否 | Assistant 占位/最终消息 |
+| assistant_message_id | uuid | 是 | 创建期为空；有效最终结果物化后一次性绑定最终 Assistant Message |
 | agent_id | uuid | 否 | Agent |
 | snapshot_id | uuid | 否 | 不可变 Snapshot |
 | deployment_id | uuid | 否 | 执行 Deployment |
@@ -317,6 +317,10 @@ created_at, updated_at, archived_at, deleted_at
 | cost_budget_amount | numeric(20,8) | 是 | 金额 |
 | cost_budget_currency | char(3) | 是 | 币种 |
 | workflow_id | varchar(255) | 是 | Temporal ID |
+| temporal_run_id | varchar(255) | 是 | 首次确认的 Temporal Workflow Run ID |
+| workflow_start_outcome | varchar(24) | 是 | STARTED/ALREADY_EXISTS |
+| workflow_started_at | timestamptz | 是 | Temporal 启动确认时间 |
+| cancelling_at | timestamptz | 是 | 首次进入 CANCELLING 的时间 |
 | error_code | varchar(64) | 是 | 稳定错误码 |
 | error_detail_json | jsonb | 是 | 脱敏错误 |
 | created/queued/started/finished_at | timestamptz | 对应阶段 | 时间 |
@@ -324,6 +328,10 @@ created_at, updated_at, archived_at, deleted_at
 - 唯一：`tenant_id + created_by + idempotency_key`。
 - Check：金额和币种同时为空或同时非空。
 - 部分唯一索引：`session_id where status not in ('SUCCEEDED','FAILED','CANCELLED','TIMEOUT') and branch_id is null`。
+- 唯一：`tenant_id + workflow_id`；启动映射一旦写入不得覆盖为另一 Workflow，重复启动只返回已存在事实。
+- `temporal_run_id + workflow_start_outcome + workflow_started_at` 必须同时为空或同时非空；历史 Run 可仅有 `workflow_id`，新启动确认必须写全三项。
+- 对账索引：`tenant_id + status + cancelling_at`；CREATED 使用既有 `tenant_id + status + created_at` 索引。
+- 创建事务不得写 Assistant 占位；`assistant_message_id` 初始为 NULL。Runtime 返回通过契约校验的最终结果后，终态事务 INSERT 新 ASSISTANT Message（`source_run_id = run_id`），将该字段从 NULL 一次性绑定到新消息并推进 Session Cursor。无有效最终结果的失败、取消或超时 Run 保持 NULL，Message 全程禁止 UPDATE/DELETE。
 
 ### 7.4 run_attempt
 

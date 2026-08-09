@@ -1,6 +1,6 @@
 # Agent 平台领域模型与状态机
 
-> 文档版本：V1.1  
+> 文档版本：V1.3
 > 文档状态：开发输入基线  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
 > 接口契约：[Agent平台核心接口与事件契约](./Agent平台核心接口与事件契约.md)
@@ -82,7 +82,7 @@ Definition（可编辑元数据）
 |---|---|---|
 | ChatSession | id, user_id, agent_id, title, status, cursor, branch_root_id | 用户会话 |
 | ChatMessage | id, session_id, branch_id, parent_message_id, role, content_parts | 不可变消息内容 |
-| AgentRun | id, session_id, message_id, snapshot_id, status, current_attempt | 业务运行事实 |
+| AgentRun | id, session_id, message_id, snapshot_id, status, current_attempt, workflow_id, temporal_run_id | 业务运行与 Workflow 启动映射事实 |
 | RunAttempt | run_id, attempt_no, fencing_token, worker_id, status | 每次实际执行 |
 | RuntimeSession | platform_session_id, runtime_type, remote_session_id, compatibility_hash, status | 平台与 Runtime 映射 |
 | RunEvent | run_id, sequence_no, source_event_id, payload | 用户可见事件事实 |
@@ -238,6 +238,8 @@ stateDiagram-v2
 - Cancel Request 先进入 CANCELLING；只有 Runtime 停止或强制终止确认后进入 CANCELLED。
 - 超时与取消竞态以首次成功写入的终态为准，并记录冲突告警。
 - 新执行尝试必须更新 current_attempt 和 fencing token。
+- Outbox 启动成功或命中已存在 Workflow 后，必须先幂等持久化 Workflow ID、Temporal Run ID 和启动结果，再确认 Outbox；不同 Workflow 不得覆盖同一 Run。
+- 长时间 CREATED/CANCELLING 由 Reconciler 对比 Temporal：缺失时恢复启动意图，存在时补映射或重发取消；不得仅因 Workflow 查询结果直接伪造 Run 终态。
 
 ### 4.5 RunAttempt
 
@@ -329,8 +331,8 @@ READY -> DELETING -> DELETED
 1. 锁定或条件更新 Session Cursor。
 2. 校验无活动主 Run。
 3. 写 User Message。
-4. 写 Assistant Run Message 占位。
-5. 创建 AgentRun CREATED。
+4. 创建 `assistant_message_id = NULL` 的 AgentRun CREATED。
+5. 将 Session Cursor 指向 User Message。
 6. 创建 Outbox `run_requested`。
 7. 写必要审计信息。
 
@@ -350,7 +352,8 @@ READY -> DELETING -> DELETED
 - Event Service 在单事务中分配 sequence、写 RunEvent 和 Event Outbox。
 - 终态事件写入时条件更新 AgentRun；冲突终态拒绝并告警。
 - 普通 Delta 不同步更新 AgentRun，避免热点行写放大。
-- Assistant Message 的最终内容由终态处理器根据事件或 Runtime Final Result 物化，记录来源序号范围。
+- Assistant Message 只在 Runtime Final Result 通过契约校验后由终态处理器 INSERT；同事务将 Run 的 `assistant_message_id` 从 NULL 一次性绑定到该消息并推进 Session Cursor。
+- Message 始终只增不改；不得通过占位、流式拼接或终态回填 UPDATE 已有 Message。无有效最终结果的失败、取消或超时 Run 可以不产生 Assistant Message。
 
 ## 6. 跨系统一致性与对账
 

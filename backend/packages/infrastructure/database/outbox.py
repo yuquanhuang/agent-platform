@@ -46,8 +46,14 @@ class SqlAlchemyOutboxWriter:
 class SqlAlchemyOutboxStore:
     """Short, committed transactions used by the process-external dispatcher."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        event_types: frozenset[str] | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._event_types = event_types
 
     async def claim_ready(
         self,
@@ -70,13 +76,16 @@ class SqlAlchemyOutboxStore:
                     OutboxEventModel.next_attempt_at <= now,
                 ),
             )
-            result = await uow.session.execute(
-                select(OutboxEventModel)
-                .where(
-                    OutboxEventModel.tenant_id == UUID(context.tenant_id),
-                    ready,
+            statement = select(OutboxEventModel).where(
+                OutboxEventModel.tenant_id == UUID(context.tenant_id),
+                ready,
+            )
+            if self._event_types is not None:
+                statement = statement.where(
+                    OutboxEventModel.event_type.in_(self._event_types)
                 )
-                .order_by(
+            result = await uow.session.execute(
+                statement.order_by(
                     OutboxEventModel.next_attempt_at,
                     OutboxEventModel.created_at,
                     OutboxEventModel.id,

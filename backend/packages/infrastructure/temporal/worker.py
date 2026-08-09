@@ -11,6 +11,8 @@ from temporalio.worker import Worker
 from packages.application.temporal import (
     CONTROL_PLANE_TASK_QUEUE,
     RUN_ORCHESTRATOR_TASK_QUEUE,
+    AgentRunWorkflow,
+    AgentRunWorkflowActivities,
     PlatformProbeWorkflow,
     PublishAgentWorkflow,
     ReleaseWorkflowActivities,
@@ -53,6 +55,28 @@ def release_control_worker_definition(
     )
 
 
+def run_orchestrator_worker_definition(
+    run_activities: AgentRunWorkflowActivities,
+) -> ProbeWorkerDefinition:
+    """Register the Run workflow only with explicitly composed Runtime ports."""
+
+    return ProbeWorkerDefinition(
+        kind=TemporalWorkerKind.RUN,
+        task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+        workflows=(PlatformProbeWorkflow, AgentRunWorkflow),
+        activities=(
+            platform_probe_activity,
+            run_activities.prepare_agent_run,
+            run_activities.execute_agent_run,
+            run_activities.inspect_agent_runtime,
+            run_activities.cancel_agent_runtime,
+            run_activities.recover_agent_run,
+            run_activities.finalize_agent_run,
+            run_activities.finalize_agent_run_cancellation,
+        ),
+    )
+
+
 def probe_worker_definition(kind: TemporalWorkerKind) -> ProbeWorkerDefinition:
     task_queue = (
         CONTROL_PLANE_TASK_QUEUE
@@ -83,6 +107,22 @@ def create_probe_worker(
     )
 
 
+def create_run_orchestrator_worker(
+    client: Client,
+    run_activities: AgentRunWorkflowActivities,
+    *,
+    graceful_shutdown_timeout_seconds: float,
+) -> Worker:
+    definition = run_orchestrator_worker_definition(run_activities)
+    return Worker(
+        client,
+        task_queue=definition.task_queue,
+        workflows=definition.workflows,
+        activities=definition.activities,
+        graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
+    )
+
+
 async def run_probe_worker_process(
     settings: AppSettings,
     kind: TemporalWorkerKind,
@@ -98,6 +138,27 @@ async def run_probe_worker_process(
     )
     metrics.process_up.labels(process=settings.service_name).set(1)
     LOGGER.info("Temporal worker started task_queue=%s", worker.task_queue)
+    try:
+        await worker.run()
+    finally:
+        metrics.process_up.labels(process=settings.service_name).set(0)
+
+
+async def run_agent_workflow_worker_process(
+    settings: AppSettings,
+    metrics: PlatformMetrics,
+    run_activities: AgentRunWorkflowActivities,
+) -> None:
+    """Run the composed Agent workflow pool; missing adapters fail before startup."""
+
+    client = await connect_temporal_client(settings)
+    worker = create_run_orchestrator_worker(
+        client,
+        run_activities,
+        graceful_shutdown_timeout_seconds=settings.worker_shutdown_grace_seconds,
+    )
+    metrics.process_up.labels(process=settings.service_name).set(1)
+    LOGGER.info("Temporal Agent Run worker started task_queue=%s", worker.task_queue)
     try:
         await worker.run()
     finally:

@@ -502,6 +502,7 @@ class IamManagementService:
             "model_provider",
             "model_config",
             "agent",
+            "session",
         } or not access.allows(resource, "read"):
             raise permission_denied()
         return _operation(record)

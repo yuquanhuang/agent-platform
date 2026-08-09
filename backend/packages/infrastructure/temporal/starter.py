@@ -13,17 +13,22 @@ from packages.application.outbox import (
     WorkflowStartResult,
 )
 from packages.application.publishing import RELEASE_REQUESTED_EVENT, publish_workflow_id
+from packages.application.runs import RUN_REQUESTED_EVENT
 from packages.application.temporal import (
     CONTROL_PLANE_TASK_QUEUE,
     RUN_ORCHESTRATOR_TASK_QUEUE,
+    AgentRunWorkflow,
     PlatformProbeWorkflow,
     PublishAgentWorkflow,
+    agent_run_workflow_id,
     probe_workflow_id,
 )
 from packages.contracts.temporal import (
+    AgentRunWorkflowInput,
     ProbeRequestedPayloadV1,
     PublishAgentWorkflowInput,
     ReleaseRequestedPayloadV1,
+    RunRequestedPayloadV1,
     TemporalWorkerKind,
     WorkflowProbeInput,
 )
@@ -167,6 +172,77 @@ class TemporalReleaseStarter:
                 raise RetryableOutboxError("Temporal start RPC failed") from error
         self._metrics.temporal_workflow_starts.labels(
             worker_kind="control",
+            outcome="started",
+        ).inc()
+        return WorkflowStartResult(
+            workflow_id=handle.id,
+            run_id=handle.result_run_id,
+            already_exists=False,
+        )
+
+
+class TemporalRunStarter:
+    """Map a versioned Run Outbox event to one durable workflow execution."""
+
+    def __init__(
+        self,
+        client: Client,
+        metrics: PlatformMetrics,
+        *,
+        rpc_timeout: timedelta = timedelta(seconds=10),
+    ) -> None:
+        self._client = client
+        self._metrics = metrics
+        self._rpc_timeout = rpc_timeout
+
+    async def start(self, event: OutboxEvent) -> WorkflowStartResult:
+        if event.event_type != RUN_REQUESTED_EVENT:
+            raise PermanentOutboxError(f"unsupported event_type: {event.event_type}")
+        if event.payload_schema_version != 1:
+            raise PermanentOutboxError("unsupported Run payload schema version")
+        try:
+            payload = RunRequestedPayloadV1.model_validate(event.payload)
+        except ValueError as error:
+            raise PermanentOutboxError("invalid Run payload") from error
+        if payload.tenant_id != event.tenant_id:
+            raise PermanentOutboxError(
+                "Run payload tenant does not match Outbox tenant"
+            )
+        if payload.run_id != event.aggregate_id:
+            raise PermanentOutboxError(
+                "Run payload identity does not match Outbox aggregate"
+            )
+        workflow_id = agent_run_workflow_id(payload.tenant_id, payload.run_id)
+        workflow_input = AgentRunWorkflowInput(**payload.model_dump())
+        with bind_log_context(
+            request_id=payload.request_id,
+            trace_id=payload.trace_id,
+            tenant_id=str(payload.tenant_id),
+        ):
+            try:
+                handle = await self._client.start_workflow(
+                    AgentRunWorkflow.run,
+                    workflow_input,
+                    id=workflow_id,
+                    task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+                    id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                    rpc_timeout=self._rpc_timeout,
+                )
+            except WorkflowAlreadyStartedError as error:
+                self._metrics.temporal_workflow_starts.labels(
+                    worker_kind="run",
+                    outcome="already_exists",
+                ).inc()
+                return WorkflowStartResult(
+                    workflow_id=error.workflow_id,
+                    run_id=error.run_id,
+                    already_exists=True,
+                )
+            except RPCError as error:
+                raise RetryableOutboxError("Temporal start RPC failed") from error
+        self._metrics.temporal_workflow_starts.labels(
+            worker_kind="run",
             outcome="started",
         ).inc()
         return WorkflowStartResult(

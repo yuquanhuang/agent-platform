@@ -40,6 +40,9 @@ const { sidebarCollapsed } = storeToRefs(appShellStore);
         <ElMenuItem index="/models/configs">
           <span>模型配置</span>
         </ElMenuItem>
+        <ElMenuItem index="/sessions">
+          <span>Session 管理</span>
+        </ElMenuItem>
       </ElMenu>
     </ElAside>
 

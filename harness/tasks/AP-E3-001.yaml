@@ -1,0 +1,51 @@
+task_id: AP-E3-001
+title: Session CRUD、归档、删除约束和分页
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r7
+scope:
+  includes:
+    - 实现冻结 listSessions/createSession/getSession/updateSession/archiveSession/deleteSession
+    - Session 创建固定当前 Agent 的活动 Deployment，不随后续发布漂移
+    - Session 数据按当前 tenant 和 actor user 双重隔离，并启用 PostgreSQL FORCE RLS
+    - 实现强 ETag、幂等创建/归档/删除、游标分页、审计和删除 Operation
+    - 实现 Vue Session 列表、新建、重命名、归档、删除和 Operation 轮询闭环
+    - 补齐 tenant_admin Session 权限和真实 PostgreSQL 全链路验证
+  excludes:
+    - Message 历史、分支、聊天输入、Run/RunAttempt、Temporal Run Workflow 和 SSE
+    - 允许客户端指定 Deployment，或在 Agent 新发布后修改已有 Session 的默认 Deployment
+    - 在尚无 agent_run 表时创建占位 Run 数据或伪造非终态 Run 删除约束
+decisions:
+  - 保持 R7 Session 公共契约和生成 Client/DTO 不变
+  - list/get/update/archive/delete 始终限制为当前 actor 的 Session，权限不自动扩大为租户全员可见
+  - 创建只接受拥有 ACTIVE 或 DEGRADED 当前 Deployment 的可用 Agent，否则失败关闭
+  - 删除只允许 ARCHIVED Session，写入 DELETED 墓碑和同步终态 Operation，不物理删除
+  - 默认列表隐藏 DELETED；显式 status=DELETED 时允许当前用户查询墓碑
+compatibility:
+  - 新增 chat_session 表和 Session 权限，不修改既有 Agent、Release、Deployment 或冻结 API
+  - 已有 Agent active_deployment_id 继续作为默认 Deployment 物化字段，Deployment 表仍是权威状态来源
+  - AP-E3-003 新增 agent_run 后必须在同一删除事务补入非终态 Run 拒绝检查
+verification:
+  commands:
+    - targeted backend and frontend tests
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+  results:
+    targeted_backend_tests: passed
+    postgresql_temporal_full_chain: 307_passed_0_skipped
+    frontend_check: 35_passed
+    contract_baseline: agent-platform-v1-dev-baseline-2026-08-r7_verified
+    operation_ids: 168_unique
+    generated_contract_files: 16_current
+    migration_added: 0015_chat_session
+    dependencies_added: none
+acceptance:
+  - Session 创建不可由客户端覆盖 Deployment，且历史 Session 不因新发布漂移
+  - 跨租户、跨用户访问均按不存在处理，列表不会泄露其他用户数据
+  - 更新和状态变化使用 If-Match CAS；创建、归档和删除可稳定幂等重放
+  - ACTIVE 必须先归档才能删除；删除返回可查询的 SUCCEEDED Operation
+  - Vue 完成当前用户 Session 管理闭环，不提前实现 Message/Run 能力
+follow_up:
+  - AP-E3-003 新增 agent_run 后，在删除同一事务补入非终态 Run 拒绝检查
+  - Message 历史、分支、Run/Temporal/SSE 继续由 AP-E3-002 及后续任务实现

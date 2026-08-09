@@ -1,0 +1,55 @@
+task_id: AP-E4-002
+title: Candidate 校验、批量写入、幂等序号和终态保护
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - RuntimeEventCandidate 批量校验、serviceAuth 权限边界和最多 200 条冻结请求契约
+    - 当前 RunAttempt fencing hash 校验、Run 行锁串行化和 sequence_no 从 1 连续分配
+    - run_id + execution_attempt + source_event_id 跨请求及同批幂等，逐项 created/duplicate/rejected 返回
+    - RunEvent、run_event_counter、AgentRun.latest_sequence_no 和 Event Outbox 单事务写入
+    - 终态唯一、相同终态幂等、冲突终态拒绝和审计
+    - RuntimeEventCandidatePublisher PostgreSQL Adapter 与 Temporal Outbox 事件类型隔离
+  excludes:
+    - RunEvent 查询、分页和回放（AP-E4-003）
+    - Redis 通知、SSE、Last-Event-ID 和背压（AP-E4-004）
+    - AG-UI 映射和 Vue Reducer（AP-E4-005～007）
+    - 生产 mTLS/SPIFFE Workload Identity Adapter 的部署实现
+decisions:
+  - Event Service 按 AgentRun 行锁串行化同 Run 批次，再锁定当前 RunAttempt 和 Counter；批次内只为 created 项分配连续序号
+  - stale/错误 fencing 返回批次级 409 EXECUTION_FENCING_REJECTED，审计在返回错误前独立完成同事务提交
+  - 普通事件可在 Run 运行中写入；终态 Candidate 仅接受已经由既有 Finalizer 物化为相同终态的 Run，避免绕过不可变 ASSISTANT Message、Attempt 和 Session Cursor 事务
+  - 一个成功批次写一条 run.events_appended.v1 Outbox，Payload 只携带 sequence 范围；后续消费者从 PostgreSQL 读取事实事件
+  - Temporal Outbox Store 只领取已注册 Workflow 事件，run.events_appended.v1 保持 PENDING 等待 AP-E4-004 Event Dispatcher
+compatibility:
+  - R9 OpenAPI、RunEvent Schema、生成 DTO 和前端类型未修改
+  - 未新增数据库迁移或依赖，复用 AP-E4-001 的 run_event/run_event_counter 和既有 outbox/audit 表
+  - 默认 API 未注入 Workload Identity Adapter 时返回 DEPENDENCY_UNAVAILABLE，不接受 Header/Body 伪造 tenant
+verification:
+  commands:
+    - targeted application, API, publisher and composition tests
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test pytest tests/integration/resources/test_resource_registry.py -q
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 10 个并发批次写入 100 个唯一 Candidate 后 sequence_no 严格为 1～100，Counter 和 latest_sequence_no 一致
+  - 同批重复及跨请求重复返回原 event_id/sequence_no，不推进 Counter、不新增 Outbox；同 key 不同内容逐项拒绝
+  - 部分失败批次只为成功项分配序号并原子提交；stale fencing 返回 409 且存在审计事实
+  - Finalizer 前终态 Candidate 被拒绝；Finalizer 后匹配终态只创建一次，重放幂等，冲突终态拒绝并审计
+  - RunEvent、Event Outbox、latest_sequence_no、Attempt、不可变 Message 和 Session Cursor 在真实 PostgreSQL 链路协同正确
+results:
+  - 新增 RunEventIngestionService、SqlAlchemyRunEventStore、内部批量路由和数据库 API 组合
+  - 新增 SqlAlchemyRuntimeEventCandidatePublisher，Candidate 拒绝会向 Runtime Activity 传播稳定错误，不静默丢失
+  - Temporal Outbox composition 使用注册事件类型过滤，避免把 RunEvent 通知错误标记 DEAD
+  - 定向单元/API/Publisher/Composition 16 passed；真实 PostgreSQL 纵向 1 passed
+  - make backend-check 为 376 passed、12 skipped；真实 PostgreSQL/Temporal make check-all 为后端 388 passed、前端 38 passed
+  - 契约校验 31 个完整性文件、168 个 operationId 和 16 个生成文件零漂移；未新增依赖或迁移
+follow_up:
+  - AP-E4-003 实现事件查询、分页、回放和序号缺口语义，读取 PostgreSQL 事实并使用 latest_sequence_no
+  - AP-E4-004 实现 Event Outbox Dispatcher、Redis 唤醒和 SSE；不得让 Temporal Dispatcher 消费 run.events_appended.v1
+  - 生产部署必须注入 mTLS/SPIFFE 等可信 InternalServiceIdentityProvider，并授予最小 internal:event_write 权限
+  - 生产达到容量阈值前落实 AP-E4-001 已登记的“全局唯一登记表 + recorded_at 月分区事件表”迁移

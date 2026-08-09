@@ -1,0 +1,50 @@
+task_id: AP-E3-006
+title: Outbox dispatcher、Workflow 映射和对账入口
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - 将 platform probe、Release 和 agent.run_requested.v1 接入同一严格 Outbox Router
+    - Temporal 启动成功或确定性 Workflow 已存在后，先持久化 Workflow ID、Temporal Run ID、启动结果和确认时间，再确认 Outbox
+    - 新增长时间 CREATED/CANCELLING 扫描、启动意图恢复、映射补写和幂等 Cancel Signal 重发入口
+    - 补 0019 迁移、单元测试、真实 PostgreSQL/Temporal 协同验证和全仓门禁
+  excludes:
+    - RunEvent Store、SSE、AG-UI 和 Event 对账（Epic 4）
+    - 根据 Workflow 终态直接改写 Run 终态；复杂历史修复属于 Epic 7
+    - 生产 Secret Backend、数据库 DSN 解析和完整进程部署装配
+decisions:
+  - 通用 Dispatcher 只负责 claim、超时、重试、死信和发布确认；事件路由及结果回写通过显式 Port 注入
+  - 启动结果回写与 Outbox 发布确认顺序固定为 start/exists -> mapping -> PUBLISHED
+  - 同一 Run 的首次 Temporal Run ID 和启动结果不可变；同一 Workflow 重放幂等，不同 Workflow 冲突失败关闭
+  - CREATED 无 Workflow 时恢复原 Outbox；CANCELLING 无 Workflow 时同样恢复启动，让 Workflow 走已有取消 Activity
+  - CANCELLING 已有运行 Workflow 时重发稳定 signal_id；Temporal 已终态但数据库仍非终态只报告 unresolved
+compatibility:
+  - 公共 OpenAPI、Run DTO、RunSpec、RunEvent 和前端生成代码不变
+  - 0019 仅增加 nullable 内部列、约束和索引；历史只有 workflow_id 的 Run 保持可读
+verification:
+  commands:
+    - targeted backend tests
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test pytest tests/integration/resources/test_resource_registry.py -q
+    - AP_TEST_TEMPORAL=1 pytest tests/integration/temporal/test_probe_workflow.py -q
+    - make backend-check
+    - make contract-check
+    - make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - Temporal 已启动但映射写入失败时 Outbox 不会被标记 PUBLISHED，重试不会创建第二个 Workflow
+  - Run 启动映射校验 tenant、aggregate、workflow identity，冲突不能覆盖
+  - 长时间 CREATED 可恢复 PENDING/DEAD/缺失启动意图，重复对账幂等
+  - 长时间 CANCELLING 只重发取消或报告不一致，不直接写 CANCELLED
+  - Message、RunAttempt、fencing、取消/重试和 Session Cursor 既有语义保持不变
+results:
+  - R9 基线已冻结；新增 0019 workflow start/cancelling 字段、约束、唯一映射和对账索引
+  - 正式 Outbox Router 已组合 Probe、Release、Run Starter；Run 启动结果回写成功后才确认 PUBLISHED
+  - Run Reconciler 已支持 CREATED/CANCELLING 扫描、Outbox 恢复、Workflow 映射补写、稳定 Cancel Signal 和 unresolved 报告
+  - 新增低基数 reconciliation 指标；不使用 tenant_id、run_id、workflow_id Label
+  - 定向单元 49 passed；真实 PostgreSQL 1 passed；真实 Temporal 8 passed
+  - 真实 PostgreSQL/Temporal make check-all 后端 375 passed、前端 38 passed
+  - R9 31 个完整性文件、168 个 operationId、16 个生成文件零漂移；uv lock 与 diff 门禁通过
+follow_up:
+  - AP-E3-007 使用 RuntimeEventCandidate Fake 和 getRun 轮询完成 Epic 3 纵向验收
+  - Epic 7 补生产 Worker 部署、告警、深度 Workflow/Runtime 状态修复和恢复演练

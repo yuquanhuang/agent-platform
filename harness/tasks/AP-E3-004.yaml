@@ -1,0 +1,52 @@
+task_id: AP-E3-004
+title: AgentRunWorkflow、Activity、Signal 和 Query
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r8
+scope:
+  includes:
+    - 建立版本化 AgentRunWorkflow、Activity、Cancel Signal 和状态 Query 契约
+    - 由 Activity 幂等绑定 workflow_id、分配首个 RunAttempt 并推进 Run/Attempt 状态
+    - 通过 RunSpecCompiler 和 RunRuntimeExecutor 端口传递不可变 RunSpec Ref+Hash
+    - 成功时只追加最终 ASSISTANT Message，并原子绑定 Run、推进 Session Cursor 和终态化 Attempt
+    - 失败且无有效结果时不创建 Message，只保存脱敏错误并终态化 Run/Attempt
+    - 接入 Run Starter、Worker Definition、单元及真实 PostgreSQL/Temporal 验证
+  excludes:
+    - cancelRun/retryRun API、Runtime cancel/inspect、fencing 接管和新 Attempt 重试
+    - 正式 Outbox dispatcher 路由、Reconciler 和生产启动结果回写
+    - RunEvent Store、SSE、AG-UI、Sandbox、Artifact 和真实 AgentScope 执行装配
+decisions:
+  - Workflow History 只保存 RunSpec 引用、Hash、Attempt 和小型完成摘要，不保存 Prompt 或高频事件
+  - fencing token 由可注入的确定性安全发行端口生成，数据库只保存 SHA-256；生产未装配发行器时失败关闭
+  - AP-E3-004 只记录版本化 Cancel Signal 和可查询状态，完整取消竞态与接管留给 AP-E3-005
+  - 修正 RunAttempt ORM 多出的 created_by 字段，使其与 R8 数据库基线和 0017 迁移一致
+compatibility:
+  - 不修改 R8 OpenAPI、RunSpec JSON Schema、RunEvent Schema 或前端生成 DTO
+  - 继续保留 Run 创建事务与 Temporal 执行事务的边界，不在 API 请求内直接启动 Workflow
+verification:
+  commands:
+    - targeted backend tests
+    - make backend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - make contract-check
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - Outbox 重复启动复用确定性 Workflow ID，Workflow/Activity 重放不重复分配 Attempt 或 Message
+  - Run 固定创建期 Snapshot、Deployment、Bundle 和用户输入，后续发布不改变 RunSpec 来源
+  - 成功最终化后 ASSISTANT Message 不可变且 Session Cursor 指向该消息
+  - 执行失败时不存在虚假 ASSISTANT Message，Run 和 Attempt 保存安全终态
+  - Query 返回当前小型状态，重复 Cancel Signal 幂等且不提前伪造已取消
+results:
+  - R8 正式基线已同步方案 1，数据库、领域、架构和 Temporal 文档及 SHA-256 校验通过
+  - 版本化 Workflow/Activity/Signal/Query、确定性 Workflow ID、Run Starter 和 Worker Definition 已实现
+  - PostgreSQL 已实现 Workflow 绑定、Attempt 分配、CREATED 到 RUNNING 状态推进和幂等终态事务
+  - 成功只 INSERT 一条不可变 ASSISTANT Message；Activity 重放返回同一绑定，失败路径不创建 Message
+  - HMAC fencing token 发行器只在内存返回 SecretStr，数据库仅保存 SHA-256
+  - 修正 RunAttempt ORM 与 R8/0017 迁移的 created_by 字段漂移，无新增迁移或依赖
+  - make backend-check 为 342 passed/10 skipped；真实 PostgreSQL/Temporal make check-all 为后端 352 passed/0 skipped、前端 38 passed
+  - R8 31 个完整性文件、168 operationIds、16 个生成文件零漂移；uv lock 与 diff 门禁通过
+follow_up:
+  - AP-E3-005 实现 cancelRun/retryRun、Runtime cancel/inspect、取消竞态和新 Attempt fencing 接管
+  - AP-E3-006 将 TemporalRunStarter 接入正式 Outbox Router，并实现启动结果回写与 Reconciler
+  - 生产 RunSpec 对象存储编译器和真实 Runtime Executor 仍需显式装配，当前缺失时不会伪造成功
+open_questions: []

@@ -1,0 +1,50 @@
+task_id: AP-E3-005
+title: 取消、重试、新 Run 语义和 fencing token
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r8
+scope:
+  includes:
+    - 实现 cancelRun/retryRun API、权限、请求幂等和 Run 所有权校验
+    - Cancel 先进入 CANCELLING，通过 Temporal Signal 驱动 Runtime inspect/cancel，确认停止后再 CAS 为 CANCELLED
+    - Retry 创建全新 Run，设置 retry_of_run_id，复用不可变 USER Message，不修改原 Run/Attempt/Message
+    - Runtime UNKNOWN/仍运行时禁止自动重放 Prompt；仅 LOST 且明确 safe_to_retry 时创建新 Attempt
+    - 新 Attempt 使用新的确定性 HMAC fencing token；旧 token 无法推进 Run、Attempt 或最终化
+    - 补 Temporal Run control Activity、Recovery Activity、真实 PostgreSQL/Temporal 和 History Replay 验证
+  excludes:
+    - 正式 Outbox dispatcher 路由、启动结果回写和 Reconciler（AP-E3-006）
+    - RunEvent Store、SSE、AG-UI 和 Event 对账（Epic 4）
+    - 真实 Sandbox/AgentScope 生产 Runtime 装配
+decisions:
+  - cancelRun 返回 CANCELLING 或已存在终态；只有 Runtime 停止确认后返回/物化 CANCELLED
+  - retryRun 默认 original_snapshot；current_deployment 必须显式选择，后端只执行资源校验，差异展示由后续 Run UI 任务补齐
+  - Retry 复用原 USER Message 引用，不重复写入同一 Prompt；新成功 Run 只追加自己的 ASSISTANT Message
+  - Runtime inspect 的 UNKNOWN、RUNNING 和不安全 LOST 均失败关闭，不自动新建 Attempt；安全 LOST 最多恢复到有界新 Attempt
+  - fencing token 明文只在 Activity 内存和 Runtime 控制请求中短暂存在，数据库及 Workflow History 只保存 Hash/引用
+compatibility:
+  - R8 OpenAPI cancelRun/retryRun 既有 DTO 不变；新增后端 Temporal 1.1 内部控制 payload，不改变 RunSpec/RunEvent Schema
+  - 既有 AP-E3-004 Workflow History 通过 Temporal patch marker 保持可 Replay；未命中 patch 时保留原失败终结行为
+verification:
+  commands:
+    - targeted backend tests
+    - AP_TEST_TEMPORAL=1 pytest tests/integration/temporal/test_probe_workflow.py -q
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test pytest tests/integration/resources/test_resource_registry.py -q
+    - make backend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - make contract-check
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - CREATED/PREPARING/RUNNING Run 可取消，重复 Signal/API 幂等，终态取消不覆盖终态
+  - cancel/success/timeout 竞态以首次合法终态 CAS 为准，不产生 Assistant 占位或重复 Message
+  - Retry 新 Run 固定 retry_of_run_id、Snapshot/Deployment 策略和同一 USER Message，旧事实不变
+  - UNKNOWN 不创建新 Attempt、不重复 Prompt；安全 LOST 创建 attempt_no+1 和新 fencing hash
+  - 旧 fencing token 无法推进新 Attempt 或写入新终态
+  - Temporal History Replay、PostgreSQL RLS/租户隔离、前后端契约门禁通过
+results:
+  - cancelRun/retryRun、run:cancel/retry 权限和 0018 tenant_admin 回填迁移已完成
+  - Runtime inspect/cancel/recover/finalize Activity、Temporal Signal Control 和 patch marker 已完成
+  - Retry 复用不可变 USER Message；安全 LOST 创建新 Attempt，UNKNOWN 不重放 Prompt
+  - 定向单元 34 passed，真实 Temporal 8 passed，真实 PostgreSQL 1 passed
+  - 真实 PostgreSQL/Temporal make check-all 后端 363 passed、前端 38 passed
+  - R8 31 个完整性文件、168 个 operationId、16 个生成文件零漂移
+  - 未新增依赖；uv lock --check 与 git diff --check 通过

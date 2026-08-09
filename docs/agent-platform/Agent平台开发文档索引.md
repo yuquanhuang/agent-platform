@@ -1,6 +1,6 @@
 # Agent 平台开发文档索引
 
-> 文档版本：V1.8
+> 文档版本：V2.0
 > 文档状态：开发输入基线
 
 ## 1. 文档集合与阅读顺序
@@ -193,3 +193,18 @@ Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 - Preview 明确无版本、Snapshot、Release、Outbox、幂等和发布审计副作用；正式发布继续事务内重编译和 Draft CAS。
 - 冻结 AgentVersion 列表/详情、Snapshot Diff 与 Vue 发布页面的组合流程，AP-E2-006 回滚保持后续独立任务。
 - 同步更新 AI Coding 总纲、执行计划、追踪矩阵、前端和测试契约，并重新冻结 SHA-256。
+
+### Frozen Baseline 2026-08-R8
+
+- 正式采用 Run/Message 方案 1：创建 Run 只追加 User Message，`assistant_message_id` 创建期可空，不写 Assistant 占位。
+- 有效 Runtime Final Result 由终态 Activity 追加新的 Assistant Message，并在同一事务一次性绑定 Run 和推进 Session Cursor；Message 全程禁止 UPDATE/DELETE。
+- 无有效最终结果的失败、取消或超时 Run 不伪造 Assistant Message；后续 Event Store 对账继续保持消息只增不改。
+- 修正自然语言 `stream_url` 为冻结 OpenAPI 的 `/api/v1/runs/{run_id}/events/stream`，并将误标为 `AP-E3-004` 的 RunEvent 批量写入任务示例归回 `AP-E4-002`。
+- Core OpenAPI、资源 OpenAPI、RunSpec、RunEvent 和生成 DTO/Client 均未改变；同步提升数据库、领域、架构、Temporal、AI Coding、执行计划、测试和索引文档版本并重新冻结 SHA-256。
+
+### Frozen Baseline 2026-08-R9
+
+- 补齐 Run Outbox 启动确认事实：AgentRun 持久化确定性 Workflow ID、Temporal Run ID、`STARTED/ALREADY_EXISTS` 和确认时间，Outbox 仅在映射成功后标记 PUBLISHED。
+- 新增长时间 CREATED/CANCELLING 的幂等对账边界：缺失 Workflow 时恢复原启动意图，存在时补映射或重发取消 Signal；禁止对账直接伪造 CANCELLED。
+- 新增 `cancelling_at` 和对账索引；公共 OpenAPI、Run DTO、RunSpec、RunEvent、Message 不可变语义及前端生成代码均未改变。
+- 同步提升数据库、领域、架构、Temporal、AI Coding、执行计划、测试和索引文档版本，并重新冻结 SHA-256。

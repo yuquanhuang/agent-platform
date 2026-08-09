@@ -4,16 +4,25 @@ from packages.infrastructure.database.agents import SqlAlchemyAgentRegistry
 from packages.infrastructure.database.base import NAMING_CONVENTION, Base
 from packages.infrastructure.database.bundles import SqlAlchemyBundleInputReader
 from packages.infrastructure.database.deployments import SqlAlchemyDeploymentStore
+from packages.infrastructure.database.events import (
+    SqlAlchemyRunEventQueryStore,
+    SqlAlchemyRunEventStore,
+    SqlAlchemyRuntimeEventCandidatePublisher,
+)
 from packages.infrastructure.database.iam import SqlAlchemyIamPersistence
 from packages.infrastructure.database.identity import SqlAlchemyIdentityReader
+from packages.infrastructure.database.messages import SqlAlchemyMessageHistoryStore
 from packages.infrastructure.database.models import (
     AgentBindingModel,
     AgentDefinitionModel,
+    AgentRunModel,
     AgentSnapshotModel,
     AgentVersionModel,
     AppUserModel,
     AuditLogModel,
     BudgetReservationModel,
+    ChatMessageModel,
+    ChatSessionModel,
     DeploymentModel,
     IdempotencyRecordModel,
     ModelBindingSnapshotModel,
@@ -27,6 +36,9 @@ from packages.infrastructure.database.models import (
     RoleBindingModel,
     RoleModel,
     RolePermissionModel,
+    RunAttemptModel,
+    RunEventCounterModel,
+    RunEventModel,
     RuntimeBundleModel,
     TenantMemberModel,
     TenantModel,
@@ -41,10 +53,12 @@ from packages.infrastructure.database.publishing import (
 )
 from packages.infrastructure.database.releases import SqlAlchemyReleaseStore
 from packages.infrastructure.database.resources import SqlAlchemyResourceRegistry
+from packages.infrastructure.database.runs import SqlAlchemyRunStore
 from packages.infrastructure.database.session import (
     create_database_engine,
     create_session_factory,
 )
+from packages.infrastructure.database.sessions import SqlAlchemySessionStore
 from packages.infrastructure.database.tenant import (
     TENANT_SETTING_NAME,
     bind_tenant_context,
@@ -56,12 +70,15 @@ __all__ = [
     "TENANT_SETTING_NAME",
     "AgentBindingModel",
     "AgentDefinitionModel",
+    "AgentRunModel",
     "AgentSnapshotModel",
     "AgentVersionModel",
     "AppUserModel",
     "AuditLogModel",
     "Base",
     "BudgetReservationModel",
+    "ChatMessageModel",
+    "ChatSessionModel",
     "DeploymentModel",
     "IdempotencyRecordModel",
     "ModelBindingSnapshotModel",
@@ -76,6 +93,9 @@ __all__ = [
     "RoleBindingModel",
     "RoleModel",
     "RolePermissionModel",
+    "RunAttemptModel",
+    "RunEventCounterModel",
+    "RunEventModel",
     "RuntimeBundleModel",
     "SqlAlchemyAgentRegistry",
     "SqlAlchemyAgentResourceReferenceProvider",
@@ -83,10 +103,16 @@ __all__ = [
     "SqlAlchemyDeploymentStore",
     "SqlAlchemyIamPersistence",
     "SqlAlchemyIdentityReader",
+    "SqlAlchemyMessageHistoryStore",
     "SqlAlchemyOutboxStore",
     "SqlAlchemyOutboxWriter",
     "SqlAlchemyReleaseStore",
     "SqlAlchemyResourceRegistry",
+    "SqlAlchemyRunEventQueryStore",
+    "SqlAlchemyRunEventStore",
+    "SqlAlchemyRunStore",
+    "SqlAlchemyRuntimeEventCandidatePublisher",
+    "SqlAlchemySessionStore",
     "SqlAlchemySnapshotCompilationStore",
     "TenantMemberModel",
     "TenantModel",

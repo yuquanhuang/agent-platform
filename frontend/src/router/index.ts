@@ -54,6 +54,18 @@ export const router = createRouter({
           component: () => import('@/views/models/ModelConfigView.vue'),
           meta: { permission: 'model_config:list' },
         },
+        {
+          path: 'sessions',
+          name: 'session-list',
+          component: () => import('@/views/sessions/SessionListView.vue'),
+          meta: { permission: 'session:list' },
+        },
+        {
+          path: 'sessions/:id/messages',
+          name: 'session-messages',
+          component: () => import('@/views/sessions/SessionMessageView.vue'),
+          meta: { permission: 'message:list' },
+        },
       ],
     },
     {

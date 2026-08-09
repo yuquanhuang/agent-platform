@@ -423,9 +423,12 @@ async def verify_rls(database_url: str) -> None:
             assert list(policies) == [
                 "agent_binding",
                 "agent_definition",
+                "agent_run",
                 "agent_snapshot",
                 "agent_version",
                 "budget_reservation",
+                "chat_message",
+                "chat_session",
                 "deployment",
                 "model_binding_snapshot",
                 "model_rate_limit_window",
@@ -438,6 +441,9 @@ async def verify_rls(database_url: str) -> None:
                 "role",
                 "role_binding",
                 "role_permission",
+                "run_attempt",
+                "run_event",
+                "run_event_counter",
                 "runtime_bundle",
                 "tenant_member",
             ]

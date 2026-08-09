@@ -133,5 +133,17 @@ TENANT_ADMIN_PERMISSIONS = PermissionSet.parse(
         "model_config:publish",
         "model_config:rollback",
         "model_config:disable",
+        "session:create",
+        "session:read",
+        "session:list",
+        "session:update",
+        "session:delete",
+        "message:read",
+        "message:list",
+        "run:create",
+        "run:read",
+        "run:list",
+        "run:cancel",
+        "run:retry",
     )
 )

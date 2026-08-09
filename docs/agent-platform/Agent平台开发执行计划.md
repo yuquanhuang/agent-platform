@@ -1,6 +1,6 @@
 # Agent 平台开发执行计划
 
-> 文档版本：V1.4
+> 文档版本：V1.6
 > 文档状态：开发输入计划
 > 适用范围：当前 `docs/agent-platform` 需求、架构、契约和测试文档
 
@@ -246,7 +246,7 @@ Epic 9 每项能力必须使用独立 Feature Flag，并继续拆成“契约/�
 ```yaml
 task_id: AP-E0-001
 title: 实现契约完整性与校验门禁
-baseline: agent-platform-v1-dev-baseline-2026-08-r7
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
 scope:
   includes:
     - scripts/

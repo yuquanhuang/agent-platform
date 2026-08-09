@@ -24,6 +24,7 @@ def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
         "agent_binding",
         "agent_definition",
         "agent_snapshot",
+        "agent_run",
         "agent_version",
         "audit_log",
         "budget_reservation",
@@ -36,7 +37,12 @@ def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
         "resource_version",
         "release",
         "runtime_bundle",
+        "run_attempt",
+        "run_event",
+        "run_event_counter",
         "deployment",
+        "chat_message",
+        "chat_session",
         "role",
         "role_binding",
         "role_permission",
@@ -68,6 +74,12 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         "release": "uq_release__tenant_id_id",
         "runtime_bundle": "uq_runtime_bundle__tenant_id_id",
         "deployment": "uq_deployment__tenant_id_id",
+        "chat_message": "uq_chat_message__tenant_id_session_id",
+        "chat_session": "uq_chat_session__tenant_id_id",
+        "agent_run": "uq_agent_run__tenant_id_id",
+        "run_attempt": "uq_run_attempt__tenant_id_id",
+        "run_event": "ix_run_event__tenant_run_sequence",
+        "run_event_counter": "ix_run_event_counter__tenant_run",
     }
 
     for table_name, expected_index in expected_tenant_indexes.items():
@@ -195,6 +207,170 @@ def test_agent_draft_metadata_has_cas_bindings_and_route_uniqueness() -> None:
     assert configuration_type.none_as_null is True
     assert "fk_agent_binding__tenant_agent__agent_definition" in constraint_names(
         "agent_binding", ForeignKeyConstraint
+    )
+
+
+def test_chat_session_metadata_pins_user_agent_and_deployment() -> None:
+    table = Base.metadata.tables["chat_session"]
+
+    assert {
+        "tenant_id",
+        "user_id",
+        "agent_id",
+        "default_deployment_id",
+        "title",
+        "status",
+        "metadata_json",
+        "metadata_schema_version",
+        "resource_version",
+        "archived_at",
+        "deleted_at",
+    } <= set(table.c.keys())
+    assert {
+        "fk_chat_session__tenant_user__tenant_member",
+        "fk_chat_session__tenant_agent__agent_definition",
+        "fk_chat_session__tenant_deployment_agent__deployment",
+        "fk_chat_session__tenant_cursor_session__chat_message",
+    } <= constraint_names("chat_session", ForeignKeyConstraint)
+    assert {
+        "ix_chat_session__tenant_user_updated_at",
+        "ix_chat_session__tenant_agent_created_at",
+    } <= index_names("chat_session")
+
+
+def test_chat_message_metadata_enforces_parent_chain_and_branch_order() -> None:
+    table = Base.metadata.tables["chat_message"]
+
+    assert {
+        "tenant_id",
+        "session_id",
+        "branch_id",
+        "parent_message_id",
+        "role",
+        "content_parts_json",
+        "content_schema_version",
+        "source_run_id",
+        "created_by",
+    } <= set(table.c.keys())
+    assert {
+        "fk_chat_message__tenant_session__chat_session",
+        "fk_chat_message__tenant_parent_session__chat_message",
+        "fk_chat_message__tenant_source_run_session__agent_run",
+    } <= constraint_names("chat_message", ForeignKeyConstraint)
+
+
+def test_agent_run_metadata_pins_messages_deployment_snapshot_and_inputs() -> None:
+    table = Base.metadata.tables["agent_run"]
+
+    assert {
+        "tenant_id",
+        "session_id",
+        "branch_id",
+        "user_message_id",
+        "assistant_message_id",
+        "agent_id",
+        "snapshot_id",
+        "deployment_id",
+        "status",
+        "idempotency_key",
+        "timeout_seconds",
+        "token_budget",
+        "cost_budget_amount",
+        "cost_budget_currency",
+        "workflow_id",
+        "temporal_run_id",
+        "workflow_start_outcome",
+        "workflow_started_at",
+        "cancelling_at",
+    } <= set(table.c.keys())
+    assert {
+        "fk_agent_run__tenant_session__chat_session",
+        "fk_agent_run__tenant_user_message_session__chat_message",
+        "fk_agent_run__tenant_assistant_message_session__chat_message",
+        "fk_agent_run__tenant_deployment_agent_snapshot__deployment",
+        "fk_agent_run__tenant_snapshot__agent_snapshot",
+    } <= constraint_names("agent_run", ForeignKeyConstraint)
+    assert "uq_agent_run__active_session_branch" in index_names("agent_run")
+    assert "uq_agent_run__tenant_workflow_id" in constraint_names(
+        "agent_run", UniqueConstraint
+    )
+    assert "ix_agent_run__tenant_status_cancelling_at" in index_names("agent_run")
+
+
+def test_run_attempt_metadata_is_tenant_scoped_and_fenced() -> None:
+    table = Base.metadata.tables["run_attempt"]
+
+    assert {
+        "tenant_id",
+        "run_id",
+        "attempt_no",
+        "fencing_token_hash",
+        "status",
+    } <= set(table.c.keys())
+    assert "created_by" not in table.c
+    assert "fk_run_attempt__tenant_run__agent_run" in constraint_names(
+        "run_attempt", ForeignKeyConstraint
+    )
+    assert {
+        "ix_chat_message__tenant_session_branch_created_at",
+        "ix_chat_message__tenant_session_parent",
+        "uq_chat_message__branch_parent",
+    } <= index_names("chat_message")
+
+
+def test_run_event_metadata_enforces_identity_payload_and_replay_indexes() -> None:
+    event = Base.metadata.tables["run_event"]
+    counter = Base.metadata.tables["run_event_counter"]
+
+    assert {
+        "id",
+        "tenant_id",
+        "run_id",
+        "session_id",
+        "sequence_no",
+        "source_event_id",
+        "execution_attempt",
+        "schema_version",
+        "event_type",
+        "payload_version",
+        "payload_json",
+        "occurred_at",
+        "recorded_at",
+        "trace_id",
+    } == set(event.c.keys())
+    assert {column.name for column in event.primary_key.columns} == {"id"}
+    assert {
+        "uq_run_event__run_sequence",
+        "uq_run_event__run_attempt_source",
+    } <= constraint_names("run_event", UniqueConstraint)
+    assert {
+        "fk_run_event__tenant_run_session__agent_run",
+    } <= constraint_names("run_event", ForeignKeyConstraint)
+    assert {
+        "ck_run_event__sequence_no",
+        "ck_run_event__execution_attempt",
+        "ck_run_event__schema_version",
+        "ck_run_event__payload_version",
+        "ck_run_event__event_type",
+        "ck_run_event__payload_json",
+        "ck_run_event__payload_size",
+    } <= constraint_names("run_event", CheckConstraint)
+    assert {
+        "ix_run_event__tenant_run_sequence",
+        "ix_run_event__tenant_type_recorded_at",
+    } <= index_names("run_event")
+
+    assert {column.name for column in counter.primary_key.columns} == {"run_id"}
+    assert set(counter.c.keys()) == {
+        "run_id",
+        "tenant_id",
+        "next_sequence_no",
+    }
+    assert "fk_run_event_counter__tenant_run__agent_run" in constraint_names(
+        "run_event_counter", ForeignKeyConstraint
+    )
+    assert "ck_run_event_counter__next_sequence_no" in constraint_names(
+        "run_event_counter", CheckConstraint
     )
 
 

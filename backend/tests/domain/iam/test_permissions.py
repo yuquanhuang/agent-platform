@@ -38,3 +38,18 @@ def test_permission_set_rejects_duplicates() -> None:
 def test_tenant_admin_includes_agent_draft_permissions() -> None:
     for action in ("create", "read", "list", "update", "delete", "disable", "publish"):
         assert TENANT_ADMIN_PERMISSIONS.allows("agent", action)
+
+
+def test_tenant_admin_includes_session_management_permissions() -> None:
+    for action in ("create", "read", "list", "update", "delete"):
+        assert TENANT_ADMIN_PERMISSIONS.allows("session", action)
+
+
+def test_tenant_admin_includes_message_history_permissions() -> None:
+    for action in ("read", "list"):
+        assert TENANT_ADMIN_PERMISSIONS.allows("message", action)
+
+
+def test_tenant_admin_includes_run_creation_and_history_permissions() -> None:
+    for action in ("create", "read", "list", "cancel", "retry"):
+        assert TENANT_ADMIN_PERMISSIONS.allows("run", action)

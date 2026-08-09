@@ -1,6 +1,6 @@
 # Agent 平台 AI Coding 开发总纲
 
-> 文档版本：V1.7
+> 文档版本：V1.9
 > 文档状态：开发输入基线  
 > 基线清单：[agent-platform-baseline.yaml](./agent-platform-baseline.yaml)
 
@@ -124,7 +124,7 @@ Domain 不得导入 FastAPI、SQLAlchemy ORM、Temporal Client、AgentScope、Co
 2. ModelConfig、Prompt、Skill、MCP、Agent Draft 的最小创建能力。
 3. 发布生成 Snapshot、AgentScope Bundle 和 ACTIVE Deployment。
 4. 创建 Session 和 Run，事务内写 Message、Run、Outbox。
-5. Outbox 幂等启动 `AgentRunWorkflow`。
+5. Outbox 幂等启动 `AgentRunWorkflow`，先持久化 Workflow/Temporal Run 映射与启动结果再确认发布。
 6. Workflow 创建 Run Sandbox 并调用 AgentScope RuntimeAdapter。
 7. RuntimeAdapter 输出 RuntimeEventCandidate。
 8. Event Service 分配 sequence_no 并持久化 RunEvent。
@@ -171,6 +171,7 @@ Schema/状态机
 - 不跨 `await` 长时间持有数据库事务。
 - 外部网络调用不放在数据库事务内。
 - 数据库事实与异步动作通过 Outbox 连接。
+- Temporal 启动成功但结果回写失败时不得确认 Outbox；重试和对账复用确定性 Workflow ID，CANCELLING 对账不得直接伪造 CANCELLED。
 - Temporal Workflow 不访问数据库、网络、随机数或系统时间；这些操作必须放入 Activity。
 
 ### 8.3 幂等与并发
@@ -209,7 +210,7 @@ Schema/状态机
 ```yaml
 task_id: AP-E<epic>-NNN
 title: 明确、单一的交付目标
-baseline: agent-platform-v1-dev-baseline-2026-08-r7
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
 baseline_integrity:
   hash_algorithm: sha256
   verified_files: []

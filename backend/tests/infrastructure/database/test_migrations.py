@@ -36,6 +36,10 @@ def test_offline_upgrade_contains_foundation_tables_and_extensions() -> None:
         "audit_log",
         "agent_definition",
         "agent_binding",
+        "agent_run",
+        "run_attempt",
+        "run_event",
+        "run_event_counter",
         "agent_version",
         "agent_snapshot",
         "budget_reservation",
@@ -50,6 +54,10 @@ def test_offline_upgrade_contains_foundation_tables_and_extensions() -> None:
         "release",
         "runtime_bundle",
         "deployment",
+        "chat_message",
+        "chat_session",
+        "agent_run",
+        "run_attempt",
         "agent_version",
         "agent_snapshot",
         "agent_definition",
@@ -86,13 +94,17 @@ def test_offline_upgrade_enables_and_forces_rls_with_write_checks() -> None:
         "release",
         "runtime_bundle",
         "deployment",
+        "chat_message",
+        "chat_session",
+        "run_event",
+        "run_event_counter",
     ):
         assert f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY" in sql
         assert f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY" in sql
         assert f"CREATE POLICY tenant_isolation ON {table_name}" in sql
 
-    assert sql.count("WITH CHECK") == 19
-    assert sql.count("current_setting('app.current_tenant_id', true)") == 38
+    assert sql.count("WITH CHECK") == 25
+    assert sql.count("current_setting('app.current_tenant_id', true)") == 50
 
 
 def test_offline_upgrade_contains_idempotency_and_operation_constraints() -> None:
@@ -201,3 +213,71 @@ def test_offline_upgrade_contains_release_and_runtime_bundle_state() -> None:
     assert "fk_deployment__tenant_release_agent_snapshot__release" in sql
     assert "fk_deployment__tenant_snapshot_bundle__runtime_bundle" in sql
     assert "fk_agent_definition__tenant_active_deployment__deployment" in sql
+
+
+def test_offline_upgrade_contains_user_owned_chat_sessions() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE chat_session" in sql
+    assert "uq_deployment__tenant_id_agent_id" in sql
+    assert "fk_chat_session__tenant_user__tenant_member" in sql
+    assert "fk_chat_session__tenant_deployment_agent__deployment" in sql
+    assert "ck_chat_session__lifecycle_timestamps" in sql
+    assert "ix_chat_session__tenant_user_updated_at" in sql
+    assert "SELECT tenant_id, id, 'session', 'create' FROM role" in sql
+
+
+def test_offline_upgrade_contains_immutable_message_chains() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE chat_message" in sql
+    assert "fk_chat_message__tenant_session__chat_session" in sql
+    assert "fk_chat_message__tenant_parent_session__chat_message" in sql
+    assert "fk_chat_session__tenant_cursor_session__chat_message" in sql
+    assert "uq_chat_message__branch_parent" in sql
+    assert "NULLS NOT DISTINCT" in sql
+    assert "trg_chat_message__immutable" in sql
+    assert "SELECT tenant_id, id, 'message', 'list' FROM role" in sql
+
+
+def test_offline_upgrade_contains_run_identity_state_and_guards() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE agent_run" in sql
+    assert "CREATE TABLE run_attempt" in sql
+    assert "uq_agent_run__active_session_branch" in sql
+    assert "uq_agent_run__tenant_created_by_idempotency" in sql
+    assert "fk_agent_run__tenant_deployment_agent_snapshot__deployment" in sql
+    assert "fk_chat_message__tenant_source_run_session__agent_run" in sql
+    assert "guard_agent_run_mutation" in sql
+    assert "trg_run_attempt__guard" in sql
+    assert "SELECT tenant_id, id, 'run', 'create' FROM role" in sql
+    assert "SELECT tenant_id, id, 'run', 'cancel' FROM role" in sql
+    assert "SELECT tenant_id, id, 'run', 'retry' FROM role" in sql
+    assert "temporal_run_id VARCHAR(255)" in sql
+    assert "workflow_start_outcome VARCHAR(24)" in sql
+    assert "workflow_started_at TIMESTAMP WITH TIME ZONE" in sql
+    assert "cancelling_at TIMESTAMP WITH TIME ZONE" in sql
+    assert "ck_agent_run__workflow_start_mapping" in sql
+    assert "uq_agent_run__tenant_workflow_id" in sql
+    assert "ix_agent_run__tenant_status_cancelling_at" in sql
+
+
+def test_offline_upgrade_contains_immutable_run_event_store() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE run_event (" in sql
+    assert "CREATE TABLE run_event_counter (" in sql
+    assert "PARTITION BY" not in sql
+    assert "pk_run_event" in sql
+    assert "pk_run_event_counter" in sql
+    assert "uq_run_event__run_sequence" in sql
+    assert "uq_run_event__run_attempt_source" in sql
+    assert "fk_run_event__tenant_run_session__agent_run" in sql
+    assert "fk_run_event_counter__tenant_run__agent_run" in sql
+    assert "ck_run_event__payload_size" in sql
+    assert "octet_length(payload_json::text) <= 262144" in sql
+    assert "ix_run_event__tenant_run_sequence" in sql
+    assert "ix_run_event__tenant_type_recorded_at" in sql
+    assert "trg_run_event__immutable" in sql
+    assert "reject_run_event_mutation" in sql

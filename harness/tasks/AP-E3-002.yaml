@@ -1,0 +1,52 @@
+task_id: AP-E3-002
+title: Message 历史、分支顺序和权限
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r7
+scope:
+  includes:
+    - 实现冻结 listSessionMessages 和 MessagePage，不修改公共契约
+    - 新增不可变 chat_message 表、父消息链、Session Cursor 约束、索引和 FORCE RLS
+    - 默认从 Session 当前 cursor_message_id 回溯完整消息链，显式 branch_id 查询指定历史分支
+    - 使用固定 Tip 的不透明 Cursor 分页，保证追加新消息时既有翻页视图不漂移
+    - Message 查询同时要求 Session 所有权、session:read 和 message:list 权限
+    - 新增 Vue Session 消息历史页，安全展示内容分片、分支筛选和分页
+    - 完成真实 PostgreSQL 分支顺序、不可变性、租户/用户隔离和全链路验证
+  excludes:
+    - 新增 Message 写入公共 API、聊天输入、编辑历史 Message 或物理删除消息
+    - AgentRun/RunAttempt、创建 Run、Session 并发 Guard、Temporal Run Workflow 和 SSE
+    - Artifact/Tool/Run 外键在对应事实表尚不存在时创建占位表
+decisions:
+  - Message 内容和父链均不可更新或删除，由数据库触发器保护
+  - parent_message_id 是分支顺序权威来源，不以 created_at 或随机 UUID 推断顺序
+  - 默认查询使用 Session cursor_message_id；显式 branch_id 使用该分支没有同分支子节点的 Tip
+  - 分支查询回溯父链时包含继承自其他分支或主链的祖先消息
+  - DELETED Session 不再返回 Message 正文；ACTIVE 和 ARCHIVED Session 可读
+compatibility:
+  - R7 listSessionMessages、Message 和 MessagePage 保持不变，生成 Client/DTO 无需更新
+  - chat_session.cursor_message_id 增加同租户同 Session 复合外键；现有空 Cursor 数据兼容
+  - AP-E3-003 必须复用 chat_message 不可变模型，并在 Run 创建事务中推进 Session Cursor
+verification:
+  commands:
+    - targeted backend and frontend tests
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+  results:
+    targeted_postgresql_tests: 2_passed
+    postgresql_temporal_full_chain: 323_passed_0_skipped
+    frontend_check: 38_passed
+    contract_baseline: agent-platform-v1-dev-baseline-2026-08-r7_verified
+    operation_ids: 168_unique
+    generated_contract_files: 16_current
+    migration_added: 0016_chat_message
+    dependencies_added: none
+acceptance:
+  - 主链和历史分支均按父消息链稳定返回，分页不会重复、缺失或因新消息追加漂移
+  - 跨租户、跨用户、无权限和 DELETED Session 均不得读取 Message 正文
+  - Message UPDATE/DELETE、跨 Session Parent 和非法内容结构被应用或数据库拒绝
+  - Vue 只读展示 text/reference/error 分片，不使用未消毒 HTML，不提前实现聊天和 Run
+follow_up:
+  - AP-E3-003 创建 Run 时必须在同一事务校验 Session 状态、写入 USER Message 并推进 cursor_message_id
+  - AP-E3-003 建立 agent_run 后补齐 Session 删除的非终态 Run 拒绝检查
+  - Artifact、Tool 和 source_run_id 外键只在对应事实表落地后增加，不创建占位表

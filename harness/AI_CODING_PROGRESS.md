@@ -2,7 +2,7 @@
 
 > 本文件是非冻结运行记录，不属于需求、API、事件或数据 Schema 契约。
 
-更新时间：2026-08-07
+更新时间：2026-08-08
 
 ## 开发节奏
 
@@ -31,7 +31,24 @@
 | 15 | `AP-E1-007` Agent Draft API、校验与引用约束 | ✅ 已完成 | 7 个冻结 API、ResourceBinding 路由校验、引用约束、RLS/权限/审计和 `0010_agent_draft` 已完成，真实 PostgreSQL/Temporal 零 skip 验收通过 |
 | 16 | `AP-E1-008` Agent Draft Vue 编辑器与 Epic 1 纵向验收 | ✅ 已完成 | Agent 管理列表、六步草稿编辑器、版本绑定、fallback、子 Agent、引用删除保护和错误态已完成 |
 | 17 | `AP-E1-009` AgentScope 2.0.x 兼容 Spike | 🟡 等待 CI 制品 | 2.0.5/API/事件/Gateway 边界和受控 Dockerfile已完成，待现有 CI 回填生产 manifest digest |
-| 下一步 | `AP-E1-009` 镜像基线收口 | ⏳ 外部制品 | 现有 CI 执行构建、SBOM、扫描、签名与推送，并回填可拉取的 registry digest |
+| 外部前置 | `AP-E1-009` 镜像基线收口 | ⏳ 外部制品 | 现有 CI 执行构建、SBOM、扫描、签名与推送，并回填可拉取的 registry digest |
+| 18 | `AP-E2-001` Snapshot 编译与不可变引用 | ✅ 已完成 | 不可变 Agent Version/Snapshot、确定性编译、Model Binding Snapshot 和真实 PostgreSQL 验证完成 |
+| 19 | `AP-E2-002` AgentScope Bundle 与 Manifest | ✅ 已完成 | Bundle 编译/校验、资源 Hash/权限/供应链边界和真实 PostgreSQL 验证完成 |
+| 20 | `AP-E2-003` Release Workflow 与失败保护 | ✅ 已完成 | 发布 Operation/Outbox/Temporal Workflow、Bundle 持久化和失败关闭完成 |
+| 21 | `AP-E2-004` Deployment 激活与 fencing | ✅ 已完成 | STAGED/ACTIVE/DEGRADED/RETIRED、单调 fencing 和原子激活完成 |
+| 22 | `AP-E2-005` 发布预览、Diff、历史与 Vue 页面 | ✅ 已完成 | R7 Preview、脱敏 Diff、历史查询和 Vue 发布页完成 |
+| 23 | `AP-E2-006` 历史 Snapshot 回滚 | ✅ 已完成 | 新 Release/Operation/Deployment 回滚闭环完成 |
+| 24 | `AP-E3-001` Session CRUD、归档、删除约束和分页 | ✅ 已完成 | `0015_chat_session`、当前用户隔离、固定 Deployment、CRUD/归档/延迟删除、Vue 管理页和全链路验证完成 |
+| 25 | `AP-E3-002` Message 历史、分支顺序和权限 | ✅ 已完成 | `0016_chat_message`、不可变消息链、分支历史、Vue 只读页面和全链路验证完成 |
+| 26 | `AP-E3-003` Run 创建、幂等、状态机和 Snapshot 绑定 | ✅ 已完成 | `0017_agent_run`、原子 USER Message/Run/Outbox、并发保护、固定执行身份和删除 Guard 完成 |
+| 27 | `AP-E3-004` AgentRunWorkflow、Activity、Signal 和 Query | ✅ 已完成 | R8、Workflow/Activity、Attempt、RunSpec Ref、最终 Message 事务和真实 PostgreSQL/Temporal 验证完成 |
+| 28 | `AP-E3-005` 取消、重试、新 Run 语义和 fencing token | ✅ 已完成 | cancel/retry API、Runtime inspect/cancel、安全恢复、新 Attempt fencing 和真实全链路验证完成 |
+| 29 | `AP-E3-006` Outbox dispatcher、Workflow 映射和对账入口 | ✅ 已完成 | R9、正式 Run Router、启动结果持久化、CREATED/CANCELLING 对账和真实全链路验证完成 |
+| 30 | `AP-E3-007` RuntimeEventCandidate Fake 与 Epic 3 纵向验收 | ✅ 已完成 | Candidate Publisher Port、HTTP/Outbox/Temporal/PostgreSQL/getRun 纵向闭环和 Epic 3 全链路回归完成 |
+| 31 | `AP-E4-001` RunEvent 表、计数器、约束和迁移 | ✅ 已完成 | 非分区 RunEvent、独立 Counter、双全局唯一、Payload 上限、RLS、不可变性和容量迁移待办已完成 |
+| 32 | `AP-E4-002` Candidate 校验、批量写入、幂等序号和终态保护 | ✅ 已完成 | serviceAuth 边界、fencing、并发连续序号、逐项幂等、Event Outbox、终态保护和全链路回归完成 |
+| 33 | `AP-E4-003` 事件查询、分页、回放和序号缺口语义 | ✅ 已完成 | 所有权隔离、稳定序号游标、缺口失败关闭、Thinking 脱敏和 102 条真实事件分页回放完成 |
+| 下一步 | `AP-E4-004` Event Outbox、Redis 唤醒与 SSE | ⏳ 待开始 | 历史优先、Last-Event-ID、去重、背压和终态关闭；Redis 只作唤醒，事实仍读 PostgreSQL |
 
 ## 执行记录
 
@@ -359,3 +376,133 @@
 - [x] 全链路门禁通过：真实 PostgreSQL/Temporal `make check-all` 后端 `297 passed, 0 skipped`、前端 `31 passed`；R7 31 个完整性文件、168 个 operationId 和 16 个生成文件零漂移，Black、Ruff、Pyright、Prettier、ESLint、Vue TypeScript 和 Vite 生产构建通过。
 - 依赖与部署：未新增 Python/Node 依赖；部署前执行 Alembic `0014_release_rollback`。外部 CI Registry manifest digest、生产对象存储、签名、SBOM、扫描和 Smoke Adapter 仍由部署环境注入，缺失时发布与回滚继续失败关闭。
 - Epic 2 结果：Snapshot、Bundle、Release、Deployment、预览/Diff/历史和回滚闭环已完成。下一任务建议进入 `AP-E3-001` Session CRUD、归档、删除约束和分页，并在 Session 创建时开始落实 Deployment 固定边界。
+
+### 2026-08-08 — AP-E3-001 Session CRUD、归档、删除约束和分页
+
+- [x] 新增任务包 `harness/tasks/AP-E3-001.yaml`，固定 R7 契约和 Session/Deployment/Run 边界；未修改 OpenAPI、JSON Schema、基线版本、SHA-256 或生成文件。
+- [x] 新增领域 `SessionRecord`、应用 `SessionManagementService`、PostgreSQL `SqlAlchemySessionStore` 和冻结 6 个 Session 路由；后端代码位于 `backend/`。
+- [x] 新增迁移 `0015_chat_session`：Session 表、用户/Agent/Deployment 复合外键、生命周期 Check、分页索引、FORCE RLS，以及 tenant-admin `session:create/read/list/update/delete` 权限回填。
+- [x] Session 创建只读取当前 Agent 的 `active_deployment_id`，校验 Deployment 为 `ACTIVE/DEGRADED` 后不可变写入；客户端不能指定 Deployment，后续发布/回滚不会更新已有 Session。
+- [x] list/get/update/archive/delete 始终按当前 tenant + actor user 过滤；更新/状态变更使用强 ETag CAS；创建、归档、删除复用共享幂等，删除只允许 `ARCHIVED → DELETED`，生成同步终态 `SUCCEEDED` Operation 并保留延迟删除墓碑。
+- [x] 默认列表隐藏 DELETED，显式 `status=DELETED` 可查看当前用户墓碑；非终态 Run 删除检查留待 AP-E3-003 的 `agent_run` 表和真实状态机接入，不创建占位表。
+- [x] 新增 Vue `/sessions` 页面、服务层和 4 个前端测试：游标分页、Agent 筛选、新建、重命名、归档、归档后删除、Operation 轮询、loading/empty/error/窄屏布局；前端代码位于 `frontend/`。
+- [x] 全链路验证通过：`make contract-check`（R7、168 operationIds、16 生成文件零漂移）、`uv lock --check`、`git diff --check`；后端 `make check-all` 为 `307 passed, 0 skipped`，前端 `35 passed`，Prettier、ESLint、Vue TypeScript、Vite 构建全部通过。
+- [x] 真实 PostgreSQL 验证覆盖迁移升级/降级、Session RLS、权限回填、跨租户/跨用户不可见、Deployment 固定、创建幂等、分页、ETag、归档前置删除、终态 Operation、审计摘要和发布/回滚后旧 Session 仍固定原 Deployment。
+- 依赖与部署：未新增 Python/Node 依赖；部署前执行 Alembic `0015_chat_session`。降级会删除 Session 历史和权限回填，仅在确认无需保留 Session 事实时执行。
+- 协同结论：平台 Session 与 Runtime Session 继续分离；AP-E3-002 必须复用本阶段的 tenant/user 过滤和固定 Deployment，不得从 Agent 当前 Draft 或新发布重新解析历史 Session。
+- 下一任务建议：`AP-E3-002` Message 历史、分支顺序和权限；随后 `AP-E3-003` 再把删除的非终态 Run 约束补入同一事务。
+
+### 2026-08-08 — AP-E3-002 Message 历史、分支顺序和权限
+
+- [x] 保持 R7 `listSessionMessages`、`Message` 和 `MessagePage` 契约不变，新增只读应用服务、FastAPI 路由和 PostgreSQL Store；查询同时要求当前 tenant、actor Session 所有权、`session:read` 与 `message:list`。
+- [x] 新增迁移 `0016_chat_message`：不可变 `chat_message`、复合 Session/Parent/Cursor 外键、分支父节点唯一索引、FORCE RLS、UPDATE/DELETE 拒绝触发器，以及 tenant-admin `message:read/list` 权限回填。
+- [x] `parent_message_id` 作为顺序权威来源；默认从 Session `cursor_message_id` 回溯当前链，显式 `branch_id` 从唯一 Tip 回溯并包含继承祖先；分页 Cursor 固定原 Tip，后续追加消息不会改变已开始的分页视图。
+- [x] DELETED Session 不返回消息正文，ACTIVE/ARCHIVED 保持只读；跨租户、跨用户、跨 Session Parent、空内容数组和消息变更均在应用或数据库边界拒绝。
+- [x] 新增 Vue `/sessions/:id/messages` 页面和 Session 列表入口，支持分支筛选、游标分页、链路元数据与 text/artifact/tool/error 分片纯文本展示；不使用 `v-html`，未提前实现聊天输入、Run 或 SSE。
+- [x] 全链路验证通过：真实 PostgreSQL 定向 `2 passed`；PostgreSQL/Temporal `make check-all` 后端 `323 passed, 0 skipped`、前端 `38 passed`；R7 31 个完整性文件、168 个 operationId 和 16 个生成文件零漂移。
+- 依赖与部署：未新增 Python/Node 依赖；部署前执行 Alembic `0016_chat_message`。降级会删除消息历史，仅应在确认无需保留会话事实时执行。
+- 协同结论：AP-E3-003 必须复用本阶段不可变 Message 和 Session Cursor，在创建 Run 的同一事务写入 USER Message、推进 Cursor，并补齐 Session 删除的非终态 Run Guard；Artifact/Tool/Run 外键等待真实事实表，不创建占位表。
+- 下一任务建议：`AP-E3-003` Run 创建、Session 并发保护和不可变执行输入快照。
+
+### 2026-08-08 — AP-E3-003 Run 创建、幂等、状态机和 Snapshot 绑定
+
+- [x] 保持 R7 `listSessionRuns`、`createRun`、`getRun`、`RunCreateRequest/RunAccepted/Run/RunPage` 不变；新增 Run 应用服务、FastAPI 路由和真实 PostgreSQL Store，当前用户所有权与 `run:create/read/list` 权限边界已接通。
+- [x] 按人工批准的方案 1，创建事务只追加 USER Message，并原子写入 AgentRun CREATED、`agent.run_requested.v1` Outbox、脱敏审计、Session Cursor 和幂等完成事实；`assistant_message_id` 保持 NULL，不创建可变或虚假占位消息。
+- [x] 新增迁移 `0017_agent_run`、`agent_run/run_attempt` ORM 和领域状态机：Deployment/Agent/Snapshot、USER/ASSISTANT Message、Session、重试来源均由租户复合外键约束；Run 输入由数据库触发器保护，Assistant 绑定只允许后续一次性 `NULL → 同 Run ASSISTANT Message`。
+- [x] Session 行锁和活动 Run 部分唯一索引共同保证同一 Session 分支只有一个非终态 Run，稳定冲突码为 `RUN_ALREADY_ACTIVE`；Run 创建幂等重放返回原 `RunAccepted`，同键不同请求继续使用共享 `IDEMPOTENCY_KEY_REUSED`。
+- [x] Run 固定精确 Deployment 和 Snapshot：Session 默认 Deployment 后续处于 RETIRED 仍可供历史 Session 使用；客户端显式 Deployment 仅接受同 Agent 的 ACTIVE/DEGRADED。Artifact 事实表尚未落地，非空附件失败关闭且不保存裸引用。
+- [x] Session 删除事务已补齐非终态 Run Guard；ARCHIVED Session 保留 Run 历史只读但不可再创建，DELETED Session 不返回 Run。Message 的 UPDATE/DELETE 拒绝触发器保持不变。
+- [x] 真实 PostgreSQL 验证覆盖原子写入、审计不含用户正文、幂等、并发双请求、固定 Snapshot、RETIRED 默认 Deployment、显式 Deployment 拒绝、跨租户/跨用户隔离、RLS、Run 输入不可变、Session 删除 Guard 和迁移升级/降级。
+- [x] 全链路门禁通过：局部 `59 passed`；`make backend-check` 为 `332 passed, 8 skipped`；PostgreSQL/Temporal `make check-all` 后端 `340 passed, 0 skipped`、前端 `38 passed`；R7 31 个完整性文件、168 个 operationId 和 16 个生成文件零漂移，Black、Ruff、Pyright、Prettier、ESLint、Vue TypeScript 和 Vite 构建通过。
+- 依赖与部署：未新增 Python/Node 依赖；部署前执行 Alembic `0017_agent_run`。降级会删除 Run/RunAttempt 历史和 Run 权限，并解除 Message 来源 Run 外键，仅应在确认无需保留执行事实时执行。
+- 历史问题评估：修正 PostgreSQL RLS 测试中新增表名的预期排序；同时修复默认应用未装配数据库服务时 Session/Message/Run 路由可能在鉴权前访问空服务并返回 500 的同型问题，现统一返回稳定 `DEPENDENCY_UNAVAILABLE`。两项均未改变业务契约或成功路径，发布、回滚、Session、Message、前端和契约链路均通过回归。
+- 后续前置：`AP-E3-004` 开始前同步正式数据库设计，把 `assistant_message_id` 调整为创建期 nullable，并明确最终化事务只 INSERT ASSISTANT Message、一次性绑定 Run 和推进 Cursor；随后实现 Workflow/Activity、RunAttempt 分配与 RunSpec 读取。
+
+### 2026-08-08 — AP-E3-004 AgentRunWorkflow、Activity、Signal 和 Query
+
+- [x] 完成 R8 正式基线同步：方案 1 已进入数据库、领域、架构、Temporal、核心接口、AI Coding、执行计划、测试和索引文档；31 个完整性文件、168 个 operationId 与 16 个生成文件保持一致。
+- [x] 新增版本化 `AgentRunWorkflowInput/State/Result`、RunSpec Ref、RuntimeCompletion、Finalize、`cancel_run` Signal 和 `run_state` Query；Workflow History 只保存引用、Hash、Attempt 与小型终态摘要，不保存 Prompt 或高频事件。
+- [x] 新增 `AgentRunWorkflowActivities` 及 RunSpecCompiler、RunRuntimeExecutor、FencingTokenIssuer、RunWorkflowStore 端口；准备阶段先幂等绑定 Workflow/分配首个 Attempt，再通过确定性 token 编译不可变 RunSpec，执行阶段默认不自动重试用户 Prompt。
+- [x] PostgreSQL 完成 `CREATED → QUEUED → PREPARING → RUNNING → SUCCEEDED/FAILED` 和 `ALLOCATED → STARTING → RUNNING → COMPLETED/LOST`；重复准备、启动和最终化不重复分配 Attempt 或 Message。
+- [x] 成功最终化事务只 INSERT 一条 ASSISTANT Message，并原子绑定 `assistant_message_id`、推进 Session Cursor、完成 Run/Attempt；失败或 RunSpec 准备失败不创建回复。ASSISTANT Message 的 UPDATE/DELETE 仍被数据库拒绝。
+- [x] 新增确定性 `run/{tenant_id}/{run_id}` Starter、Run Worker Definition 和 HMAC fencing token 发行器；token 只以 `SecretStr` 短暂存在，数据库仅保存 SHA-256。正式 Outbox Router 接线和启动结果回写保留给 AP-E3-006。
+- [x] 历史协同修正：删除 `RunAttemptModel` 中 R8 数据库设计和 `0017` 迁移均不存在的 `created_by` 字段，避免实际 Attempt 读写产生 ORM/数据库列漂移；无需新增迁移。
+- [x] 验证通过：定向单元 `19 passed`、Temporal Test Environment `6 passed`（含 Query、重复 Signal、准备失败和 History Replay）、真实 PostgreSQL `1 passed`；`make backend-check` 为 `342 passed, 10 skipped`，真实 PostgreSQL/Temporal `make check-all` 为后端 `352 passed, 0 skipped`、前端 `38 passed`。
+- 依赖与部署：未新增 Python/Node 依赖或数据库迁移，`uv lock --check` 通过。生产 RunSpec 对象存储编译器、真实 Runtime Executor 和部署 Secret 解析必须显式注入，缺失时不会伪造执行成功。
+- 下一任务建议：`AP-E3-005` 复用本阶段 Signal/Query、RunAttempt 和 fencing 边界，实现 cancelRun/retryRun、Runtime cancel/inspect、取消/超时竞态及安全的新 Attempt 接管；不得提前把 E3-006 Outbox 对账或 Epic 4 RunEvent/SSE 混入。
+
+### 2026-08-08 — AP-E3-005 取消、重试、新 Run 语义和 fencing token
+
+- [x] 按 R8 冻结 OpenAPI 实现 `cancelRun/retryRun` FastAPI 路由、应用服务、当前用户所有权、`run:cancel/retry` 权限和共享幂等；新增 `0018_run_control_permissions` 为既有 tenant_admin 回填控制权限，不修改冻结公共 DTO。
+- [x] Cancel 事务只把非终态 Run 推进到 `CANCELLING`；已终态请求幂等返回当前事实。Workflow 通过确定性 Temporal Signal、`inspect_agent_runtime_v1`、`cancel_agent_runtime_v1` 和最终化 Activity 协同，只有 Runtime 已停止/已不存在时才写 `CANCELLED`，未知取消结果失败关闭且不创建 ASSISTANT Message。
+- [x] Retry 始终创建全新 Run 并设置 `retry_of_run_id`；`original_snapshot` 固定原 Deployment/Snapshot，`current_deployment` 只解析同 Agent 当前 ACTIVE/DEGRADED Deployment。新 Run 复用原不可变 USER Message，不追加重复 Prompt、不修改旧 Run/Attempt/Message，并阻止 Session 已前移时隐式回退历史分支。
+- [x] 新增 RuntimeInspection/Cancellation/Recovery 1.1 内部契约和 Runtime Controller Port。执行 Activity 异常后先 inspect：只有 `LOST + safe_to_retry` 才有界创建 `attempt_no + 1`；RUNNING/UNKNOWN/不安全 LOST 终结为 `SESSION_NOT_RECOVERABLE`，不会自动重放 Prompt。
+- [x] 新 Attempt 使用新的确定性 HMAC fencing token，明文只在 Activity/Runtime 控制请求内短暂存在；数据库和 Workflow History 不保存明文。`mark_run_running/finalize_run/finalize_cancellation` 校验当前 Attempt Hash，旧 Attempt/token 无法推进新 Attempt 或写入新终态。
+- [x] Temporal 使用 patch marker 隔离 AP-E3-005 控制语义；重复 Signal 幂等，执行 Activity 可受控中断。真实 Test Environment 覆盖运行中取消、LOST 安全恢复、UNKNOWN 不重放和 History Replay。
+- [x] 验证通过：定向单元 `34 passed`；真实 Temporal `8 passed`；真实 PostgreSQL `1 passed`，覆盖 CREATED/RUNNING 取消、终态重复取消、Retry Message 复用、旧 token 拒绝和两代 Attempt；真实 PostgreSQL/Temporal `make check-all` 为后端 `363 passed`、前端 `38 passed`，契约 31 个完整性文件、168 个 operationId 和 16 个生成文件零漂移。
+- 依赖与部署：未新增 Python/Node 依赖，`uv lock --check` 与 `git diff --check` 通过；部署前执行 Alembic `0018_run_control_permissions`。生产 API 组合必须注入 `TemporalRunWorkflowControl`，Run Worker 必须同时注入 Runtime Executor、Runtime Controller、RunSpec Compiler 和 fencing Secret。
+- 协同与剩余边界：正式 Run Outbox Router、Temporal 启动结果回写、长时间 CREATED/CANCELLING Reconciler 属于 `AP-E3-006`；`current_deployment` 的 Snapshot Diff 与二次确认由后续 Run UI/Epic 3 纵向验收实现，本阶段未提前引入 Epic 4 RunEvent/SSE。
+- 下一任务建议：`AP-E3-006` 将 `agent.run_requested.v1` 接入正式 Outbox Router，持久化 Workflow 启动映射，并对无 Workflow 的 CREATED 与长时间 CANCELLING Run 提供幂等对账入口。
+
+### 2026-08-08 — AP-E3-006 Outbox dispatcher、Workflow 映射和对账入口
+
+- [x] 完成 R9 基线同步：数据库、领域、架构、Temporal、AI Coding、执行计划、测试和索引明确启动确认与对账语义；31 个完整性文件、168 个 operationId 和 16 个生成文件保持一致，公共 OpenAPI/Run DTO/RunSpec/RunEvent 未改变。
+- [x] 通用 `OutboxDispatcher` 在 Temporal Start/Already Exists 后、Outbox PUBLISHED 前调用结果回写 Port；正式组合 Router 同时注册 Probe、Release 和 `agent.run_requested.v1`，禁止额外路由覆盖冻结事件。
+- [x] 新增 `0019_run_workflow_reconciliation`：持久化 `temporal_run_id`、`workflow_start_outcome`、`workflow_started_at`、`cancelling_at`，增加 tenant+workflow 唯一约束、完整性 Check 和 CANCELLING 对账索引；历史只有 workflow_id 的 Run 保持兼容。
+- [x] 启动映射同时校验 tenant、aggregate 与确定性 Workflow ID；同一映射重复回写幂等，Temporal 未返回 Run ID 时保持可重试，不把已启动 Workflow 误入死信。
+- [x] 新增 CREATED/CANCELLING Reconciler 和 bounded runner：Temporal 不存在时恢复既有 PENDING/DEAD/缺失 Run Outbox，存在时补启动映射；运行中的 CANCELLING 重发稳定 signal_id，Temporal 已终态但数据库仍非终态只计入 unresolved，不直接写 CANCELLED。
+- [x] 新增低基数 `agent_platform_run_reconciliation_total{outcome}` 指标；未将 tenant_id、run_id 或 workflow_id 作为 Label。真实 PostgreSQL 验证发现并修正补偿聚合名必须复用历史 `aggregate_type=run`，避免产生第二条启动事件。
+- [x] 验证通过：定向单元 `49 passed`；真实 PostgreSQL `1 passed`；真实 Temporal `8 passed`；PostgreSQL/Temporal `make check-all` 后端 `375 passed`、前端 `38 passed`，Black、Ruff、Pyright、Prettier、ESLint、Vue TypeScript 和 Vite 构建全部通过。
+- 依赖与部署：未新增 Python/Node 依赖；`uv lock --check`、`git diff --check` 通过。部署前执行 Alembic `0019_run_workflow_reconciliation`。生产 Event/Reconciliation 进程仍需部署层注入 Secret Backend、数据库 DSN、服务 TenantContext Source 和 Temporal Client；当前主入口继续失败关闭，不会伪造 Worker 已可部署。
+- 协同结论：Session、Message 不可变性、RunAttempt/fencing、取消/重试和 Temporal History 语义保持不变；本阶段未创建 RunEvent、SSE 或 AG-UI 旁路。
+- 下一任务建议：`AP-E3-007` 使用 RuntimeEventCandidate 测试 Fake 和 `getRun` 轮询完成 Epic 3 纵向验收；生产 Worker 装配、深度终态修复、告警与恢复演练留在 Epic 7。
+
+### 2026-08-08 — AP-E3-007 RuntimeEventCandidate Fake 与 Epic 3 纵向验收
+
+- [x] 新增内部 `RuntimeEventCandidatePublisher` Port；Runtime Executor 在 Activity 内直接发布冻结 Candidate，不把高频事件作为 Activity 返回值写入 Temporal Workflow History。
+- [x] `RunExecutionRequest` 增加 Activity 内存态 `SecretStr` fencing token；同一 token Hash 用于 `mark_run_running`，明文只传给 Runtime/Publisher，数据库继续只保存 SHA-256。
+- [x] 测试 Fake 产生 `run_started/text_message_start/text_delta/text_message_end`，全部经过冻结 TypeAdapter；重复 `source_event_id` 的第 5 次发布被 Fake Publisher 幂等收敛为 4 条外部候选事实。
+- [x] 真实纵向链路覆盖 HTTP `createRun`、正式 Outbox Router、Temporal `AgentRunWorkflow`、真实 PostgreSQL Activity Store、Fake Runtime/Publisher 和 HTTP `getRun` 轮询，最终状态为 `SUCCEEDED`。
+- [x] 协同事实验证：Outbox 为 `PUBLISHED`，Workflow ID/Temporal Run ID/启动结果完整，RunAttempt 为 `COMPLETED`，Session Cursor 指向唯一 ASSISTANT Message；USER/ASSISTANT Message 的 UPDATE/DELETE 均被数据库拒绝。
+- [x] Epic 4 边界验证：Candidate source ID 和 Delta 不进入 Workflow History，数据库不存在 `run_event` 表，公共 `getRun.latest_sequence_no` 仍为 0；未实现 Event Store、sequence 分配、Redis、SSE 或 AG-UI。
+- [x] 回归通过：定向单元/AgentScope/Worker `17 passed`；真实 PostgreSQL 纵向 `1 passed`；真实 Temporal 取消、恢复和 Replay `8 passed`；真实 PostgreSQL/Temporal `make check-all` 后端 `375 passed`、前端 `38 passed`。
+- 依赖、迁移与契约：未新增 Python/Node 依赖，未新增数据库迁移；R9 公共 OpenAPI、Run DTO、RunSpec、RunEvent Schema 和前端生成代码不变，31 个完整性文件、168 个 operationId、16 个生成文件零漂移。
+- 历史问题评估：首次纵向运行未 claim 新 Outbox，确认是测试固定时间早于 API 创建时间，不是生产 Dispatcher 缺陷；改为以 dispatch 时钟计算可见时间后通过，未修改生产重试或消息语义。
+- Epic 3 结果：Session、不可变 Message、Run/Attempt、Outbox、Temporal、取消/重试、fencing、对账入口和状态轮询已形成完整可验证闭环。生产 RunSpec/AgentScope/Event Publisher 进程装配仍按计划留给 Epic 7，Event Store/SSE 从 `AP-E4-001` 开始。
+
+### 2026-08-08 — AP-E4-001 RunEvent 表、计数器、约束和迁移
+
+- [x] 新增 `0020_run_event_store`、`run_event` 和独立 `run_event_counter`；字段、V1 版本、20 个冻结事件类型、`run_id + sequence_no`、`run_id + execution_attempt + source_event_id`、256KB Payload Check 和复合 Run/Session 外键完整。
+- [x] 两表启用 ENABLE/FORCE RLS；RunEvent 使用数据库触发器拒绝 UPDATE/DELETE，Counter 保留 AP-E4-002 所需原子 UPDATE 能力。未新增公共写入 API、Candidate Writer、查询、SSE、Redis 或 AG-UI 旁路。
+- [x] 人工确认本阶段使用非分区普通表：PostgreSQL 16 无法同时原生满足 `recorded_at` 月分区和不含分区键的冻结全局唯一约束，当前优先保证序号与幂等正确性，且没有把 `recorded_at` 加入唯一键弱化语义。
+- [x] 真实 PostgreSQL 覆盖普通表类型、升级/降级、双唯一冲突、Payload 超限、不可变触发器、Counter 更新和跨租户不可见/不可写；历史 Epic 3 验收同步改为“表存在但 Candidate 尚未写入，`latest_sequence_no=0`”。
+- [x] 验证通过：模型/迁移 `37 passed`，真实 PostgreSQL RLS `1 passed`、完整资源/事件链路 `1 passed`；带真实 PostgreSQL/Temporal 的 `make check-all` 后端 `377 passed`、前端 `38 passed`，R9 契约、31 个完整性文件和 16 个生成文件零漂移。
+- 依赖与部署：未新增 Python/Node 依赖；部署前执行 Alembic `0020_run_event_store`。降级会删除 RunEvent/Counter 事实，仅允许在确认无需保留事件历史时执行。
+- **硬性容量待办**：生产达到 RunEvent 分区容量阈值前，必须建立“全局唯一登记表 + 按 `recorded_at` 月分区事件表”，持续保证 event_id、Run sequence 和 attempt/source 全局唯一，并提供双写、完整性核对、存量迁移、切换与回滚方案；该项不得以增加 `recorded_at` 到唯一键的方式降级幂等语义。
+- 下一任务建议：`AP-E4-002` Candidate 校验、批量写入、Counter 原子分配、`AgentRun.latest_sequence_no` 同事务物化和终态保护。
+
+### 2026-08-08 — AP-E4-002 Candidate 校验、批量写入、幂等序号和终态保护
+
+- [x] 新增 `RunEventIngestionService`、PostgreSQL Store 和冻结内部批量路由；只接受可信 service workload context 与 `internal:event_write`，部署未注入 mTLS/SPIFFE Adapter 时失败关闭。
+- [x] 按 Run 行锁串行化批次，校验当前 Attempt 和 SHA-256 fencing hash；只为 created 项连续分配序号，并在同一事务写 RunEvent、Counter、`AgentRun.latest_sequence_no` 和一条 `run.events_appended.v1` Outbox。
+- [x] 支持跨请求与同批 `run_id + attempt + source_event_id` 幂等；相同内容返回原 event_id/sequence_no，不同内容逐项 `IDEMPOTENCY_KEY_REUSED`，部分失败不阻断其他合法事件。
+- [x] stale fencing 返回批次级 409 `EXECUTION_FENCING_REJECTED`，且拒绝审计先提交；终态冲突、Finalizer 尚未物化终态和结果 Message/错误不匹配均逐项拒绝并审计。
+- [x] 为保持既有 Session/Message/Run 协同，Event Service 不绕过 Finalizer 修改 Run 终态；Finalizer 前拒绝终态 Candidate，Finalizer 后只接受匹配事实，相同终态重放幂等，冲突终态拒绝。
+- [x] 新增 `SqlAlchemyRuntimeEventCandidatePublisher`；Publisher 被拒绝时向 Activity 传播稳定错误。Temporal Outbox Store 只领取已注册 Workflow 事件，RunEvent Outbox 留给 AP-E4-004 Event Dispatcher。
+- [x] 真实 PostgreSQL 验收覆盖 10 个并发批次/100 个 Candidate、序号 1～100、同批/跨批重复、key 复用、部分成功、stale fencing、终态保护、Outbox、审计、不可变 Message、Attempt 和 Session Cursor；最终 Run 事件序号推进到 102。
+- [x] 验证通过：定向单元/API/Publisher/Composition `16 passed`，真实 PostgreSQL纵向 `1 passed`；`make backend-check` 为 `376 passed, 12 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `388 passed`、前端 `38 passed`。
+- 契约与依赖：R9 的 31 个完整性文件、168 个 operationId 和 16 个生成文件零漂移；未新增 Python/Node 依赖和数据库迁移。
+- 部署与待办：生产必须注入可信 Internal Service Identity Adapter；`run.events_appended.v1` 的 Redis/SSE Dispatcher 属于 AP-E4-004；“全局唯一登记表 + recorded_at 月分区事件表”仍为生产容量阈值前硬性待办。
+- 下一任务建议：`AP-E4-003` 实现事件查询、分页、回放和序号缺口语义，复用 PostgreSQL 事实、`latest_sequence_no` 和现有 RLS，不提前加入 SSE、Redis 或 AG-UI。
+
+### 2026-08-08 — AP-E4-003 RunEvent 查询、分页、历史回放和序号缺口保护
+
+- [x] 接通冻结 `listRunEvents`：普通用户通过 `run:read` 和当前 Session 所有权读取，跨租户、跨用户、Run 不存在或 Session 已删除统一返回 404；内部 `internal:event_write` 身份未被复用于用户查询。
+- [x] PostgreSQL 先固定 `AgentRun.latest_sequence_no`，再按 `sequence_no > after AND sequence_no <= latest_sequence_no` 升序读取 `limit + 1`；`after ==/> latest` 合法返回空页，并避免并发追加污染本次页视图。
+- [x] 每条数据库事实通过冻结 `RUN_EVENT_ADAPTER` 校验后返回；首序号、相邻序号或页尾存在缺口时稳定返回 409 `RUN_EVENT_SEQUENCE_GAP` 和非敏感定位详情，不跳过缺口伪造完整回放。
+- [x] 协调安全与连续序号：无 `run:view_sensitive` 时保留 `thinking_delta` 的事件标识和序号，仅把正文替换为固定脱敏文本；有权限时返回原内容，不过滤事件制造 Reducer 永久补洞。
+- [x] 真实 PostgreSQL 链路复用 AP-E4-002 写入事实，按 37 条分页完整回放 1～102，`latest_sequence_no=102`，并验证其他用户不可见；Run/Attempt、不可变 Message、Session Cursor、Outbox 和终态保护均未回归。
+- [x] 验证通过：定向应用/API/Composition `14 passed`；`make backend-check` 为 `383 passed, 12 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `395 passed`、前端 `38 passed`。R9 的 31 个完整性文件、168 个 operationId 和 16 个生成文件零漂移。
+- 契约、依赖与迁移：未修改冻结 OpenAPI/RunEvent Schema/生成类型，未新增 Python/Node 依赖或数据库迁移；继续复用 `0020_run_event_store` 和非分区事实表。
+- 历史问题与风险：本轮没有发现需要扩大范围修改的历史遗留问题；`.npmrc` 读取权限和 Rollup 上游 PURE 注释仅产生既有非阻断告警。Thinking 脱敏保持 Schema 兼容，后续 AG-UI/Vue Reducer 必须按权限忽略脱敏正文。
+- 下一任务建议：`AP-E4-004` 实现 Event Outbox Dispatcher、Redis 唤醒和 SSE；必须先补历史再订阅实时，按 sequence_no 去重，支持 Last-Event-ID、背压与终态关闭，Redis 不作为事实源。

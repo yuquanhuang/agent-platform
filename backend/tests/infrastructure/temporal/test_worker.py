@@ -5,6 +5,8 @@ from typing import cast
 from packages.application.temporal import (
     CONTROL_PLANE_TASK_QUEUE,
     RUN_ORCHESTRATOR_TASK_QUEUE,
+    AgentRunWorkflow,
+    AgentRunWorkflowActivities,
     PlatformProbeWorkflow,
     PublishAgentWorkflow,
     ReleaseWorkflowActivities,
@@ -15,6 +17,7 @@ from packages.infrastructure.public import AppSettings
 from packages.infrastructure.temporal import (
     probe_worker_definition,
     release_control_worker_definition,
+    run_orchestrator_worker_definition,
     temporal_namespace,
 )
 
@@ -36,6 +39,29 @@ class FakePublishActivities:
         return None
 
     async def fail_release(self, input: object) -> None:
+        return None
+
+
+class FakeRunActivities:
+    async def prepare_agent_run(self, input: object) -> None:
+        return None
+
+    async def execute_agent_run(self, input: object) -> None:
+        return None
+
+    async def inspect_agent_runtime(self, input: object) -> None:
+        return None
+
+    async def cancel_agent_runtime(self, input: object) -> None:
+        return None
+
+    async def recover_agent_run(self, input: object) -> None:
+        return None
+
+    async def finalize_agent_run(self, input: object) -> None:
+        return None
+
+    async def finalize_agent_run_cancellation(self, input: object) -> None:
         return None
 
 
@@ -64,3 +90,13 @@ def test_release_control_worker_registers_publish_workflow_and_all_activities() 
     assert definition.task_queue == CONTROL_PLANE_TASK_QUEUE
     assert definition.workflows == (PlatformProbeWorkflow, PublishAgentWorkflow)
     assert len(definition.activities) == 7
+
+
+def test_run_worker_registers_agent_workflow_and_only_run_activities() -> None:
+    definition = run_orchestrator_worker_definition(
+        cast(AgentRunWorkflowActivities, FakeRunActivities())
+    )
+
+    assert definition.task_queue == RUN_ORCHESTRATOR_TASK_QUEUE
+    assert definition.workflows == (PlatformProbeWorkflow, AgentRunWorkflow)
+    assert len(definition.activities) == 8

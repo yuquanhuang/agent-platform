@@ -1075,6 +1075,19 @@ class DeploymentModel(Base):
         ),
         UniqueConstraint("tenant_id", "id", name="uq_deployment__tenant_id_id"),
         UniqueConstraint(
+            "tenant_id",
+            "id",
+            "agent_id",
+            name="uq_deployment__tenant_id_agent_id",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            "agent_id",
+            "snapshot_id",
+            name="uq_deployment__tenant_id_agent_snapshot",
+        ),
+        UniqueConstraint(
             "release_id",
             "runtime_target_id",
             name="uq_deployment__release_runtime_target",
@@ -1132,6 +1145,555 @@ class DeploymentModel(Base):
     )
     retired_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class ChatSessionModel(Base):
+    """User-owned platform Session pinned to one Deployment."""
+
+    __tablename__ = "chat_session"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_chat_session__tenant_user__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent_definition.tenant_id", "agent_definition.id"],
+            name="fk_chat_session__tenant_agent__agent_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "default_deployment_id", "agent_id"],
+            ["deployment.tenant_id", "deployment.id", "deployment.agent_id"],
+            name="fk_chat_session__tenant_deployment_agent__deployment",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "cursor_message_id", "id"],
+            ["chat_message.tenant_id", "chat_message.id", "chat_message.session_id"],
+            name="fk_chat_session__tenant_cursor_session__chat_message",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_chat_session__tenant_id_id"),
+        CheckConstraint("status IN ('ACTIVE', 'ARCHIVED', 'DELETED')", name="status"),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        CheckConstraint("jsonb_typeof(metadata_json) = 'object'", name="metadata_json"),
+        CheckConstraint(
+            "(status = 'ACTIVE' AND archived_at IS NULL AND deleted_at IS NULL) OR "
+            "(status = 'ARCHIVED' AND archived_at IS NOT NULL "
+            "AND deleted_at IS NULL) OR "
+            "(status = 'DELETED' AND archived_at IS NOT NULL "
+            "AND deleted_at IS NOT NULL)",
+            name="lifecycle_timestamps",
+        ),
+        Index(
+            "ix_chat_session__tenant_user_updated_at",
+            "tenant_id",
+            "user_id",
+            text("updated_at DESC"),
+        ),
+        Index(
+            "ix_chat_session__tenant_agent_created_at",
+            "tenant_id",
+            "agent_id",
+            text("created_at DESC"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    default_deployment_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'ACTIVE'")
+    )
+    cursor_message_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    branch_root_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    metadata_json: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    metadata_schema_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'session-metadata/v1'")
+    )
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ChatMessageModel(Base):
+    """Immutable content node in a Session message chain."""
+
+    __tablename__ = "chat_message"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["chat_session.tenant_id", "chat_session.id"],
+            name="fk_chat_message__tenant_session__chat_session",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "parent_message_id", "session_id"],
+            ["chat_message.tenant_id", "chat_message.id", "chat_message.session_id"],
+            name="fk_chat_message__tenant_parent_session__chat_message",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_run_id", "session_id"],
+            ["agent_run.tenant_id", "agent_run.id", "agent_run.session_id"],
+            name="fk_chat_message__tenant_source_run_session__agent_run",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            "session_id",
+            name="uq_chat_message__tenant_id_session_id",
+        ),
+        CheckConstraint("role IN ('USER', 'ASSISTANT', 'SYSTEM', 'TOOL')", name="role"),
+        CheckConstraint(
+            "jsonb_typeof(content_parts_json) = 'array' "
+            "AND jsonb_array_length(content_parts_json) >= 1",
+            name="content_parts_json",
+        ),
+        CheckConstraint(
+            "parent_message_id IS NULL OR parent_message_id <> id",
+            name="parent_not_self",
+        ),
+        Index(
+            "ix_chat_message__tenant_session_branch_created_at",
+            "tenant_id",
+            "session_id",
+            "branch_id",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_chat_message__tenant_session_parent",
+            "tenant_id",
+            "session_id",
+            "parent_message_id",
+        ),
+        Index(
+            "uq_chat_message__branch_parent",
+            "tenant_id",
+            "session_id",
+            "branch_id",
+            "parent_message_id",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    session_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    branch_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    parent_message_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content_parts_json: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=False
+    )
+    content_schema_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'message-content/v1'")
+    )
+    source_run_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+
+
+class AgentRunModel(Base):
+    """Run identity and immutable execution inputs with materialized lifecycle state."""
+
+    __tablename__ = "agent_run"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["chat_session.tenant_id", "chat_session.id"],
+            name="fk_agent_run__tenant_session__chat_session",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_message_id", "session_id"],
+            ["chat_message.tenant_id", "chat_message.id", "chat_message.session_id"],
+            name="fk_agent_run__tenant_user_message_session__chat_message",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "assistant_message_id", "session_id"],
+            ["chat_message.tenant_id", "chat_message.id", "chat_message.session_id"],
+            name="fk_agent_run__tenant_assistant_message_session__chat_message",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "deployment_id", "agent_id", "snapshot_id"],
+            [
+                "deployment.tenant_id",
+                "deployment.id",
+                "deployment.agent_id",
+                "deployment.snapshot_id",
+            ],
+            name="fk_agent_run__tenant_deployment_agent_snapshot__deployment",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "snapshot_id"],
+            ["agent_snapshot.tenant_id", "agent_snapshot.id"],
+            name="fk_agent_run__tenant_snapshot__agent_snapshot",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_agent_run__tenant_created_by__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "retry_of_run_id", "session_id"],
+            ["agent_run.tenant_id", "agent_run.id", "agent_run.session_id"],
+            name="fk_agent_run__tenant_retry_session__agent_run",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_run__tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            "session_id",
+            name="uq_agent_run__tenant_id_session_id",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "created_by",
+            "idempotency_key",
+            name="uq_agent_run__tenant_created_by_idempotency",
+        ),
+        CheckConstraint(
+            "status IN ('CREATED','QUEUED','PREPARING','RUNNING',"
+            "'WAITING_APPROVAL','CANCELLING','SUCCEEDED','FAILED','CANCELLED','TIMEOUT')",
+            name="status",
+        ),
+        CheckConstraint(
+            "result_quality IS NULL OR result_quality IN "
+            "('NORMAL','SUCCEEDED_WITH_WARNINGS')",
+            name="result_quality",
+        ),
+        CheckConstraint("current_attempt >= 0", name="current_attempt"),
+        CheckConstraint("latest_sequence_no >= 0", name="latest_sequence_no"),
+        CheckConstraint("timeout_seconds BETWEEN 1 AND 86400", name="timeout_seconds"),
+        CheckConstraint(
+            "token_budget IS NULL OR token_budget >= 1", name="token_budget"
+        ),
+        CheckConstraint(
+            "(cost_budget_amount IS NULL AND cost_budget_currency IS NULL) OR "
+            "(cost_budget_amount >= 0 AND cost_budget_currency ~ '^[A-Z]{3}$')",
+            name="cost_budget",
+        ),
+        CheckConstraint(
+            "error_detail_json IS NULL OR jsonb_typeof(error_detail_json) = 'object'",
+            name="error_detail_json",
+        ),
+        CheckConstraint(
+            "(status = 'CREATED' AND queued_at IS NULL AND started_at IS NULL "
+            "AND finished_at IS NULL) OR status <> 'CREATED'",
+            name="created_timestamps",
+        ),
+        CheckConstraint(
+            "queued_at IS NULL OR queued_at >= created_at", name="queued_at"
+        ),
+        CheckConstraint(
+            "started_at IS NULL OR started_at >= created_at", name="started_at"
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR finished_at >= created_at", name="finished_at"
+        ),
+        CheckConstraint(
+            "cancelling_at IS NULL OR cancelling_at >= created_at",
+            name="cancelling_at",
+        ),
+        CheckConstraint(
+            "(temporal_run_id IS NULL AND workflow_start_outcome IS NULL "
+            "AND workflow_started_at IS NULL) OR "
+            "(workflow_id IS NOT NULL AND temporal_run_id IS NOT NULL "
+            "AND workflow_start_outcome IS NOT NULL "
+            "AND workflow_started_at IS NOT NULL)",
+            name="workflow_start_mapping",
+        ),
+        CheckConstraint(
+            "workflow_start_outcome IS NULL OR workflow_start_outcome IN "
+            "('STARTED','ALREADY_EXISTS')",
+            name="workflow_start_outcome",
+        ),
+        UniqueConstraint(
+            "tenant_id", "workflow_id", name="uq_agent_run__tenant_workflow_id"
+        ),
+        Index(
+            "ix_agent_run__tenant_session_created_at",
+            "tenant_id",
+            "session_id",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
+        Index(
+            "ix_agent_run__tenant_status_created_at",
+            "tenant_id",
+            "status",
+            text("created_at DESC"),
+        ),
+        Index(
+            "ix_agent_run__tenant_status_cancelling_at",
+            "tenant_id",
+            "status",
+            "cancelling_at",
+        ),
+        Index(
+            "uq_agent_run__active_session_branch",
+            "tenant_id",
+            "session_id",
+            text(
+                "COALESCE(branch_id, " "'00000000-0000-0000-0000-000000000000'::uuid)"
+            ),
+            unique=True,
+            postgresql_where=text(
+                "status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMEOUT')"
+            ),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    session_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    branch_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    user_message_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    assistant_message_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    agent_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    snapshot_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    deployment_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default=text("'CREATED'")
+    )
+    result_quality: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    current_attempt: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    latest_sequence_no: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    client_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    retry_of_run_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    timeout_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("600")
+    )
+    token_budget: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cost_budget_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )
+    cost_budget_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    workflow_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    temporal_run_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    workflow_start_outcome: Mapped[str | None] = mapped_column(
+        String(24), nullable=True
+    )
+    workflow_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_detail_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    created_by: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelling_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RunAttemptModel(Base):
+    """One fenced execution attempt belonging to a Run."""
+
+    __tablename__ = "run_attempt"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["agent_run.tenant_id", "agent_run.id"],
+            name="fk_run_attempt__tenant_run__agent_run",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_run_attempt__tenant_id_id"),
+        UniqueConstraint("run_id", "attempt_no", name="uq_run_attempt__run_attempt"),
+        CheckConstraint("attempt_no >= 1", name="attempt_no"),
+        CheckConstraint(
+            "fencing_token_hash ~ '^sha256:[a-f0-9]{64}$'",
+            name="fencing_token_hash",
+        ),
+        CheckConstraint(
+            "status IN ('ALLOCATED','STARTING','RUNNING','COMPLETED','LOST','CANCELLED')",
+            name="status",
+        ),
+        CheckConstraint(
+            "heartbeat_at IS NULL OR started_at IS NOT NULL", name="heartbeat_started"
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR started_at IS NOT NULL", name="finished_started"
+        ),
+        Index("ix_run_attempt__tenant_run_status", "tenant_id", "run_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    fencing_token_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    runtime_handle_ref: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class RunEventModel(Base):
+    """Immutable user-visible execution event fact."""
+
+    __tablename__ = "run_event"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "session_id"],
+            ["agent_run.tenant_id", "agent_run.id", "agent_run.session_id"],
+            name="fk_run_event__tenant_run_session__agent_run",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("run_id", "sequence_no", name="uq_run_event__run_sequence"),
+        UniqueConstraint(
+            "run_id",
+            "execution_attempt",
+            "source_event_id",
+            name="uq_run_event__run_attempt_source",
+        ),
+        CheckConstraint("sequence_no >= 1", name="sequence_no"),
+        CheckConstraint("execution_attempt >= 1", name="execution_attempt"),
+        CheckConstraint("schema_version = '1.0'", name="schema_version"),
+        CheckConstraint("payload_version = '1.0'", name="payload_version"),
+        CheckConstraint(
+            "event_type IN ('run_created','run_queued','run_started',"
+            "'text_message_start','text_delta','text_message_end','thinking_delta',"
+            "'plan_updated','tool_call_start','tool_call_args','tool_call_result',"
+            "'approval_required','approval_resolved','task_progress',"
+            "'artifact_created','warning','run_succeeded','run_failed',"
+            "'run_cancelled','run_timeout')",
+            name="event_type",
+        ),
+        CheckConstraint("jsonb_typeof(payload_json) = 'object'", name="payload_json"),
+        CheckConstraint(
+            "octet_length(payload_json::text) <= 262144", name="payload_size"
+        ),
+        CheckConstraint("length(source_event_id) >= 1", name="source_event_id"),
+        CheckConstraint("length(trace_id) >= 3", name="trace_id"),
+        Index(
+            "ix_run_event__tenant_run_sequence",
+            "tenant_id",
+            "run_id",
+            "sequence_no",
+        ),
+        Index(
+            "ix_run_event__tenant_type_recorded_at",
+            "tenant_id",
+            "event_type",
+            "recorded_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    session_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    sequence_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    execution_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class RunEventCounterModel(Base):
+    """Per-Run sequence allocator state used by the Event Service."""
+
+    __tablename__ = "run_event_counter"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["agent_run.tenant_id", "agent_run.id"],
+            name="fk_run_event_counter__tenant_run__agent_run",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("next_sequence_no >= 1", name="next_sequence_no"),
+        Index(
+            "ix_run_event_counter__tenant_run",
+            "tenant_id",
+            "run_id",
+        ),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    next_sequence_no: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
     )
 
 

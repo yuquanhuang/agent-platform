@@ -1,0 +1,50 @@
+task_id: AP-E4-001
+title: RunEvent 表、计数器、约束和迁移
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - 创建 tenant-scoped run_event 与 run_event_counter 数据事实
+    - 保证 run_id + sequence_no 和 run_id + execution_attempt + source_event_id 全局唯一
+    - 固定 RunEvent V1 类型、版本、对象 Payload、256KB 上限、索引和不可变性
+    - 启用并强制 RLS，使用复合外键阻断跨租户 Run/Session 关联
+    - 验证迁移升级/降级、真实 PostgreSQL 约束及 Epic 3 协同回归
+  excludes:
+    - Candidate 校验、批量写入、sequence 分配事务和终态保护（AP-E4-002）
+    - RunEvent 查询、回放、SSE、Redis、AG-UI 和 Vue Reducer（AP-E4-003～007）
+    - 本阶段直接物理月分区
+decisions:
+  - 采用独立 run_event_counter；AgentRun.latest_sequence_no 暂不作为分配器，AP-E4-002 再接入同事务物化更新
+  - PostgreSQL 16 无法同时原生满足 recorded_at 月分区和不含分区键的冻结全局唯一约束；人工确认本阶段先使用非分区 run_event，优先保证顺序和幂等正确性
+  - run_event 全行禁止 UPDATE/DELETE；run_event_counter 保留原子 UPDATE 能力
+compatibility:
+  - R9 RunEvent JSON Schema、公共 OpenAPI、Run/Session DTO 和前端生成代码不变
+  - 新表只增加后端持久化事实，AP-E4-002 前无生产写入入口
+verification:
+  commands:
+    - targeted model and migration tests
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test pytest tests/integration/database/test_postgresql_rls.py tests/integration/resources/test_resource_registry.py -q
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 两张表字段、外键、Check、唯一约束、索引和 RLS 与冻结设计一致
+  - RunEvent 重复 sequence/source、非法版本/类型、非对象或超限 Payload 均由数据库拒绝
+  - RunEvent UPDATE/DELETE 被数据库拒绝，Counter 可为 AP-E4-002 原子推进
+  - 迁移升级/降级和 Epic 3 Session/Message/Run/Temporal 链路无回归
+results:
+  - 新增非分区 run_event 和独立 run_event_counter ORM/迁移；保留冻结字段、双全局唯一约束、复合租户外键和两组查询索引
+  - RunEvent V1 schema/payload version、20 个 event_type、对象 Payload、256KB 上限、sequence/attempt 下界均由数据库 Check 防守
+  - 两表启用并强制 RLS；run_event 触发器拒绝 UPDATE/DELETE，run_event_counter 可原子 UPDATE
+  - 历史 Epic 3 纵向验收调整为表存在但 Candidate 不写入 Event Store，latest_sequence_no 仍为 0，未提前实现 AP-E4-002
+  - 定向模型/迁移 37 passed；真实 PostgreSQL RLS 1 passed、完整资源与事件约束链路 1 passed
+  - 真实 PostgreSQL/Temporal make check-all 后端 377 passed、前端 38 passed；R9 契约和 16 个生成文件零漂移
+  - 未新增 Python/Node 依赖；部署前执行 Alembic 0020，降级会删除全部 RunEvent/Counter 事实，仅允许在确认无需保留事件历史时执行
+follow_up:
+  - 必做容量迁移：建立全局唯一登记表，继续保证 event_id、run+sequence、run+attempt+source 全局唯一
+  - 必做容量迁移：将事件事实迁移为按 recorded_at 月分区的 run_event 存储，并提供双写/校验/切换/回滚和存量数据迁移方案
+  - 上述两项必须在生产达到 RunEvent 分区容量阈值前完成，不得通过把 recorded_at 加入唯一键弱化幂等语义
+  - AP-E4-002 实现 Candidate 校验、批量写入、counter 原子分配、AgentRun.latest_sequence_no 同事务物化和终态保护

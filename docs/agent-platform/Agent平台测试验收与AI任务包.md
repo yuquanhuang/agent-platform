@@ -1,6 +1,6 @@
 # Agent 平台测试验收与 AI 任务包
 
-> 文档版本：V1.7
+> 文档版本：V1.9
 > 文档状态：开发输入基线
 
 ## 1. 测试原则
@@ -126,6 +126,8 @@ backend/tests/golden/
 - 发布 Activity 重试不产生两个 ACTIVE Deployment。
 - Continue-As-New 保留业务状态。
 - Outbox 重复启动只产生一个 Workflow。
+- Temporal 已启动但映射回写失败时，Outbox 重试补齐同一 Workflow/Temporal Run 映射后才确认发布。
+- 长时间 CREATED 恢复启动意图；长时间 CANCELLING 重发同一幂等取消 Signal，且对账不得直接写 CANCELLED。
 - 当前和上一生产 History Replay。
 
 ## 8. Event/SSE 测试
@@ -257,9 +259,9 @@ Run RUNNING 时关闭浏览器、重启 API/Runtime Worker，重新连接后事�
 ## 14. AI Coding 任务包示例
 
 ```yaml
-task_id: AP-E3-004
+task_id: AP-E4-002
 title: 实现 RunEvent 批量写入和序号分配
-baseline: agent-platform-v1-dev-baseline-2026-08-r7
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
 baseline_integrity:
   hash_algorithm: sha256
   verified_files:

@@ -1,13 +1,16 @@
 """Real PostgreSQL resource registry, RLS, CAS and idempotency verification."""
 
 import asyncio
+import hashlib
+import json
 import os
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -16,18 +19,49 @@ from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker
 
+from apps.api.app import create_app
+from apps.event_worker.composition import build_temporal_outbox_dispatcher
+from packages.application.event_service import (
+    EventWriteAccess,
+    RunEventIngestionService,
+    RunEventQueryService,
+)
 from packages.application.model_gateway import (
     ModelProviderConnectionTestHandler,
     ProviderAdapterRegistry,
 )
 from packages.application.outbox import OutboxDispatcher, OutboxEventRouter
-from packages.application.public import RequestMetadata, canonical_request_hash
-from packages.application.temporal import RuntimeTargetReleaseConfig
+from packages.application.public import (
+    RequestMetadata,
+    RunManagementService,
+    canonical_request_hash,
+)
+from packages.application.temporal import (
+    RUN_ORCHESTRATOR_TASK_QUEUE,
+    AgentRunWorkflow,
+    AgentRunWorkflowActivities,
+    FencingTokenIssuer,
+    RunExecutionRequest,
+    RunRuntimeExecutor,
+    RunSpecCompilationSource,
+    RuntimeEventCandidatePublisher,
+    RuntimeTargetReleaseConfig,
+    agent_run_workflow_id,
+)
 from packages.contracts.generated.core_models import (
     AgentCreateRequest,
     AgentUpdateRequest,
+    CancelRunRequest,
     CopyAgentRequest,
+    RetryRunRequest,
+    RunCreateRequest,
+    RunEventBatchRequest,
+    SessionCreateRequest,
+    SessionUpdateRequest,
 )
 from packages.contracts.generated.resource_content import (
     ResourceContentModelConfig,
@@ -42,8 +76,25 @@ from packages.contracts.generated.resources_models import (
     ResourceRollbackRequest,
     ResourceUpdateRequest,
 )
+from packages.contracts.generated.run_event import (
+    RUNTIME_EVENT_CANDIDATE_ADAPTER,
+    RuntimeEventCandidate,
+)
 from packages.contracts.model_gateway import ModelGatewayRequest
-from packages.contracts.public import PlatformError, SubjectType, TenantContext
+from packages.contracts.public import (
+    AuthenticatedPrincipal,
+    PlatformError,
+    SubjectType,
+    TenantContext,
+)
+from packages.contracts.temporal import (
+    AssistantTextPart,
+    FinalizeAgentRunCancellationInput,
+    FinalizeAgentRunInput,
+    RunSpecReference,
+    RuntimeCancellationResult,
+    RuntimeCompletion,
+)
 from packages.domain.model_gateway import (
     AdapterResponse,
     AdapterStreamEvent,
@@ -57,7 +108,10 @@ from packages.domain.public import (
     AgentBindingRecord,
     ReleaseRecord,
     RuntimeBundleRecord,
+    TenantAccess,
 )
+from packages.infrastructure.auth.public import MockIdentityProvider
+from packages.infrastructure.config import AppSettings
 from packages.infrastructure.database.public import (
     AgentSnapshotModel,
     AgentVersionModel,
@@ -66,9 +120,14 @@ from packages.infrastructure.database.public import (
     SqlAlchemyAgentResourceReferenceProvider,
     SqlAlchemyBundleInputReader,
     SqlAlchemyDeploymentStore,
+    SqlAlchemyMessageHistoryStore,
     SqlAlchemyOutboxStore,
     SqlAlchemyReleaseStore,
     SqlAlchemyResourceRegistry,
+    SqlAlchemyRunEventQueryStore,
+    SqlAlchemyRunEventStore,
+    SqlAlchemyRunStore,
+    SqlAlchemySessionStore,
     SqlAlchemySnapshotCompilationStore,
     TenantUnitOfWork,
     create_session_factory,
@@ -78,6 +137,8 @@ from packages.infrastructure.model_gateway import (
     SqlAlchemyModelBindingReader,
     SqlAlchemyModelGatewayStore,
 )
+from packages.infrastructure.observability import PlatformMetrics
+from packages.infrastructure.temporal import HmacFencingTokenIssuer
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 DATABASE_URL_ENV = "AP_TEST_DATABASE_URL"
@@ -86,10 +147,152 @@ APP_PASSWORD = "resource-test-only"
 TENANT_A = "11111111-1111-4111-8111-111111111111"
 TENANT_B = "22222222-2222-4222-8222-222222222222"
 ACTOR = UUID("33333333-3333-4333-8333-333333333333")
+OTHER_ACTOR = UUID("33333333-3333-4333-8333-333333333334")
 PERMISSION_TENANT = UUID("44444444-4444-4444-8444-444444444444")
 METADATA = RequestMetadata(
     request_id="req-resource-integration", trace_id="trace-resource-integration"
 )
+
+
+class Epic3AccessResolver:
+    async def resolve_tenant_access(
+        self, principal: AuthenticatedPrincipal, metadata: RequestMetadata
+    ) -> TenantAccess:
+        assert principal.identity_issuer == "https://issuer.test/"
+        assert principal.external_subject == "resource-owner"
+        return TenantAccess(
+            context=TenantContext(
+                tenant_id=TENANT_A,
+                subject_type=SubjectType.USER,
+                subject_id=str(ACTOR),
+                membership_version=1,
+                auth_time=principal.auth_time,
+                request_id=metadata.request_id,
+                trace_id=metadata.trace_id,
+            ),
+            permissions=frozenset(
+                {
+                    "session:read",
+                    "run:create",
+                    "run:read",
+                    "run:list",
+                    "run:cancel",
+                    "run:retry",
+                }
+            ),
+        )
+
+
+class Epic3RunSpecCompiler:
+    def __init__(self) -> None:
+        self.sources: list[RunSpecCompilationSource] = []
+        self.fencing_tokens: list[str] = []
+
+    async def compile(
+        self,
+        context: TenantContext,
+        *,
+        source: RunSpecCompilationSource,
+        execution_attempt: int,
+        fencing_token: SecretStr,
+    ) -> RunSpecReference:
+        assert context.tenant_id == TENANT_A
+        self.sources.append(source)
+        self.fencing_tokens.append(fencing_token.get_secret_value())
+        return RunSpecReference(
+            uri=f"memory://run-spec/{source.run_id}/{execution_attempt}",
+            content_hash="sha256:" + "9" * 64,
+            size_bytes=1024,
+        )
+
+
+class Epic3CandidatePublisher:
+    def __init__(self) -> None:
+        self.publish_calls = 0
+        self.candidates: dict[
+            tuple[UUID, int, str], tuple[RunExecutionRequest, RuntimeEventCandidate]
+        ] = {}
+
+    async def publish(
+        self,
+        context: TenantContext,
+        *,
+        request: RunExecutionRequest,
+        candidate: RuntimeEventCandidate,
+    ) -> None:
+        self.publish_calls += 1
+        assert context.tenant_id == str(request.tenant_id) == TENANT_A
+        assert request.execution_attempt == 1
+        assert len(request.fencing_token.get_secret_value()) >= 16
+        serialized = candidate.model_dump(mode="json")
+        assert not {"event_id", "sequence_no", "recorded_at"} & serialized.keys()
+        key = (request.run_id, request.execution_attempt, candidate.source_event_id)
+        previous = self.candidates.get(key)
+        if previous is not None:
+            assert previous[1] == candidate
+            return
+        self.candidates[key] = (request, candidate)
+
+
+class Epic3RuntimeExecutor:
+    async def execute(
+        self,
+        context: TenantContext,
+        *,
+        request: RunExecutionRequest,
+        event_publisher: RuntimeEventCandidatePublisher,
+    ) -> RuntimeCompletion:
+        occurred_at = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
+        raw_candidates = (
+            {
+                "source_event_id": "fake:run-started:1",
+                "event_type": "run_started",
+                "occurred_at": occurred_at,
+                "payload_version": "1.0",
+                "payload": {
+                    "runtime_type": "agentscope",
+                    "runtime_target_id": "rt_agentscope_a",
+                },
+            },
+            {
+                "source_event_id": "fake:text-start:1",
+                "event_type": "text_message_start",
+                "occurred_at": occurred_at,
+                "payload_version": "1.0",
+                "payload": {"message_id": "runtime-reply-1", "role": "assistant"},
+            },
+            {
+                "source_event_id": "fake:text-delta:1",
+                "event_type": "text_delta",
+                "occurred_at": occurred_at,
+                "payload_version": "1.0",
+                "payload": {
+                    "message_id": "runtime-reply-1",
+                    "delta": "candidate-only-fragment",
+                },
+            },
+            {
+                "source_event_id": "fake:text-end:1",
+                "event_type": "text_message_end",
+                "occurred_at": occurred_at,
+                "payload_version": "1.0",
+                "payload": {"message_id": "runtime-reply-1", "finish_reason": "stop"},
+            },
+        )
+        candidates = tuple(
+            RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(candidate)
+            for candidate in raw_candidates
+        )
+        for candidate in (*candidates, candidates[2]):
+            await event_publisher.publish(context, request=request, candidate=candidate)
+        return RuntimeCompletion(
+            status="SUCCEEDED",
+            assistant_content_parts=(
+                AssistantTextPart(text="Epic 3 vertical acceptance complete."),
+            ),
+            result_quality="NORMAL",
+            runtime_handle_ref=f"fake-runtime://{request.run_id}/1",
+        )
 
 
 class IntegrationConnectionAdapter:
@@ -148,6 +351,20 @@ def context(tenant_id: str) -> TenantContext:
         auth_time=datetime(2026, 8, 6, tzinfo=UTC),
         request_id=METADATA.request_id,
         trace_id=METADATA.trace_id,
+    )
+
+
+def event_access(tenant_id: str) -> EventWriteAccess:
+    return EventWriteAccess(
+        context=TenantContext(
+            tenant_id=tenant_id,
+            subject_type=SubjectType.SERVICE,
+            subject_id=str(ACTOR),
+            auth_time=datetime(2026, 8, 6, tzinfo=UTC),
+            request_id=METADATA.request_id,
+            trace_id=METADATA.trace_id,
+        ),
+        permissions=frozenset({"internal:event_write"}),
     )
 
 
@@ -321,6 +538,80 @@ async def verify_agent_permission_backfill(database_url: str) -> None:
                 "disable",
                 "publish",
             }
+    finally:
+        await engine.dispose()
+
+
+async def verify_session_permission_backfill(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(PERMISSION_TENANT)},
+            )
+            actions = set(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT action FROM role_permission "
+                            "WHERE tenant_id = :tenant_id "
+                            "AND resource_type = 'session'"
+                        ),
+                        {"tenant_id": PERMISSION_TENANT},
+                    )
+                ).scalars()
+            )
+            assert actions == {"create", "read", "list", "update", "delete"}
+    finally:
+        await engine.dispose()
+
+
+async def verify_message_permission_backfill(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(PERMISSION_TENANT)},
+            )
+            actions = set(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT action FROM role_permission "
+                            "WHERE tenant_id = :tenant_id "
+                            "AND resource_type = 'message'"
+                        ),
+                        {"tenant_id": PERMISSION_TENANT},
+                    )
+                ).scalars()
+            )
+            assert actions == {"read", "list"}
+    finally:
+        await engine.dispose()
+
+
+async def verify_run_permission_backfill(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(PERMISSION_TENANT)},
+            )
+            actions = set(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT action FROM role_permission "
+                            "WHERE tenant_id = :tenant_id AND resource_type = 'run'"
+                        ),
+                        {"tenant_id": PERMISSION_TENANT},
+                    )
+                ).scalars()
+            )
+            assert actions == {"cancel", "create", "read", "list", "retry"}
     finally:
         await engine.dispose()
 
@@ -1479,6 +1770,2113 @@ async def verify_deployment_activation_history_and_fencing(database_url: str) ->
         await app_engine.dispose()
 
 
+async def verify_session_lifecycle_and_deployment_pinning(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        agents = SqlAlchemyAgentRegistry(session_factory)
+        sessions = SqlAlchemySessionStore(session_factory)
+        agent_records, _ = await agents.list_agents(
+            context(TENANT_A),
+            limit=20,
+            cursor=None,
+            status=None,
+            keyword=None,
+        )
+        agent = next(item for item in agent_records if item.active_deployment_id)
+        create_request = SessionCreateRequest.model_validate(
+            {
+                "agent_id": str(agent.id),
+                "title": "Pinned before rollback",
+                "metadata": {"locale": "zh-CN", "tags": ["integration"]},
+            }
+        )
+        create_hash = canonical_request_hash("session.create", create_request)
+        created = await sessions.create_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=create_request,
+            metadata_value={"locale": "zh-CN", "tags": ["integration"]},
+            idempotency_key="session-create-pinned",
+            request_hash=create_hash,
+            metadata=METADATA,
+        )
+        assert created.value is not None
+        pinned = created.value
+        assert pinned.default_deployment_id == agent.active_deployment_id
+        replay = await sessions.create_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=create_request,
+            metadata_value={"locale": "zh-CN", "tags": ["integration"]},
+            idempotency_key="session-create-pinned",
+            request_hash=create_hash,
+            metadata=METADATA,
+        )
+        assert replay.replay is not None
+        assert replay.replay.response_body["id"] == str(pinned.id)
+        assert (
+            await sessions.get_session(
+                context(TENANT_A), user_id=OTHER_ACTOR, session_id=pinned.id
+            )
+            is None
+        )
+        assert (
+            await sessions.get_session(
+                context(TENANT_B), user_id=ACTOR, session_id=pinned.id
+            )
+            is None
+        )
+
+        delete_request = SessionCreateRequest.model_validate(
+            {"agent_id": str(agent.id), "title": "Delete lifecycle"}
+        )
+        deleting = await sessions.create_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=delete_request,
+            metadata_value={},
+            idempotency_key="session-create-delete-lifecycle",
+            request_hash=canonical_request_hash("session.create", delete_request),
+            metadata=METADATA,
+        )
+        assert deleting.value is not None
+        updated = await sessions.update_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            session_id=deleting.value.id,
+            expected_version=1,
+            request=SessionUpdateRequest.model_validate({"title": "Renamed"}),
+            metadata_value=None,
+            metadata=METADATA,
+        )
+        assert updated is not None and updated.resource_version == 2
+        with pytest.raises(PlatformError) as active_delete:
+            await sessions.delete_session(
+                context(TENANT_A),
+                user_id=ACTOR,
+                session_id=updated.id,
+                expected_version=2,
+                idempotency_key="session-delete-active",
+                request_hash=canonical_request_hash(
+                    "session.delete",
+                    extra={"session_id": str(updated.id), "if_match": '"rv:2"'},
+                ),
+                metadata=METADATA,
+            )
+        assert active_delete.value.code == "RESOURCE_STATE_CONFLICT"
+        archived = await sessions.archive_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            session_id=updated.id,
+            expected_version=2,
+            idempotency_key="session-archive-lifecycle",
+            request_hash=canonical_request_hash(
+                "session.archive",
+                extra={"session_id": str(updated.id), "if_match": '"rv:2"'},
+            ),
+            metadata=METADATA,
+        )
+        assert archived is not None and archived.value is not None
+        assert archived.value.status == "ARCHIVED"
+        deleted = await sessions.delete_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            session_id=updated.id,
+            expected_version=3,
+            idempotency_key="session-delete-lifecycle",
+            request_hash=canonical_request_hash(
+                "session.delete",
+                extra={"session_id": str(updated.id), "if_match": '"rv:3"'},
+            ),
+            metadata=METADATA,
+        )
+        assert deleted is not None and deleted.value is not None
+        assert deleted.value.status == "SUCCEEDED"
+
+        visible, next_cursor = await sessions.list_sessions(
+            context(TENANT_A),
+            user_id=ACTOR,
+            limit=1,
+            cursor=None,
+            agent_id=agent.id,
+            status=None,
+        )
+        assert len(visible) == 1
+        assert visible[0].id == pinned.id
+        assert next_cursor is None
+        tombstones, _ = await sessions.list_sessions(
+            context(TENANT_A),
+            user_id=ACTOR,
+            limit=20,
+            cursor=None,
+            agent_id=agent.id,
+            status="DELETED",
+        )
+        assert [item.id for item in tombstones] == [updated.id]
+
+        async with admin_engine.connect() as connection:
+            operation_status = await connection.scalar(
+                text(
+                    "SELECT status FROM operation_record "
+                    "WHERE tenant_id = :tenant_id AND resource_type = 'session' "
+                    "AND resource_id = :session_id"
+                ),
+                {"tenant_id": TENANT_A, "session_id": updated.id},
+            )
+            audit_payload = str(
+                await connection.scalar(
+                    text(
+                        "SELECT jsonb_agg(metadata_json) FROM audit_log "
+                        "WHERE tenant_id = :tenant_id AND resource_type = 'session'"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            )
+        assert operation_status == "SUCCEEDED"
+        assert "Pinned before rollback" not in audit_payload
+        assert "Renamed" not in audit_payload
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
+async def verify_message_history_branching_and_immutability(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    message_ids = [uuid5(NAMESPACE_URL, f"message-{index}") for index in range(1, 6)]
+    branch_id = uuid5(NAMESPACE_URL, "message-branch-b")
+    try:
+        async with admin_engine.begin() as connection:
+            session_id = await connection.scalar(
+                text(
+                    "SELECT id FROM chat_session WHERE tenant_id = :tenant_id "
+                    "AND title = 'Pinned before rollback'"
+                ),
+                {"tenant_id": TENANT_A},
+            )
+            deleted_session_id = await connection.scalar(
+                text(
+                    "SELECT id FROM chat_session WHERE tenant_id = :tenant_id "
+                    "AND status = 'DELETED'"
+                ),
+                {"tenant_id": TENANT_A},
+            )
+            assert session_id is not None and deleted_session_id is not None
+            await connection.execute(
+                text(
+                    "INSERT INTO chat_message "
+                    "(id, tenant_id, session_id, branch_id, parent_message_id, "
+                    "role, content_parts_json, created_by) VALUES "
+                    "(:m1, :tenant_id, :session_id, NULL, NULL, 'USER', "
+                    '\'[ {"type": "text", "text": "m1"} ]\'::jsonb, :actor), '
+                    "(:m2, :tenant_id, :session_id, NULL, :m1, 'ASSISTANT', "
+                    '\'[ {"type": "text", "text": "m2"} ]\'::jsonb, :actor), '
+                    "(:b1, :tenant_id, :session_id, :branch_id, :m2, 'USER', "
+                    '\'[ {"type": "text", "text": "b1"} ]\'::jsonb, :actor), '
+                    "(:b2, :tenant_id, :session_id, :branch_id, :b1, 'ASSISTANT', "
+                    '\'[ {"type": "text", "text": "b2"} ]\'::jsonb, :actor)'
+                ),
+                {
+                    "m1": message_ids[0],
+                    "m2": message_ids[1],
+                    "b1": message_ids[2],
+                    "b2": message_ids[3],
+                    "tenant_id": TENANT_A,
+                    "session_id": session_id,
+                    "branch_id": branch_id,
+                    "actor": ACTOR,
+                },
+            )
+            await connection.execute(
+                text(
+                    "UPDATE chat_session SET cursor_message_id = :cursor "
+                    "WHERE tenant_id = :tenant_id AND id = :session_id"
+                ),
+                {
+                    "cursor": message_ids[3],
+                    "tenant_id": TENANT_A,
+                    "session_id": session_id,
+                },
+            )
+
+        messages = SqlAlchemyMessageHistoryStore(create_session_factory(app_engine))
+        first_page = await messages.list_session_messages(
+            context(TENANT_A),
+            user_id=ACTOR,
+            session_id=session_id,
+            limit=2,
+            cursor=None,
+            branch_id=None,
+        )
+        assert first_page is not None
+        first_records, frozen_cursor = first_page
+        assert [record.id for record in first_records] == message_ids[:2]
+        assert frozen_cursor is not None
+
+        async with admin_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO chat_message "
+                    "(id, tenant_id, session_id, branch_id, parent_message_id, "
+                    "role, content_parts_json, created_by) VALUES "
+                    "(:id, :tenant_id, :session_id, :branch_id, :parent_id, "
+                    "'ASSISTANT', "
+                    '\'[ {"type": "text", "text": "b3"} ]\'::jsonb, :actor)'
+                ),
+                {
+                    "id": message_ids[4],
+                    "tenant_id": TENANT_A,
+                    "session_id": session_id,
+                    "branch_id": branch_id,
+                    "parent_id": message_ids[3],
+                    "actor": ACTOR,
+                },
+            )
+            await connection.execute(
+                text(
+                    "UPDATE chat_session SET cursor_message_id = :cursor "
+                    "WHERE tenant_id = :tenant_id AND id = :session_id"
+                ),
+                {
+                    "cursor": message_ids[4],
+                    "tenant_id": TENANT_A,
+                    "session_id": session_id,
+                },
+            )
+
+        second_page = await messages.list_session_messages(
+            context(TENANT_A),
+            user_id=ACTOR,
+            session_id=session_id,
+            limit=2,
+            cursor=frozen_cursor,
+            branch_id=None,
+        )
+        assert second_page is not None
+        second_records, next_cursor = second_page
+        assert [record.id for record in second_records] == message_ids[2:4]
+        assert next_cursor is None
+
+        branch_history = await messages.list_session_messages(
+            context(TENANT_A),
+            user_id=ACTOR,
+            session_id=session_id,
+            limit=20,
+            cursor=None,
+            branch_id=branch_id,
+        )
+        assert branch_history is not None
+        assert [record.id for record in branch_history[0]] == message_ids
+        assert (
+            await messages.list_session_messages(
+                context(TENANT_A),
+                user_id=OTHER_ACTOR,
+                session_id=session_id,
+                limit=20,
+                cursor=None,
+                branch_id=None,
+            )
+            is None
+        )
+        assert (
+            await messages.list_session_messages(
+                context(TENANT_B),
+                user_id=ACTOR,
+                session_id=session_id,
+                limit=20,
+                cursor=None,
+                branch_id=None,
+            )
+            is None
+        )
+        assert (
+            await messages.list_session_messages(
+                context(TENANT_A),
+                user_id=ACTOR,
+                session_id=deleted_session_id,
+                limit=20,
+                cursor=None,
+                branch_id=None,
+            )
+            is None
+        )
+
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text("UPDATE chat_message SET role = 'SYSTEM' WHERE id = :id"),
+                    {"id": message_ids[0]},
+                )
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text("DELETE FROM chat_message WHERE id = :id"),
+                    {"id": message_ids[0]},
+                )
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO chat_message "
+                        "(tenant_id, session_id, parent_message_id, role, "
+                        "content_parts_json, created_by) VALUES "
+                        "(:tenant_id, :session_id, :parent_id, 'USER', "
+                        '\'[ {"type": "text", "text": "x"} ]\'::jsonb, :actor)'
+                    ),
+                    {
+                        "tenant_id": TENANT_A,
+                        "session_id": deleted_session_id,
+                        "parent_id": message_ids[0],
+                        "actor": ACTOR,
+                    },
+                )
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO chat_message "
+                        "(tenant_id, session_id, role, content_parts_json, created_by) "
+                        "VALUES (:tenant_id, :session_id, 'USER', '[]'::jsonb, :actor)"
+                    ),
+                    {
+                        "tenant_id": TENANT_A,
+                        "session_id": session_id,
+                        "actor": ACTOR,
+                    },
+                )
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
+async def verify_session_remains_pinned_after_rollback(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        "SELECT s.default_deployment_id, a.active_deployment_id, "
+                        "d.status FROM chat_session AS s "
+                        "JOIN agent_definition AS a ON a.tenant_id = s.tenant_id "
+                        "AND a.id = s.agent_id "
+                        "JOIN deployment AS d ON d.tenant_id = s.tenant_id "
+                        "AND d.id = s.default_deployment_id "
+                        "WHERE s.tenant_id = :tenant_id "
+                        "AND s.title = 'Pinned before rollback'"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+        assert row.default_deployment_id != row.active_deployment_id
+        assert row.status == "RETIRED"
+    finally:
+        await engine.dispose()
+
+
+async def verify_run_uses_retired_session_deployment(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        async with admin_engine.connect() as connection:
+            session_row = (
+                await connection.execute(
+                    text(
+                        "SELECT id, default_deployment_id FROM chat_session "
+                        "WHERE tenant_id = :tenant_id "
+                        "AND title = 'Pinned before rollback'"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+        request = RunCreateRequest.model_validate(
+            {"session_id": str(session_row.id), "input": {"text": "after rollback"}}
+        )
+        created = await SqlAlchemyRunStore(
+            create_session_factory(app_engine)
+        ).create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=request,
+            idempotency_key="run-create-retired-default",
+            request_hash=canonical_request_hash("run.create", request),
+            metadata=METADATA,
+        )
+        assert created.value is not None
+        assert created.value.deployment_id == session_row.default_deployment_id
+        async with admin_engine.connect() as connection:
+            status = await connection.scalar(
+                text(
+                    "SELECT status FROM deployment WHERE tenant_id = :tenant_id "
+                    "AND id = :deployment_id"
+                ),
+                {
+                    "tenant_id": TENANT_A,
+                    "deployment_id": created.value.deployment_id,
+                },
+            )
+        assert status == "RETIRED"
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
+async def verify_epic3_vertical_acceptance(database_url: str) -> None:
+    """Drive the real Run API through Outbox and Temporal with a Candidate Fake."""
+
+    if os.getenv("AP_TEST_TEMPORAL") != "1":
+        return
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        now = datetime.now(UTC)
+        async with admin_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE outbox_event SET status = 'PUBLISHED', "
+                    "published_at = COALESCE(published_at, :now), "
+                    "next_attempt_at = :now WHERE status <> 'PUBLISHED'"
+                ),
+                {"now": now},
+            )
+
+        session_factory = create_session_factory(app_engine)
+        agents = SqlAlchemyAgentRegistry(session_factory)
+        sessions = SqlAlchemySessionStore(session_factory)
+        runs = SqlAlchemyRunStore(session_factory)
+        agent_records, _ = await agents.list_agents(
+            context(TENANT_A), limit=20, cursor=None, status=None, keyword=None
+        )
+        agent = next(item for item in agent_records if item.active_deployment_id)
+        session_request = SessionCreateRequest.model_validate(
+            {"agent_id": str(agent.id), "title": "AP-E3-007 vertical acceptance"}
+        )
+        session_result = await sessions.create_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=session_request,
+            metadata_value={},
+            idempotency_key="session-create-ap-e3-007",
+            request_hash=canonical_request_hash("session.create", session_request),
+            metadata=METADATA,
+        )
+        assert session_result.value is not None
+        session_id = session_result.value.id
+
+        settings = AppSettings.model_validate(
+            {
+                "env": "test",
+                "mock_identity_issuer": "https://issuer.test",
+                "mock_external_subject": "resource-owner",
+                "mock_active_tenant_id": TENANT_A,
+                "mock_membership_version": 1,
+            }
+        )
+        application = create_app(
+            settings,
+            identity_provider=MockIdentityProvider(settings),
+            run_service=RunManagementService(Epic3AccessResolver(), runs),
+        )
+        compiler = Epic3RunSpecCompiler()
+        publisher = Epic3CandidatePublisher()
+        run_activities = AgentRunWorkflowActivities(
+            runs,
+            compiler,
+            cast(FencingTokenIssuer, HmacFencingTokenIssuer(SecretStr("a" * 32))),
+            cast(RunRuntimeExecutor, Epic3RuntimeExecutor()),
+            cast(RuntimeEventCandidatePublisher, publisher),
+        )
+        download_dir = Path("/private/tmp/agent-platform-temporal-test")
+        download_dir.mkdir(parents=True, exist_ok=True)
+        history_json = ""
+        async with (
+            await WorkflowEnvironment.start_time_skipping(
+                data_converter=pydantic_data_converter,
+                download_dest_dir=str(download_dir),
+            ) as environment,
+            Worker(
+                environment.client,
+                task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+                workflows=[AgentRunWorkflow],
+                activities=[
+                    run_activities.prepare_agent_run,
+                    run_activities.execute_agent_run,
+                    run_activities.inspect_agent_runtime,
+                    run_activities.cancel_agent_runtime,
+                    run_activities.recover_agent_run,
+                    run_activities.finalize_agent_run,
+                    run_activities.finalize_agent_run_cancellation,
+                ],
+            ),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=application),
+                base_url="http://testserver",
+            ) as client,
+        ):
+            request = RunCreateRequest.model_validate(
+                {
+                    "session_id": str(session_id),
+                    "input": {"text": "vertical prompt"},
+                }
+            )
+            response = await client.post(
+                "/api/v1/runs",
+                headers={
+                    "Authorization": "Bearer mock",
+                    "Idempotency-Key": "run-create-ap-e3-007",
+                    "X-Request-ID": "req-ap-e3-007",
+                },
+                json=request.model_dump(mode="json"),
+            )
+            assert response.status_code == 202
+            accepted = response.json()
+            run_id = UUID(accepted["run_id"])
+
+            dispatcher = build_temporal_outbox_dispatcher(
+                settings,
+                session_factory=session_factory,
+                temporal_client=environment.client,
+                metrics=PlatformMetrics(),
+            )
+            summary = await dispatcher.dispatch_tenant_once(
+                context(TENANT_A), now=datetime.now(UTC) + timedelta(seconds=5)
+            )
+            assert summary.claimed == summary.published == 1
+
+            terminal = None
+            for _ in range(200):
+                polled = await client.get(
+                    f"/api/v1/runs/{run_id}",
+                    headers={
+                        "Authorization": "Bearer mock",
+                        "X-Request-ID": "req-ap-e3-007-poll",
+                    },
+                )
+                assert polled.status_code == 200
+                terminal = polled.json()
+                if terminal["status"] in {
+                    "SUCCEEDED",
+                    "FAILED",
+                    "CANCELLED",
+                    "TIMEOUT",
+                }:
+                    break
+                await asyncio.sleep(0.02)
+            assert terminal is not None
+            assert terminal["status"] == "SUCCEEDED"
+            assert terminal["latest_sequence_no"] == 0
+            handle = environment.client.get_workflow_handle(
+                agent_run_workflow_id(UUID(TENANT_A), run_id)
+            )
+            history_json = (await handle.fetch_history()).to_json()
+
+        assert publisher.publish_calls == 5
+        assert [
+            candidate.event_type for _, candidate in publisher.candidates.values()
+        ] == ["run_started", "text_message_start", "text_delta", "text_message_end"]
+        assert "candidate-only-fragment" not in history_json
+        assert "fake:text-delta:1" not in history_json
+
+        async with admin_engine.connect() as connection:
+            run_row = (
+                await connection.execute(
+                    text(
+                        "SELECT status, current_attempt, latest_sequence_no, "
+                        "assistant_message_id, workflow_id, temporal_run_id, "
+                        "workflow_start_outcome FROM agent_run WHERE id = :run_id"
+                    ),
+                    {"run_id": run_id},
+                )
+            ).one()
+            outbox_status = await connection.scalar(
+                text(
+                    "SELECT status FROM outbox_event WHERE aggregate_id = :run_id "
+                    "AND event_type = 'agent.run_requested.v1'"
+                ),
+                {"run_id": run_id},
+            )
+            attempt_status = await connection.scalar(
+                text(
+                    "SELECT status FROM run_attempt WHERE run_id = :run_id "
+                    "AND attempt_no = 1"
+                ),
+                {"run_id": run_id},
+            )
+            messages = (
+                await connection.execute(
+                    text(
+                        "SELECT id, role, parent_message_id, source_run_id, "
+                        "content_parts_json FROM chat_message "
+                        "WHERE session_id = :session_id ORDER BY created_at, id"
+                    ),
+                    {"session_id": session_id},
+                )
+            ).all()
+            cursor = await connection.scalar(
+                text(
+                    "SELECT cursor_message_id FROM chat_session WHERE id = :session_id"
+                ),
+                {"session_id": session_id},
+            )
+            run_event_table = await connection.scalar(
+                text("SELECT to_regclass('public.run_event')")
+            )
+            run_event_count = await connection.scalar(
+                text("SELECT count(*) FROM run_event WHERE run_id = :run_id"),
+                {"run_id": run_id},
+            )
+        assert run_row.status == "SUCCEEDED"
+        assert run_row.current_attempt == 1
+        assert run_row.latest_sequence_no == 0
+        assert run_row.assistant_message_id is not None
+        assert run_row.workflow_id == agent_run_workflow_id(UUID(TENANT_A), run_id)
+        assert run_row.temporal_run_id
+        assert run_row.workflow_start_outcome == "STARTED"
+        assert outbox_status == "PUBLISHED"
+        assert attempt_status == "COMPLETED"
+        assert [row.role for row in messages] == ["USER", "ASSISTANT"]
+        assert messages[0].parent_message_id is None
+        assert messages[0].source_run_id is None
+        assert messages[0].content_parts_json == [
+            {"type": "text", "text": "vertical prompt"}
+        ]
+        assert messages[1].parent_message_id == messages[0].id
+        assert messages[1].source_run_id == run_id
+        assert messages[1].content_parts_json == [
+            {"type": "text", "text": "Epic 3 vertical acceptance complete."}
+        ]
+        assert cursor == messages[1].id
+        assert run_event_table == "run_event"
+        assert run_event_count == 0
+
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text("UPDATE chat_message SET role = 'SYSTEM' WHERE id = :id"),
+                    {"id": messages[0].id},
+                )
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text("DELETE FROM chat_message WHERE id = :id"),
+                    {"id": messages[1].id},
+                )
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
+async def verify_run_creation_atomicity_and_guards(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        runs = SqlAlchemyRunStore(session_factory)
+        sessions = SqlAlchemySessionStore(session_factory)
+        async with admin_engine.connect() as connection:
+            session_row = (
+                await connection.execute(
+                    text(
+                        "SELECT id, agent_id, default_deployment_id "
+                        "FROM chat_session WHERE tenant_id = :tenant_id "
+                        "AND title = 'Pinned before rollback'"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+
+        attachment_request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_row.id),
+                "input": {
+                    "text": "attachment",
+                    "attachments": [{"artifact_id": str(uuid5(NAMESPACE_URL, "a"))}],
+                },
+            }
+        )
+        with pytest.raises(PlatformError) as attachment_error:
+            await runs.create_run(
+                context(TENANT_A),
+                user_id=ACTOR,
+                request=attachment_request,
+                idempotency_key="run-attachment-rejected",
+                request_hash=canonical_request_hash("run.create", attachment_request),
+                metadata=METADATA,
+            )
+        assert attachment_error.value.code == "RESOURCE_STATE_CONFLICT"
+
+        invalid_deployment = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_row.id),
+                "input": {"text": "invalid deployment"},
+                "execution": {"deployment_id": str(uuid5(NAMESPACE_URL, "missing"))},
+            }
+        )
+        with pytest.raises(PlatformError) as deployment_error:
+            await runs.create_run(
+                context(TENANT_A),
+                user_id=ACTOR,
+                request=invalid_deployment,
+                idempotency_key="run-invalid-deployment",
+                request_hash=canonical_request_hash("run.create", invalid_deployment),
+                metadata=METADATA,
+            )
+        assert deployment_error.value.code == "RESOURCE_STATE_CONFLICT"
+
+        request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_row.id),
+                "client_request_id": "client-request-001",
+                "input": {"text": "secret user prompt"},
+                "execution": {
+                    "timeout_seconds": 120,
+                    "token_budget": 2048,
+                    "cost_budget": {"amount": "1.25000000", "currency": "USD"},
+                },
+            }
+        )
+        request_hash = canonical_request_hash("run.create", request)
+        created = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=request,
+            idempotency_key="run-create-main-001",
+            request_hash=request_hash,
+            metadata=METADATA,
+        )
+        assert created.value is not None
+        run = created.value
+        assert run.assistant_message_id is None
+        assert run.deployment_id == session_row.default_deployment_id
+        replay = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=request,
+            idempotency_key="run-create-main-001",
+            request_hash=request_hash,
+            metadata=METADATA,
+        )
+        assert replay.replay is not None
+        assert replay.replay.response_body["run_id"] == str(run.id)
+        with pytest.raises(PlatformError) as duplicate:
+            await runs.create_run(
+                context(TENANT_A),
+                user_id=ACTOR,
+                request=request,
+                idempotency_key="run-create-main-002",
+                request_hash=request_hash,
+                metadata=METADATA,
+            )
+        assert duplicate.value.code == "RUN_ALREADY_ACTIVE"
+        assert (
+            await runs.get_run(context(TENANT_A), user_id=OTHER_ACTOR, run_id=run.id)
+            is None
+        )
+        assert (
+            await runs.get_run(context(TENANT_B), user_id=ACTOR, run_id=run.id) is None
+        )
+        listed = await runs.list_session_runs(
+            context(TENANT_A),
+            user_id=ACTOR,
+            session_id=session_row.id,
+            limit=20,
+            cursor=None,
+        )
+        assert listed is not None and [item.id for item in listed[0]] == [run.id]
+
+        async with admin_engine.connect() as connection:
+            persisted = (
+                await connection.execute(
+                    text(
+                        "SELECT r.assistant_message_id, r.snapshot_id, "
+                        "m.role, m.source_run_id, s.cursor_message_id, "
+                        "o.event_type, o.payload_json, a.metadata_json "
+                        "FROM agent_run AS r "
+                        "JOIN chat_message AS m ON m.id = r.user_message_id "
+                        "JOIN chat_session AS s ON s.id = r.session_id "
+                        "JOIN outbox_event AS o ON o.aggregate_id = r.id "
+                        "JOIN audit_log AS a ON a.resource_id = r.id "
+                        "WHERE r.id = :run_id"
+                    ),
+                    {"run_id": run.id},
+                )
+            ).one()
+        assert persisted.assistant_message_id is None
+        assert persisted.snapshot_id == run.snapshot_id
+        assert persisted.role == "USER" and persisted.source_run_id is None
+        assert persisted.cursor_message_id == run.user_message_id
+        assert persisted.event_type == "agent.run_requested.v1"
+        assert persisted.payload_json["initial_execution_attempt"] == 1
+        assert "secret user prompt" not in str(persisted.metadata_json)
+
+        candidates = await runs.list_stalled_runs(
+            context(TENANT_A),
+            created_before=datetime.now(UTC),
+            cancelling_before=datetime.now(UTC),
+            limit=20,
+        )
+        assert run.id in {candidate.run_id for candidate in candidates}
+        async with admin_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE outbox_event SET status = 'DEAD', attempts = 10 "
+                    "WHERE aggregate_id = :run_id"
+                ),
+                {"run_id": run.id},
+            )
+        assert await runs.requeue_run_request(
+            context(TENANT_A), run_id=run.id, now=datetime.now(UTC)
+        )
+        async with admin_engine.connect() as connection:
+            outbox_state = (
+                await connection.execute(
+                    text(
+                        "SELECT status, attempts, published_at FROM outbox_event "
+                        "WHERE aggregate_id = :run_id"
+                    ),
+                    {"run_id": run.id},
+                )
+            ).one()
+        assert outbox_state.status == "PENDING"
+        assert outbox_state.attempts == 0
+        assert outbox_state.published_at is None
+
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE agent_run SET snapshot_id = :snapshot_id "
+                        "WHERE id = :run_id"
+                    ),
+                    {"snapshot_id": uuid5(NAMESPACE_URL, "other"), "run_id": run.id},
+                )
+        async with admin_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE agent_run SET status = 'FAILED', finished_at = now() "
+                    "WHERE id = :run_id"
+                ),
+                {"run_id": run.id},
+            )
+
+        guard_request = SessionCreateRequest.model_validate(
+            {"agent_id": str(session_row.agent_id), "title": "Run delete guard"}
+        )
+        guard_session = await sessions.create_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=guard_request,
+            metadata_value={},
+            idempotency_key="session-create-run-guard",
+            request_hash=canonical_request_hash("session.create", guard_request),
+            metadata=METADATA,
+        )
+        assert guard_session.value is not None
+        concurrent_requests = [
+            RunCreateRequest.model_validate(
+                {
+                    "session_id": str(guard_session.value.id),
+                    "input": {"text": f"concurrent {index}"},
+                }
+            )
+            for index in (1, 2)
+        ]
+
+        async def create_concurrent(index: int):
+            concurrent = concurrent_requests[index]
+            return await runs.create_run(
+                context(TENANT_A),
+                user_id=ACTOR,
+                request=concurrent,
+                idempotency_key=f"run-concurrent-00{index + 1}",
+                request_hash=canonical_request_hash("run.create", concurrent),
+                metadata=METADATA,
+            )
+
+        results = await asyncio.gather(
+            create_concurrent(0), create_concurrent(1), return_exceptions=True
+        )
+        assert sum(not isinstance(result, BaseException) for result in results) == 1
+        conflicts = [result for result in results if isinstance(result, PlatformError)]
+        assert len(conflicts) == 1 and conflicts[0].code == "RUN_ALREADY_ACTIVE"
+        archived = await sessions.archive_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            session_id=guard_session.value.id,
+            expected_version=2,
+            idempotency_key="session-archive-run-guard",
+            request_hash=canonical_request_hash(
+                "session.archive",
+                extra={"session_id": str(guard_session.value.id), "if_match": '"rv:2"'},
+            ),
+            metadata=METADATA,
+        )
+        assert archived is not None and archived.value is not None
+        with pytest.raises(PlatformError) as delete_guard:
+            await sessions.delete_session(
+                context(TENANT_A),
+                user_id=ACTOR,
+                session_id=guard_session.value.id,
+                expected_version=3,
+                idempotency_key="session-delete-run-guard",
+                request_hash=canonical_request_hash(
+                    "session.delete",
+                    extra={
+                        "session_id": str(guard_session.value.id),
+                        "if_match": '"rv:3"',
+                    },
+                ),
+                metadata=METADATA,
+            )
+        assert delete_guard.value.code == "RESOURCE_STATE_CONFLICT"
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
+async def verify_run_event_store_constraints(database_url: str) -> None:
+    admin_engine = create_async_engine(database_url)
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    event_id = uuid5(NAMESPACE_URL, "run-event-store-event-1")
+    second_event_id = uuid5(NAMESPACE_URL, "run-event-store-event-2")
+    occurred_at = datetime(2026, 8, 8, 8, 0, tzinfo=UTC)
+    recorded_at = occurred_at + timedelta(milliseconds=10)
+    try:
+        async with admin_engine.connect() as connection:
+            run_row = (
+                await connection.execute(
+                    text(
+                        "SELECT id, session_id FROM agent_run "
+                        "WHERE tenant_id = :tenant_id ORDER BY created_at, id LIMIT 1"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+            relkind = await connection.scalar(
+                text(
+                    "SELECT relkind::text FROM pg_class "
+                    "WHERE oid = 'run_event'::regclass"
+                )
+            )
+        assert relkind == "r"
+
+        async with app_engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": TENANT_A},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO run_event_counter (run_id, tenant_id) "
+                    "VALUES (:run_id, :tenant_id)"
+                ),
+                {"run_id": run_row.id, "tenant_id": TENANT_A},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO run_event "
+                    "(id, tenant_id, run_id, session_id, sequence_no, "
+                    "source_event_id, execution_attempt, schema_version, event_type, "
+                    "payload_version, payload_json, occurred_at, recorded_at, trace_id) "
+                    "VALUES (:id, :tenant_id, :run_id, :session_id, 1, "
+                    "'runtime-event-1', 1, '1.0', 'text_delta', '1.0', "
+                    '\'{"message_id":"msg-test","delta":"hello"}\'::jsonb, '
+                    ":occurred_at, :recorded_at, 'trace-run-event-store')"
+                ),
+                {
+                    "id": event_id,
+                    "tenant_id": TENANT_A,
+                    "run_id": run_row.id,
+                    "session_id": run_row.session_id,
+                    "occurred_at": occurred_at,
+                    "recorded_at": recorded_at,
+                },
+            )
+            counter = await connection.scalar(
+                text(
+                    "UPDATE run_event_counter SET next_sequence_no = 2 "
+                    "WHERE run_id = :run_id RETURNING next_sequence_no"
+                ),
+                {"run_id": run_row.id},
+            )
+        assert counter == 2
+
+        with pytest.raises(DBAPIError):
+            async with app_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "SELECT set_config"
+                        "('app.current_tenant_id', :tenant_id, true)"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+                await connection.execute(
+                    text(
+                        "INSERT INTO run_event "
+                        "(id, tenant_id, run_id, session_id, sequence_no, "
+                        "source_event_id, execution_attempt, schema_version, event_type, "
+                        "payload_version, payload_json, occurred_at, recorded_at, trace_id) "
+                        "VALUES (:id, :tenant_id, :run_id, :session_id, 1, "
+                        "'runtime-event-2', 1, '1.0', 'warning', '1.0', '{}'::jsonb, "
+                        ":occurred_at, :recorded_at, 'trace-run-event-store')"
+                    ),
+                    {
+                        "id": second_event_id,
+                        "tenant_id": TENANT_A,
+                        "run_id": run_row.id,
+                        "session_id": run_row.session_id,
+                        "occurred_at": occurred_at,
+                        "recorded_at": recorded_at,
+                    },
+                )
+
+        with pytest.raises(DBAPIError):
+            async with app_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "SELECT set_config"
+                        "('app.current_tenant_id', :tenant_id, true)"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+                await connection.execute(
+                    text(
+                        "INSERT INTO run_event "
+                        "(id, tenant_id, run_id, session_id, sequence_no, "
+                        "source_event_id, execution_attempt, schema_version, event_type, "
+                        "payload_version, payload_json, occurred_at, recorded_at, trace_id) "
+                        "VALUES (:id, :tenant_id, :run_id, :session_id, 2, "
+                        "'runtime-event-1', 1, '1.0', 'warning', '1.0', '{}'::jsonb, "
+                        ":occurred_at, :recorded_at, 'trace-run-event-store')"
+                    ),
+                    {
+                        "id": second_event_id,
+                        "tenant_id": TENANT_A,
+                        "run_id": run_row.id,
+                        "session_id": run_row.session_id,
+                        "occurred_at": occurred_at,
+                        "recorded_at": recorded_at,
+                    },
+                )
+
+        with pytest.raises(DBAPIError):
+            async with app_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "SELECT set_config"
+                        "('app.current_tenant_id', :tenant_id, true)"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+                await connection.execute(
+                    text(
+                        "INSERT INTO run_event "
+                        "(id, tenant_id, run_id, session_id, sequence_no, "
+                        "source_event_id, execution_attempt, schema_version, event_type, "
+                        "payload_version, payload_json, occurred_at, recorded_at, trace_id) "
+                        "VALUES (:id, :tenant_id, :run_id, :session_id, 2, "
+                        "'runtime-event-large', 1, '1.0', 'text_delta', '1.0', "
+                        "CAST(:payload AS jsonb), :occurred_at, :recorded_at, "
+                        "'trace-run-event-store')"
+                    ),
+                    {
+                        "id": second_event_id,
+                        "tenant_id": TENANT_A,
+                        "run_id": run_row.id,
+                        "session_id": run_row.session_id,
+                        "payload": json.dumps({"delta": "x" * 262144}),
+                        "occurred_at": occurred_at,
+                        "recorded_at": recorded_at,
+                    },
+                )
+
+        for statement in (
+            "UPDATE run_event SET payload_json = '{}'::jsonb WHERE id = :event_id",
+            "DELETE FROM run_event WHERE id = :event_id",
+        ):
+            with pytest.raises(DBAPIError):
+                async with app_engine.begin() as connection:
+                    await connection.execute(
+                        text(
+                            "SELECT set_config"
+                            "('app.current_tenant_id', :tenant_id, true)"
+                        ),
+                        {"tenant_id": TENANT_A},
+                    )
+                    await connection.execute(text(statement), {"event_id": event_id})
+
+        async with app_engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": TENANT_B},
+            )
+            assert await connection.scalar(text("SELECT count(*) FROM run_event")) == 0
+            assert (
+                await connection.scalar(text("SELECT count(*) FROM run_event_counter"))
+                == 0
+            )
+
+        with pytest.raises(DBAPIError):
+            async with app_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "SELECT set_config"
+                        "('app.current_tenant_id', :tenant_id, true)"
+                    ),
+                    {"tenant_id": TENANT_B},
+                )
+                await connection.execute(
+                    text(
+                        "UPDATE run_event_counter SET next_sequence_no = 3 "
+                        "WHERE run_id = :run_id"
+                    ),
+                    {"run_id": run_row.id},
+                )
+                await connection.execute(
+                    text(
+                        "INSERT INTO run_event_counter (run_id, tenant_id) "
+                        "VALUES (:run_id, :tenant_id)"
+                    ),
+                    {
+                        "run_id": uuid5(NAMESPACE_URL, "cross-tenant-run"),
+                        "tenant_id": TENANT_A,
+                    },
+                )
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
+async def verify_run_workflow_attempt_and_message_finalization(
+    database_url: str,
+) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        runs = SqlAlchemyRunStore(session_factory)
+        events = RunEventIngestionService(SqlAlchemyRunEventStore(session_factory))
+        event_queries = RunEventQueryService(
+            Epic3AccessResolver(), SqlAlchemyRunEventQueryStore(session_factory)
+        )
+        async with admin_engine.connect() as connection:
+            session_row = (
+                await connection.execute(
+                    text(
+                        "SELECT id, default_deployment_id FROM chat_session "
+                        "WHERE tenant_id = :tenant_id "
+                        "AND title = 'Pinned before rollback'"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+
+        success_request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_row.id),
+                "input": {"text": "workflow success input"},
+                "execution": {"timeout_seconds": 90, "token_budget": 1024},
+            }
+        )
+        success = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=success_request,
+            idempotency_key="run-workflow-success-001",
+            request_hash=canonical_request_hash("run.create", success_request),
+            metadata=METADATA,
+        )
+        assert success.value is not None
+        run = success.value
+        source = await runs.load_run_spec_source(context(TENANT_A), run_id=run.id)
+        assert source is not None
+        assert source.user_text == "workflow success input"
+        assert source.snapshot_id == run.snapshot_id
+        assert source.deployment_id == run.deployment_id
+        assert source.bundle_uri and source.bundle_hash.startswith("sha256:")
+
+        workflow_id = f"run/{TENANT_A}/{run.id}"
+        workflow_started_at = datetime.now(UTC)
+        assert await runs.record_workflow_start(
+            context(TENANT_A),
+            run_id=run.id,
+            workflow_id=workflow_id,
+            temporal_run_id="temporal-run-integration-1",
+            outcome="STARTED",
+            started_at=workflow_started_at,
+        )
+        assert not await runs.record_workflow_start(
+            context(TENANT_A),
+            run_id=run.id,
+            workflow_id=workflow_id,
+            temporal_run_id="temporal-run-integration-1",
+            outcome="ALREADY_EXISTS",
+            started_at=workflow_started_at,
+        )
+        fencing_token = "integration-fencing-token-success-0001"
+        fencing_hash = "sha256:" + hashlib.sha256(fencing_token.encode()).hexdigest()
+        await runs.prepare_run(
+            context(TENANT_A),
+            run_id=run.id,
+            workflow_id=workflow_id,
+            execution_attempt=1,
+            fencing_token_hash=fencing_hash,
+        )
+        await runs.prepare_run(
+            context(TENANT_A),
+            run_id=run.id,
+            workflow_id=workflow_id,
+            execution_attempt=1,
+            fencing_token_hash=fencing_hash,
+        )
+        await runs.mark_run_running(
+            context(TENANT_A),
+            run_id=run.id,
+            execution_attempt=1,
+            worker_id="integration-run-worker",
+        )
+        await runs.mark_run_running(
+            context(TENANT_A),
+            run_id=run.id,
+            execution_attempt=1,
+            worker_id="integration-run-worker",
+        )
+
+        occurred_at = datetime.now(UTC)
+
+        def delta(index: int) -> RuntimeEventCandidate:
+            return RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                {
+                    "source_event_id": f"integration-delta-{index:03d}",
+                    "event_type": "text_delta",
+                    "occurred_at": occurred_at,
+                    "payload_version": "1.0",
+                    "payload": {
+                        "message_id": f"runtime-message-{run.id}",
+                        "delta": f"chunk-{index}",
+                    },
+                }
+            )
+
+        concurrent_batches = await asyncio.gather(
+            *(
+                events.append_batch(
+                    event_access(TENANT_A),
+                    run_id=str(run.id),
+                    request=RunEventBatchRequest(
+                        execution_attempt=1,
+                        execution_fencing_token=fencing_token,
+                        events=[delta(index) for index in range(start, start + 10)]
+                        + ([delta(0)] if start == 0 else []),
+                    ),
+                )
+                for start in range(0, 100, 10)
+            )
+        )
+        created_sequences = sorted(
+            item.sequence_no
+            for batch in concurrent_batches
+            for item in batch.items
+            if item.status == "created" and item.sequence_no is not None
+        )
+        assert created_sequences == list(range(1, 101))
+        created_by_source = {
+            item.source_event_id: item.sequence_no
+            for batch in concurrent_batches
+            for item in batch.items
+        }
+        assert (
+            sum(
+                item.status == "duplicate"
+                for batch in concurrent_batches
+                for item in batch.items
+            )
+            == 1
+        )
+
+        duplicate = await events.append_batch(
+            event_access(TENANT_A),
+            run_id=str(run.id),
+            request=RunEventBatchRequest(
+                execution_attempt=1,
+                execution_fencing_token=fencing_token,
+                events=[delta(0), delta(0)],
+            ),
+        )
+        assert [item.status for item in duplicate.items] == [
+            "duplicate",
+            "duplicate",
+        ]
+        assert duplicate.items[0].event_id == duplicate.items[1].event_id
+        assert (
+            duplicate.items[0].sequence_no == created_by_source["integration-delta-000"]
+        )
+        reused_source = await events.append_batch(
+            event_access(TENANT_A),
+            run_id=str(run.id),
+            request=RunEventBatchRequest(
+                execution_attempt=1,
+                execution_fencing_token=fencing_token,
+                events=[
+                    RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                        {
+                            "source_event_id": "integration-delta-000",
+                            "event_type": "text_delta",
+                            "occurred_at": occurred_at,
+                            "payload_version": "1.0",
+                            "payload": {
+                                "message_id": f"runtime-message-{run.id}",
+                                "delta": "different-content",
+                            },
+                        }
+                    )
+                ],
+            ),
+        )
+        assert reused_source.items[0].status == "rejected"
+        assert reused_source.items[0].error is not None
+        assert reused_source.items[0].error.code == "IDEMPOTENCY_KEY_REUSED"
+
+        with pytest.raises(PlatformError) as stale_fencing:
+            await events.append_batch(
+                event_access(TENANT_A),
+                run_id=str(run.id),
+                request=RunEventBatchRequest(
+                    execution_attempt=1,
+                    execution_fencing_token="stale-fencing-token-0001",
+                    events=[delta(101)],
+                ),
+            )
+        assert stale_fencing.value.code == "EXECUTION_FENCING_REJECTED"
+
+        premature_terminal = await events.append_batch(
+            event_access(TENANT_A),
+            run_id=str(run.id),
+            request=RunEventBatchRequest(
+                execution_attempt=1,
+                execution_fencing_token=fencing_token,
+                events=[
+                    RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                        {
+                            "source_event_id": "integration-terminal-premature",
+                            "event_type": "run_succeeded",
+                            "occurred_at": occurred_at,
+                            "payload_version": "1.0",
+                            "payload": {
+                                "result_message_id": str(run.user_message_id),
+                                "usage": {
+                                    "input_tokens": 1,
+                                    "output_tokens": 1,
+                                    "reasoning_tokens": 0,
+                                    "estimated": True,
+                                },
+                                "warnings": [],
+                                "result_quality": "NORMAL",
+                            },
+                        }
+                    ),
+                    RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                        {
+                            "source_event_id": "integration-partial-warning",
+                            "event_type": "warning",
+                            "occurred_at": occurred_at,
+                            "payload_version": "1.0",
+                            "payload": {
+                                "code": "PARTIAL_BATCH",
+                                "message": "ordinary events still commit",
+                            },
+                        }
+                    ),
+                ],
+            ),
+        )
+        assert premature_terminal.items[0].status == "rejected"
+        assert premature_terminal.items[0].error is not None
+        assert premature_terminal.items[0].error.code == "RUN_TERMINAL_NOT_FINALIZED"
+        assert premature_terminal.items[1].status == "created"
+        assert premature_terminal.items[1].sequence_no == 101
+
+        success_finalization = FinalizeAgentRunInput(
+            tenant_id=UUID(TENANT_A),
+            run_id=run.id,
+            execution_attempt=1,
+            completion=RuntimeCompletion(
+                status="SUCCEEDED",
+                assistant_content_parts=(
+                    AssistantTextPart(text="workflow assistant result"),
+                ),
+                result_quality="NORMAL",
+                runtime_handle_ref="runtime://integration/success/1",
+            ),
+            request_id=METADATA.request_id,
+            trace_id=METADATA.trace_id,
+        )
+        finalized = await runs.finalize_run(
+            context(TENANT_A), input=success_finalization
+        )
+        replay = await runs.finalize_run(context(TENANT_A), input=success_finalization)
+        assert finalized.status == "SUCCEEDED"
+        assert finalized.assistant_message_id is not None
+        assert replay == finalized
+
+        def succeeded_terminal(source_event_id: str) -> RuntimeEventCandidate:
+            return RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                {
+                    "source_event_id": source_event_id,
+                    "event_type": "run_succeeded",
+                    "occurred_at": datetime.now(UTC),
+                    "payload_version": "1.0",
+                    "payload": {
+                        "result_message_id": str(finalized.assistant_message_id),
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                            "reasoning_tokens": 0,
+                            "estimated": True,
+                        },
+                        "warnings": [],
+                        "result_quality": "NORMAL",
+                    },
+                }
+            )
+
+        terminal = await events.append_batch(
+            event_access(TENANT_A),
+            run_id=str(run.id),
+            request=RunEventBatchRequest(
+                execution_attempt=1,
+                execution_fencing_token=fencing_token,
+                events=[succeeded_terminal("integration-terminal-success")],
+            ),
+        )
+        assert terminal.items[0].status == "created"
+        assert terminal.items[0].sequence_no == 102
+        terminal_replay = await events.append_batch(
+            event_access(TENANT_A),
+            run_id=str(run.id),
+            request=RunEventBatchRequest(
+                execution_attempt=1,
+                execution_fencing_token=fencing_token,
+                events=[succeeded_terminal("integration-terminal-replay")],
+            ),
+        )
+        assert terminal_replay.items[0].status == "duplicate"
+        assert terminal_replay.items[0].event_id == terminal.items[0].event_id
+        conflict = await events.append_batch(
+            event_access(TENANT_A),
+            run_id=str(run.id),
+            request=RunEventBatchRequest(
+                execution_attempt=1,
+                execution_fencing_token=fencing_token,
+                events=[
+                    RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                        {
+                            "source_event_id": "integration-terminal-conflict",
+                            "event_type": "run_failed",
+                            "occurred_at": datetime.now(UTC),
+                            "payload_version": "1.0",
+                            "payload": {
+                                "error_code": "CONFLICT",
+                                "message": "must be rejected",
+                                "retryable": False,
+                            },
+                        }
+                    )
+                ],
+            ),
+        )
+        assert conflict.items[0].status == "rejected"
+        assert conflict.items[0].error is not None
+        assert conflict.items[0].error.code == "RUN_TERMINAL_EVENT_CONFLICT"
+
+        query_principal = AuthenticatedPrincipal(
+            identity_issuer="https://issuer.test/",
+            external_subject="resource-owner",
+            display_name="Resource Owner",
+            platform_roles=frozenset(),
+            auth_time=occurred_at,
+        )
+        replayed_sequence_numbers: list[int] = []
+        after = 0
+        while True:
+            page = await event_queries.list_events(
+                query_principal,
+                run_id=str(run.id),
+                after=after,
+                limit=37,
+                metadata=METADATA,
+            )
+            replayed_sequence_numbers.extend(item.sequence_no for item in page.items)
+            assert page.latest_sequence_no == 102
+            if not page.has_more:
+                break
+            after = page.items[-1].sequence_no
+        assert replayed_sequence_numbers == list(range(1, 103))
+        queried_run = await runs.get_run(
+            context(TENANT_A), user_id=ACTOR, run_id=run.id
+        )
+        assert queried_run is not None
+        assert queried_run.latest_sequence_no == page.latest_sequence_no == 102
+        exhausted = await event_queries.list_events(
+            query_principal,
+            run_id=str(run.id),
+            after=102,
+            limit=37,
+            metadata=METADATA,
+        )
+        assert exhausted.items == []
+        assert exhausted.latest_sequence_no == 102
+        assert exhausted.has_more is False
+        assert (
+            await SqlAlchemyRunEventQueryStore(session_factory).list_events(
+                context(TENANT_A),
+                user_id=OTHER_ACTOR,
+                run_id=run.id,
+                after=0,
+                limit=20,
+            )
+            is None
+        )
+
+        async with admin_engine.connect() as connection:
+            persisted = (
+                await connection.execute(
+                    text(
+                        "SELECT r.status, r.workflow_id, r.temporal_run_id, "
+                        "r.workflow_start_outcome, r.workflow_started_at, "
+                        "r.current_attempt, r.latest_sequence_no, "
+                        "r.assistant_message_id, a.status AS attempt_status, "
+                        "a.fencing_token_hash, a.runtime_handle_ref, "
+                        "m.role, m.source_run_id, m.parent_message_id, "
+                        "m.content_parts_json, s.cursor_message_id, "
+                        "(SELECT count(*) FROM run_attempt ra WHERE ra.run_id = r.id) "
+                        "AS attempt_count, "
+                        "(SELECT count(*) FROM chat_message cm "
+                        "WHERE cm.source_run_id = r.id) AS assistant_count "
+                        "FROM agent_run r JOIN run_attempt a ON a.run_id = r.id "
+                        "JOIN chat_message m ON m.id = r.assistant_message_id "
+                        "JOIN chat_session s ON s.id = r.session_id "
+                        "WHERE r.id = :run_id"
+                    ),
+                    {"run_id": run.id},
+                )
+            ).one()
+        assert persisted.status == "SUCCEEDED"
+        assert persisted.workflow_id == workflow_id
+        assert persisted.temporal_run_id == "temporal-run-integration-1"
+        assert persisted.workflow_start_outcome == "STARTED"
+        assert persisted.workflow_started_at == workflow_started_at
+        assert persisted.current_attempt == 1
+        assert persisted.latest_sequence_no == 102
+        assert persisted.attempt_status == "COMPLETED"
+        assert persisted.fencing_token_hash == fencing_hash
+        assert persisted.runtime_handle_ref == "runtime://integration/success/1"
+        assert persisted.role == "ASSISTANT"
+        assert persisted.source_run_id == run.id
+        assert persisted.parent_message_id == run.user_message_id
+        assert persisted.content_parts_json == [
+            {"type": "text", "text": "workflow assistant result"}
+        ]
+        assert persisted.cursor_message_id == persisted.assistant_message_id
+        assert persisted.attempt_count == 1
+        assert persisted.assistant_count == 1
+        async with admin_engine.connect() as connection:
+            event_facts = (
+                await connection.execute(
+                    text(
+                        "SELECT (SELECT count(*) FROM run_event e "
+                        "WHERE e.run_id = :run_id) AS event_count, "
+                        "(SELECT next_sequence_no FROM run_event_counter c "
+                        "WHERE c.run_id = :run_id) AS next_sequence_no, "
+                        "(SELECT count(*) FROM outbox_event o "
+                        "WHERE o.aggregate_id = :run_id "
+                        "AND o.event_type = 'run.events_appended.v1') AS outbox_count, "
+                        "(SELECT count(*) FROM audit_log a "
+                        "WHERE a.resource_id = :run_id "
+                        "AND a.action = 'execution_fencing_rejected') "
+                        "AS fencing_audit_count, "
+                        "(SELECT count(*) FROM audit_log a "
+                        "WHERE a.resource_id = :run_id "
+                        "AND a.action = 'terminal_conflict') "
+                        "AS terminal_audit_count"
+                    ),
+                    {"run_id": run.id},
+                )
+            ).one()
+        assert event_facts.event_count == 102
+        assert event_facts.next_sequence_no == 103
+        assert event_facts.outbox_count == 12
+        assert event_facts.fencing_audit_count == 1
+        assert event_facts.terminal_audit_count == 2
+
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE chat_message SET content_parts_json = "
+                        '\'[{"type":"text","text":"changed"}]\'::jsonb '
+                        "WHERE id = :message_id"
+                    ),
+                    {"message_id": finalized.assistant_message_id},
+                )
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text("DELETE FROM chat_message WHERE id = :message_id"),
+                    {"message_id": finalized.assistant_message_id},
+                )
+
+        failure_request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_row.id),
+                "input": {"text": "workflow failure input"},
+            }
+        )
+        failure = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=failure_request,
+            idempotency_key="run-workflow-failure-001",
+            request_hash=canonical_request_hash("run.create", failure_request),
+            metadata=METADATA,
+        )
+        assert failure.value is not None
+        failed_run = failure.value
+        await runs.prepare_run(
+            context(TENANT_A),
+            run_id=failed_run.id,
+            workflow_id=f"run/{TENANT_A}/{failed_run.id}",
+            execution_attempt=1,
+            fencing_token_hash="sha256:" + "b" * 64,
+        )
+        await runs.mark_run_running(
+            context(TENANT_A),
+            run_id=failed_run.id,
+            execution_attempt=1,
+            worker_id="integration-run-worker",
+        )
+        failed = await runs.finalize_run(
+            context(TENANT_A),
+            input=FinalizeAgentRunInput(
+                tenant_id=UUID(TENANT_A),
+                run_id=failed_run.id,
+                execution_attempt=1,
+                completion=RuntimeCompletion(
+                    status="FAILED",
+                    error_code="MODEL_TIMEOUT",
+                    error_message="The model timed out.",
+                    retryable=False,
+                ),
+                request_id=METADATA.request_id,
+                trace_id=METADATA.trace_id,
+            ),
+        )
+        assert failed.status == "FAILED"
+        assert failed.assistant_message_id is None
+        async with admin_engine.connect() as connection:
+            failed_persisted = (
+                await connection.execute(
+                    text(
+                        "SELECT r.status, r.assistant_message_id, r.error_code, "
+                        "r.error_detail_json, a.status AS attempt_status, "
+                        "(SELECT count(*) FROM chat_message m "
+                        "WHERE m.source_run_id = r.id) AS assistant_count "
+                        "FROM agent_run r JOIN run_attempt a ON a.run_id = r.id "
+                        "WHERE r.id = :run_id"
+                    ),
+                    {"run_id": failed_run.id},
+                )
+            ).one()
+        assert failed_persisted.status == "FAILED"
+        assert failed_persisted.assistant_message_id is None
+        assert failed_persisted.error_code == "MODEL_TIMEOUT"
+        assert failed_persisted.error_detail_json["message"] == "The model timed out."
+        assert failed_persisted.attempt_status == "LOST"
+        assert failed_persisted.assistant_count == 0
+
+        preparation_failure_request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_row.id),
+                "input": {"text": "workflow preparation failure input"},
+            }
+        )
+        preparation_failure = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=preparation_failure_request,
+            idempotency_key="run-workflow-prepare-failure-001",
+            request_hash=canonical_request_hash(
+                "run.create", preparation_failure_request
+            ),
+            metadata=METADATA,
+        )
+        assert preparation_failure.value is not None
+        preparation_failed_run = preparation_failure.value
+        preparation_workflow_id = f"run/{TENANT_A}/{preparation_failed_run.id}"
+        await runs.prepare_run(
+            context(TENANT_A),
+            run_id=preparation_failed_run.id,
+            workflow_id=preparation_workflow_id,
+            execution_attempt=1,
+            fencing_token_hash="sha256:" + "c" * 64,
+        )
+        preparation_failed = await runs.finalize_run(
+            context(TENANT_A),
+            input=FinalizeAgentRunInput(
+                tenant_id=UUID(TENANT_A),
+                run_id=preparation_failed_run.id,
+                execution_attempt=1,
+                completion=RuntimeCompletion(
+                    status="FAILED",
+                    error_code="RUN_SPEC_UNAVAILABLE",
+                    error_message="The immutable RunSpec could not be prepared.",
+                    retryable=False,
+                ),
+                request_id=METADATA.request_id,
+                trace_id=METADATA.trace_id,
+            ),
+        )
+        assert preparation_failed.status == "FAILED"
+        async with admin_engine.connect() as connection:
+            preparation_counts = (
+                await connection.execute(
+                    text(
+                        "SELECT r.workflow_id, r.assistant_message_id, "
+                        "(SELECT count(*) FROM run_attempt a WHERE a.run_id = r.id) "
+                        "AS attempt_count, "
+                        "(SELECT max(a.status) FROM run_attempt a "
+                        "WHERE a.run_id = r.id) AS attempt_status, "
+                        "(SELECT count(*) FROM chat_message m "
+                        "WHERE m.source_run_id = r.id) AS assistant_count "
+                        "FROM agent_run r WHERE r.id = :run_id"
+                    ),
+                    {"run_id": preparation_failed_run.id},
+                )
+            ).one()
+        assert preparation_counts.workflow_id == preparation_workflow_id
+        assert preparation_counts.assistant_message_id is None
+        assert preparation_counts.attempt_count == 1
+        assert preparation_counts.attempt_status == "LOST"
+        assert preparation_counts.assistant_count == 0
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
+async def verify_run_cancel_retry_and_recovery_fencing(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        runs = SqlAlchemyRunStore(create_session_factory(app_engine))
+        async with admin_engine.connect() as connection:
+            session_row = (
+                await connection.execute(
+                    text(
+                        "SELECT id FROM chat_session WHERE tenant_id = :tenant_id "
+                        "AND title = 'Pinned before rollback'"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+
+        cancel_create = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_row.id),
+                "input": {"text": "cancel and retry immutable input"},
+            }
+        )
+        created = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=cancel_create,
+            idempotency_key="run-cancel-source-001",
+            request_hash=canonical_request_hash("run.create", cancel_create),
+            metadata=METADATA,
+        )
+        assert created.value is not None
+        source = created.value
+        cancel_request = CancelRunRequest(reason="integration stop")
+        cancelled_request = await runs.request_cancel(
+            context(TENANT_A),
+            user_id=ACTOR,
+            run_id=source.id,
+            request=cancel_request,
+            idempotency_key="run-cancel-request-001",
+            request_hash=canonical_request_hash(
+                "run.cancel", cancel_request, extra={"run_id": str(source.id)}
+            ),
+            metadata=METADATA,
+        )
+        assert cancelled_request is not None and cancelled_request.value is not None
+        assert cancelled_request.value.status == "CANCELLING"
+        cancelled = await runs.finalize_cancellation(
+            context(TENANT_A),
+            input=FinalizeAgentRunCancellationInput(
+                tenant_id=UUID(TENANT_A),
+                run_id=source.id,
+                execution_attempt=0,
+                cancellation=RuntimeCancellationResult(
+                    run_id=source.id,
+                    execution_attempt=0,
+                    status="ALREADY_STOPPED",
+                ),
+                request_id=METADATA.request_id,
+                trace_id=METADATA.trace_id,
+            ),
+            fencing_token_hash=None,
+        )
+        assert cancelled.status == "CANCELLED"
+        async with admin_engine.connect() as connection:
+            cancelling_at = await connection.scalar(
+                text("SELECT cancelling_at FROM agent_run WHERE id = :run_id"),
+                {"run_id": source.id},
+            )
+        assert cancelling_at is not None
+
+        retry_request = RetryRunRequest(deployment_policy="original_snapshot")
+        retried = await runs.retry_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            run_id=source.id,
+            request=retry_request,
+            idempotency_key="run-retry-source-001",
+            request_hash=canonical_request_hash(
+                "run.retry", retry_request, extra={"run_id": str(source.id)}
+            ),
+            metadata=METADATA,
+        )
+        assert retried is not None and retried.value is not None
+        retry_run = retried.value
+        assert retry_run.retry_of_run_id == source.id
+        assert retry_run.user_message_id == source.user_message_id
+        assert retry_run.snapshot_id == source.snapshot_id
+        assert retry_run.deployment_id == source.deployment_id
+        async with admin_engine.connect() as connection:
+            immutable_counts = (
+                await connection.execute(
+                    text(
+                        "SELECT (SELECT count(*) FROM chat_message m "
+                        "WHERE m.id = :message_id) AS source_message_count, "
+                        "(SELECT count(*) FROM chat_message m "
+                        "WHERE m.source_run_id = :retry_run_id) AS assistant_count"
+                    ),
+                    {
+                        "message_id": source.user_message_id,
+                        "retry_run_id": retry_run.id,
+                    },
+                )
+            ).one()
+        assert immutable_counts.source_message_count == 1
+        assert immutable_counts.assistant_count == 0
+
+        old_hash = "sha256:" + "d" * 64
+        new_hash = "sha256:" + "e" * 64
+        workflow_id = f"run/{TENANT_A}/{retry_run.id}"
+        await runs.prepare_run(
+            context(TENANT_A),
+            run_id=retry_run.id,
+            workflow_id=workflow_id,
+            execution_attempt=1,
+            fencing_token_hash=old_hash,
+        )
+        await runs.mark_run_running(
+            context(TENANT_A),
+            run_id=retry_run.id,
+            execution_attempt=1,
+            worker_id="integration-recovery-worker-1",
+            fencing_token_hash=old_hash,
+        )
+        await runs.prepare_recovery_attempt(
+            context(TENANT_A),
+            run_id=retry_run.id,
+            lost_execution_attempt=1,
+            execution_attempt=2,
+            fencing_token_hash=new_hash,
+        )
+        with pytest.raises(PlatformError) as stale_attempt:
+            await runs.finalize_run(
+                context(TENANT_A),
+                input=FinalizeAgentRunInput(
+                    tenant_id=UUID(TENANT_A),
+                    run_id=retry_run.id,
+                    execution_attempt=1,
+                    completion=RuntimeCompletion(
+                        status="FAILED",
+                        error_code="STALE_ATTEMPT",
+                        error_message="A stale attempt cannot finalize the Run.",
+                        retryable=False,
+                    ),
+                    request_id=METADATA.request_id,
+                    trace_id=METADATA.trace_id,
+                ),
+                fencing_token_hash=old_hash,
+            )
+        assert stale_attempt.value.code == "RESOURCE_STATE_CONFLICT"
+        with pytest.raises(PlatformError) as stale_token:
+            await runs.mark_run_running(
+                context(TENANT_A),
+                run_id=retry_run.id,
+                execution_attempt=2,
+                worker_id="integration-recovery-worker-2",
+                fencing_token_hash=old_hash,
+            )
+        assert stale_token.value.code == "RESOURCE_STATE_CONFLICT"
+        await runs.mark_run_running(
+            context(TENANT_A),
+            run_id=retry_run.id,
+            execution_attempt=2,
+            worker_id="integration-recovery-worker-2",
+            fencing_token_hash=new_hash,
+        )
+        recovered = await runs.finalize_run(
+            context(TENANT_A),
+            input=FinalizeAgentRunInput(
+                tenant_id=UUID(TENANT_A),
+                run_id=retry_run.id,
+                execution_attempt=2,
+                completion=RuntimeCompletion(
+                    status="SUCCEEDED",
+                    assistant_content_parts=(
+                        AssistantTextPart(text="recovered exactly once"),
+                    ),
+                    runtime_handle_ref="runtime://integration/recovered/2",
+                ),
+                request_id=METADATA.request_id,
+                trace_id=METADATA.trace_id,
+            ),
+            fencing_token_hash=new_hash,
+        )
+        assert recovered.status == "SUCCEEDED"
+        async with admin_engine.connect() as connection:
+            attempts = list(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT attempt_no, status, fencing_token_hash "
+                            "FROM run_attempt WHERE run_id = :run_id "
+                            "ORDER BY attempt_no"
+                        ),
+                        {"run_id": retry_run.id},
+                    )
+                ).all()
+            )
+        assert [(row.attempt_no, row.status) for row in attempts] == [
+            (1, "LOST"),
+            (2, "COMPLETED"),
+        ]
+        assert attempts[0].fencing_token_hash == old_hash
+        assert attempts[1].fencing_token_hash == new_hash
+
+        running_cancel_request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_row.id),
+                "input": {"text": "cancel a running fenced attempt"},
+            }
+        )
+        running_cancel = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=running_cancel_request,
+            idempotency_key="run-running-cancel-001",
+            request_hash=canonical_request_hash("run.create", running_cancel_request),
+            metadata=METADATA,
+        )
+        assert running_cancel.value is not None
+        running_run = running_cancel.value
+        running_hash = "sha256:" + "f" * 64
+        await runs.prepare_run(
+            context(TENANT_A),
+            run_id=running_run.id,
+            workflow_id=f"run/{TENANT_A}/{running_run.id}",
+            execution_attempt=1,
+            fencing_token_hash=running_hash,
+        )
+        await runs.mark_run_running(
+            context(TENANT_A),
+            run_id=running_run.id,
+            execution_attempt=1,
+            worker_id="integration-cancel-worker",
+            fencing_token_hash=running_hash,
+        )
+        running_cancel_body = CancelRunRequest(reason="stop running attempt")
+        requested = await runs.request_cancel(
+            context(TENANT_A),
+            user_id=ACTOR,
+            run_id=running_run.id,
+            request=running_cancel_body,
+            idempotency_key="run-running-cancel-request-001",
+            request_hash=canonical_request_hash(
+                "run.cancel",
+                running_cancel_body,
+                extra={"run_id": str(running_run.id)},
+            ),
+            metadata=METADATA,
+        )
+        assert requested is not None and requested.value is not None
+        running_cancelled = await runs.finalize_cancellation(
+            context(TENANT_A),
+            input=FinalizeAgentRunCancellationInput(
+                tenant_id=UUID(TENANT_A),
+                run_id=running_run.id,
+                execution_attempt=1,
+                cancellation=RuntimeCancellationResult(
+                    run_id=running_run.id,
+                    execution_attempt=1,
+                    status="CANCELLED",
+                    runtime_handle_ref="runtime://integration/cancelled/1",
+                ),
+                request_id=METADATA.request_id,
+                trace_id=METADATA.trace_id,
+            ),
+            fencing_token_hash=running_hash,
+        )
+        assert running_cancelled.status == "CANCELLED"
+        terminal_cancel = await runs.request_cancel(
+            context(TENANT_A),
+            user_id=ACTOR,
+            run_id=running_run.id,
+            request=CancelRunRequest(reason="duplicate terminal cancel"),
+            idempotency_key="run-terminal-cancel-001",
+            request_hash=canonical_request_hash(
+                "run.cancel",
+                CancelRunRequest(reason="duplicate terminal cancel"),
+                extra={"run_id": str(running_run.id)},
+            ),
+            metadata=METADATA,
+        )
+        assert terminal_cancel is not None and terminal_cancel.value is not None
+        assert terminal_cancel.value.status == "CANCELLED"
+        async with admin_engine.connect() as connection:
+            cancelled_facts = (
+                await connection.execute(
+                    text(
+                        "SELECT r.assistant_message_id, a.status AS attempt_status, "
+                        "(SELECT count(*) FROM chat_message m "
+                        "WHERE m.source_run_id = r.id) AS assistant_count "
+                        "FROM agent_run r JOIN run_attempt a ON a.run_id = r.id "
+                        "WHERE r.id = :run_id"
+                    ),
+                    {"run_id": running_run.id},
+                )
+            ).one()
+        assert cancelled_facts.assistant_message_id is None
+        assert cancelled_facts.attempt_status == "CANCELLED"
+        assert cancelled_facts.assistant_count == 0
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
 async def verify_publication_queries_are_read_only(database_url: str) -> None:
     app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
     app_engine = create_async_engine(app_url)
@@ -1891,9 +4289,24 @@ async def verify_resource_registry(database_url: str) -> None:
                     "INSERT INTO app_user "
                     "(id, identity_issuer, external_subject, display_name) VALUES "
                     "(:actor_id, 'https://issuer.test', 'resource-owner', "
-                    "'Resource Owner')"
+                    "'Resource Owner'), "
+                    "(:other_actor_id, 'https://issuer.test', 'other-owner', "
+                    "'Other Owner')"
                 ),
-                {"actor_id": ACTOR},
+                {"actor_id": ACTOR, "other_actor_id": OTHER_ACTOR},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO tenant_member (tenant_id, user_id) VALUES "
+                    "(:tenant_a, :actor_id), (:tenant_a, :other_actor_id), "
+                    "(:tenant_b, :actor_id)"
+                ),
+                {
+                    "tenant_a": TENANT_A,
+                    "tenant_b": TENANT_B,
+                    "actor_id": ACTOR,
+                    "other_actor_id": OTHER_ACTOR,
+                },
             )
 
         app_engine = create_async_engine(app_url)
@@ -2260,15 +4673,27 @@ def test_resource_registry_postgresql_integration() -> None:
         asyncio.run(verify_prompt_permission_backfill(database_url))
         asyncio.run(verify_model_permission_backfill(database_url))
         asyncio.run(verify_agent_permission_backfill(database_url))
+        asyncio.run(verify_session_permission_backfill(database_url))
+        asyncio.run(verify_message_permission_backfill(database_url))
+        asyncio.run(verify_run_permission_backfill(database_url))
         asyncio.run(verify_resource_registry(database_url))
         asyncio.run(verify_model_resources(database_url))
         asyncio.run(verify_agent_draft(database_url))
         asyncio.run(verify_release_request_and_failure_protection(database_url))
         asyncio.run(verify_deployment_activation_history_and_fencing(database_url))
+        asyncio.run(verify_session_lifecycle_and_deployment_pinning(database_url))
+        asyncio.run(verify_message_history_branching_and_immutability(database_url))
+        asyncio.run(verify_run_creation_atomicity_and_guards(database_url))
+        asyncio.run(verify_run_event_store_constraints(database_url))
+        asyncio.run(verify_run_workflow_attempt_and_message_finalization(database_url))
+        asyncio.run(verify_run_cancel_retry_and_recovery_fencing(database_url))
         asyncio.run(verify_publication_queries_are_read_only(database_url))
         asyncio.run(
             verify_agent_rollback_creates_new_release_and_deployment(database_url)
         )
+        asyncio.run(verify_session_remains_pinned_after_rollback(database_url))
+        asyncio.run(verify_run_uses_retired_session_deployment(database_url))
+        asyncio.run(verify_epic3_vertical_acceptance(database_url))
     finally:
         asyncio.run(drop_test_role(database_url))
         migrate(database_url, "base")

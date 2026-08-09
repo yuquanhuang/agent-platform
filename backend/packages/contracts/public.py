@@ -10,6 +10,8 @@ from packages.contracts.errors import (
     resource_not_found,
     resource_state_conflict,
     resource_version_conflict,
+    run_already_active,
+    run_event_sequence_gap,
     unauthenticated,
     validation_error,
 )
@@ -31,6 +33,8 @@ __all__ = [
     "resource_not_found",
     "resource_state_conflict",
     "resource_version_conflict",
+    "run_already_active",
+    "run_event_sequence_gap",
     "unauthenticated",
     "validation_error",
 ]

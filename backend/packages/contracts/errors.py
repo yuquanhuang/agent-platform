@@ -56,6 +56,32 @@ def resource_state_conflict(message: str) -> PlatformError:
     )
 
 
+def run_already_active(
+    message: str = "The Session branch already has an active Run.",
+) -> PlatformError:
+    return PlatformError(status_code=409, code="RUN_ALREADY_ACTIVE", message=message)
+
+
+def run_event_sequence_gap(
+    *,
+    after: int,
+    expected_sequence_no: int,
+    observed_sequence_no: int | None,
+    latest_sequence_no: int,
+) -> PlatformError:
+    return PlatformError(
+        status_code=409,
+        code="RUN_EVENT_SEQUENCE_GAP",
+        message="Run event history is incomplete and cannot be replayed safely.",
+        details={
+            "after": after,
+            "expected_sequence_no": expected_sequence_no,
+            "observed_sequence_no": observed_sequence_no,
+            "latest_sequence_no": latest_sequence_no,
+        },
+    )
+
+
 def idempotency_key_reused() -> PlatformError:
     return PlatformError(
         status_code=409,

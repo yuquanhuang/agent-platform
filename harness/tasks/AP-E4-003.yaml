@@ -1,0 +1,48 @@
+task_id: AP-E4-003
+title: RunEvent 查询、分页、历史回放和序号缺口保护
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - 冻结 listRunEvents API、after 序号游标、limit 最大 200 和 RunEventPage 响应
+    - 当前 tenant 与 Session 所有者隔离、run:read 权限和 DELETED Session 隐藏
+    - PostgreSQL 按 sequence_no 升序读取、latest_sequence_no 一致性快照和 limit + 1 分页
+    - RunEvent V1 TypeAdapter 校验、稳定 RUN_EVENT_SEQUENCE_GAP 错误和敏感 Thinking 脱敏
+    - AP-E4-002 的 102 条事件真实 PostgreSQL 分页回放与跨阶段回归
+  excludes:
+    - Redis 通知、SSE、Last-Event-ID 和背压（AP-E4-004）
+    - AG-UI 映射、Vue Reducer 和 Run 页面（AP-E4-005～007）
+    - RunEvent 分区迁移和生产容量切换
+decisions:
+  - 查询服务与写入服务共享 event_service 边界，但分别使用普通用户 IAM 和内部 workload 身份，不复用 internal:event_write
+  - 先读取并固定 AgentRun.latest_sequence_no，再只返回不超过该值的事实，避免并发追加跨页污染本次响应
+  - 任一首序号、相邻序号或页尾事实缺口返回 409 RUN_EVENT_SEQUENCE_GAP，不跳过缺口继续回放
+  - 无 run:view_sensitive 时保留 thinking_delta 的事件和序号，仅将 delta 替换为固定脱敏文本；有权限时返回冻结事实内容
+compatibility:
+  - R9 OpenAPI、RunEvent JSON Schema、生成 DTO 和前端类型未修改
+  - 未新增数据库迁移、配置或 Python/Node 依赖
+  - Run 不存在、跨租户、非本人或 Session 已删除统一按 RESOURCE_NOT_FOUND 处理
+verification:
+  commands:
+    - targeted application, API and composition tests
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - after=0 和后续页无重复、无遗漏，has_more 与 latest_sequence_no 正确
+  - after 等于或大于 latest_sequence_no 时返回合法空页
+  - 102 条真实事件按 37 条分页完整回放 1～102，且与 getRun/latest_sequence_no 一致
+  - 跨用户读取不可见，所有返回事件均通过冻结 RunEvent TypeAdapter
+  - 缺口返回稳定 409 和非敏感定位详情；Thinking 权限不泄露正文且不制造序号缺口
+results:
+  - 新增 RunEventQueryService、SqlAlchemyRunEventQueryStore、listRunEvents 路由和数据库 API 组合
+  - 定向应用/API/Composition 14 passed；make backend-check 为 383 passed、12 skipped
+  - 真实 PostgreSQL/Temporal make check-all 为后端 395 passed、前端 38 passed
+  - 契约校验 31 个完整性文件、168 个 operationId 和 16 个生成文件零漂移
+follow_up:
+  - AP-E4-004 消费 run.events_appended.v1，使用 Redis 仅作唤醒并实现历史优先的 SSE 重连
+  - AP-E4-005～006 必须复用本阶段的序号缺口和 Thinking 可见性语义，不建立旁路查询
+  - 生产容量阈值前继续落实“全局唯一登记表 + recorded_at 月分区事件表”硬性待办

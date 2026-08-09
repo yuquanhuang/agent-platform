@@ -1,6 +1,6 @@
 # Agent 平台核心接口与事件契约
 
-> 文档版本：V1.4
+> 文档版本：V1.5
 > 文档状态：开发输入基线  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
 > 关联架构：[Agent平台架构与流程设计](./Agent平台架构与流程设计.md)
@@ -315,11 +315,11 @@ POST /api/v1/runs
   "session_id": "ses_xxx",
   "status": "CREATED",
   "events_url": "/api/v1/runs/run_xxx/events",
-  "stream_url": "/api/v1/runs/run_xxx/stream"
+  "stream_url": "/api/v1/runs/run_xxx/events/stream"
 }
 ```
 
-事务内写 Session Cursor、User Message、Assistant Run Message、AgentRun 和 Outbox。Temporal 启动失败由 Outbox 重试，不回滚已提交的业务记录。
+创建事务内写 User Message、`assistant_message_id = null` 的 AgentRun、指向 User Message 的 Session Cursor 和 Outbox，不写 Assistant 占位。Temporal 启动失败由 Outbox 重试，不回滚已提交的业务记录。Runtime 产生通过校验的最终结果后，终态事务只 INSERT 新 Assistant Message、一次性绑定 `assistant_message_id` 并推进 Cursor；Message 全程不得 UPDATE/DELETE。
 
 ### 7.3 查询、取消和重试
 
