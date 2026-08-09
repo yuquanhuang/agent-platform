@@ -1,0 +1,78 @@
+backend/apps/api/routes/sessions.py
+  6172cfb388c1554b 1-227
+backend/tests/application/test_session_service.py
+  6172cfb388c1554b 1-165
+backend/tests/infrastructure/database/test_models.py
+  6172cfb388c1554b 27,40-42,44-45,77-82,213-374
+backend/packages/infrastructure/database/models.py
+  6172cfb388c1554b 1078-1089,1151-1240,1242-1594,1597-1699
+backend/tests/apps/test_api_composition.py
+  6172cfb388c1554b 10,13-16,28-32
+backend/tests/integration/resources/test_resource_registry.py
+  6172cfb388c1554b 4-5,8,13,22-24,26-32,38-54,58,60-64,79-82,84-97,111,113-114,123,127-130,140-141,150,157-295,357-367,545-618,1773,1780-1781,1788-1822,1824-1828,1830-1831,1833-1836,1838-1843,1845-1846,1848-1853,1855-1867,1869-1880,1882-1899,1901-1903,1905,1907-1910,1912-1914,1916,1918,1921-1927,1929-1940,1946-2150,2153-3572,3575-3879,4292-4302,4304-4309,4676-4678,4684-4689,4694-4696
+backend/packages/infrastructure/database/sessions.py
+  6172cfb388c1554b 1-521
+frontend/src/services/sessions.ts
+  6172cfb388c1554b 1-66
+backend/packages/application/sessions.py
+  6172cfb388c1554b 1-360
+backend/apps/api/composition.py
+  6172cfb388c1554b 9-13,16,19-21,31,33-36,48-52,58,72-84,94-95,104-106,114-119
+backend/tests/integration/database/test_postgresql_rls.py
+  6172cfb388c1554b 426,430-431,444-446
+frontend/src/layouts/AppShell.vue
+  6172cfb388c1554b 43-45
+backend/packages/domain/iam/permissions.py
+  6172cfb388c1554b 136-147
+backend/packages/application/iam/management.py
+  6172cfb388c1554b 505
+backend/packages/infrastructure/public.py
+  6172cfb388c1554b 13,18-19,28-30,38,42-46,77,84-85,101-103,111,119-123
+backend/migrations/versions/0015_chat_session.py
+  6172cfb388c1554b 1-181
+backend/packages/application/public.py
+  6172cfb388c1554b 9-19,27-31,75-86,89,92,103,108-110,131-144
+backend/tests/infrastructure/database/test_migrations.py
+  6172cfb388c1554b 39-42,57-60,97-100,106-107,216-283
+harness/AI_CODING_PROGRESS.md
+  6172cfb388c1554b 5,34-51,379-508
+frontend/src/router/index.ts
+  6172cfb388c1554b 57-68
+backend/tests/api/test_sessions.py
+  6172cfb388c1554b 1-173
+backend/tests/domain/iam/test_permissions.py
+  6172cfb388c1554b 41-55
+harness/tasks/AP-E3-001.yaml
+  6172cfb388c1554b 1-51
+frontend/src/services/sessions.spec.ts
+  6172cfb388c1554b 1-89
+backend/packages/domain/public.py
+  6172cfb388c1554b 94-114,120,122-123,127,154-157,184-187,190-191,207-208,211
+backend/apps/api/app.py
+  6172cfb388c1554b 8,15-20,28,33-34,54-59,107-123
+backend/packages/infrastructure/database/public.py
+  6172cfb388c1554b 7-11,14,18,24-25,39-41,56,61,73,80-81,96-98,106,111-115
+backend/tests/application/iam/test_management_service.py
+  6172cfb388c1554b 19-30,36,69-102,154-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "794ae834856dc18919f777cbb00415397dc30d7f",
+  "prompts": {
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 5628,
+      "total_deletions": 74,
+      "accepted_lines": 5569,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/4b500458b6d996a5dd644ad3100fa76a93789969e2b5a56d6fdb3720ab674371"
+    }
+  }
+}
