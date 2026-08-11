@@ -1,0 +1,89 @@
+backend/apps/api/app.py
+  6172cfb388c1554b 7-9,14,21,25,29-31,37,45,62-63,71-74,113-117,140-141,144-151
+backend/tests/apps/test_event_worker_composition.py
+  6172cfb388c1554b 10-30,32-35,38,98-195
+backend/apps/event_worker/composition.py
+  6172cfb388c1554b 8-24,33-37,41-42,46-49,91-174
+backend/tests/infrastructure/test_config.py
+  6172cfb388c1554b 18-23,64-71
+backend/packages/application/event_service/notifications.py
+  6172cfb388c1554b 1-146
+backend/tests/application/event_service/test_notifications.py
+  6172cfb388c1554b 1-204
+backend/tests/application/event_service/test_streaming.py
+  6172cfb388c1554b 1-247
+backend/tests/infrastructure/test_redis_events.py
+  6172cfb388c1554b 1-170
+backend/tests/api/test_runs.py
+  6172cfb388c1554b 21,77,115-123,148,167-168,172-173,175-176,188,194-255
+harness/tasks/AP-E4-004.yaml
+  6172cfb388c1554b 1-52
+backend/tests/api/test_sse.py
+  6172cfb388c1554b 1-37
+harness/AI_CODING_PROGRESS.md
+  6172cfb388c1554b 5,51-68,526-766
+backend/packages/application/event_service/__init__.py
+  6172cfb388c1554b 3-8,21-22,25-31,36-38,45-50,55-56,58
+backend/apps/event_worker/runner.py
+  6172cfb388c1554b 8,19-24,26,53
+backend/apps/api/composition.py
+  6172cfb388c1554b 4,11,14,16,19-25,27-30,37-40,44,48-51,55,62-63,72,81-86,93-98,104-134,136,154-160,162-192,204-208,219-227,233,241-246
+backend/packages/application/public.py
+  6172cfb388c1554b 3-8,10-43,51-53,57-62,67-68,70,100-104,123,130-135,137,139,141-152,166-179,182-184,186,189,191-194,198-221,230-233,238-245,256,269,272,275-280,285-286,288,292,296-301,307-314,317-318,320,322-323
+backend/packages/infrastructure/database/events.py
+  6172cfb388c1554b 17,376-469,516-521,544-545,547,549-555,633-649
+backend/packages/application/event_service/service.py
+  6172cfb388c1554b 109,112-125,231-262,269-270,277-282,285
+backend/packages/infrastructure/config.py
+  6172cfb388c1554b 61,70-74
+backend/packages/infrastructure/public.py
+  da970d0c812c274d 26,122
+  6172cfb388c1554b 16-18,24,37-39,42-44,47,50,59,61-62,64-65,67,88-92,97,106-108,117-118,131-132,138-140,143-145,148,151,164,166-167,169-170,172,181
+backend/packages/application/event_service/streaming.py
+  6172cfb388c1554b 1-153
+backend/.env.example
+  6172cfb388c1554b 7,27-29,36-40
+backend/tests/integration/resources/test_resource_registry.py
+  6172cfb388c1554b 8,11,16-32,35,47,50-52,54,62-64,66,69,71-81,90-92,98-105,109,119,123-125,146-150,156-157,172-173,175-178,180,182,184,186,192-193,195-197,200,203-204,212-213,215,217-218,229-235,249-251,254-268,359-360,414-437,488,492,532-583,585-613,693-707,727-761,916-940,1939-1940,1942,2610,2617,2633,2640,2706-2707,3637-3638,3649-3651,3657-3674,3690-3709,3792-3832,4293-4391,4397-4412,4414-4419,4421-4436,4438-4460,4463-4467,4469,4471-4722,4920-4921,4923,5513-6788,6800-6801,6807,6809-6810,6821-6822,6830
+backend/apps/api/sse.py
+  6172cfb388c1554b 1-76
+backend/tests/apps/test_api_composition.py
+  6172cfb388c1554b 5,10-11,13-14,20,23-25,27,36,44-84
+backend/apps/api/routes/runs.py
+  6172cfb388c1554b 6,8,12,28,36-37,62-68,152-173,176-184,237-250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "d40ccfad7166d1af8d91703effe5f4b4efbd4745",
+  "prompts": {
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 4596,
+      "total_deletions": 72,
+      "accepted_lines": 4564,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/229f98564fa565cc85b453e6be7aa99a96fb7ee81c0391846e925918cf670fa3"
+    },
+    "da970d0c812c274d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fea11-d562-7581-b6db-5c949219951c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/44417df22b736f650cbe891af691d60bc921932b2345ca15891c0f6bd31a6223"
+    }
+  }
+}
