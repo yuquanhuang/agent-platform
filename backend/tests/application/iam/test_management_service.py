@@ -100,6 +100,33 @@ class SessionOperationPersistenceStub:
         )
 
 
+class ArtifactOperationPersistenceStub(SessionOperationPersistenceStub):
+    async def resolve_tenant_access(
+        self, authenticated: AuthenticatedPrincipal, metadata: RequestMetadata
+    ) -> TenantAccess:
+        access = await super().resolve_tenant_access(authenticated, metadata)
+        return TenantAccess(
+            context=access.context,
+            permissions=frozenset({"artifact:read"}),
+        )
+
+    async def get_operation(
+        self, access: TenantAccess, operation_id: UUID
+    ) -> OperationRecord | None:
+        return OperationRecord(
+            id=operation_id,
+            operation_type="artifact.delete",
+            status="SUCCEEDED",
+            resource_type="artifact",
+            resource_id=OPERATION_ID,
+            result={"status": "DELETED"},
+            error=None,
+            created_at=NOW,
+            updated_at=NOW,
+            finished_at=NOW,
+        )
+
+
 @pytest.mark.asyncio
 async def test_create_tenant_requires_platform_admin_and_returns_strong_etag() -> None:
     service = IamManagementService(cast(IamPersistence, PlatformPersistenceStub()))
@@ -164,4 +191,18 @@ async def test_session_read_permission_can_poll_delete_operation() -> None:
     )
 
     assert operation.operation_type == "session.delete"
+    assert operation.status == "SUCCEEDED"
+
+
+@pytest.mark.asyncio
+async def test_artifact_read_permission_can_poll_delete_operation() -> None:
+    service = IamManagementService(
+        cast(IamPersistence, ArtifactOperationPersistenceStub())
+    )
+
+    operation = await service.get_operation(
+        principal(platform_admin=False), str(OPERATION_ID), METADATA
+    )
+
+    assert operation.operation_type == "artifact.delete"
     assert operation.status == "SUCCEEDED"

@@ -9,7 +9,7 @@ from temporalio.service import RPCError, RPCStatusCode
 from packages.application.reconciliation import RunWorkflowExecution
 from packages.application.temporal import AgentRunWorkflow, agent_run_workflow_id
 from packages.contracts.public import dependency_unavailable
-from packages.contracts.temporal import CancelRunSignal
+from packages.contracts.temporal import ApprovalDecidedSignal, CancelRunSignal
 
 
 class TemporalRunWorkflowControl:
@@ -41,6 +41,28 @@ class TemporalRunWorkflowControl:
         except RPCError as error:
             raise dependency_unavailable(
                 "The Run cancellation signal could not be delivered."
+            ) from error
+
+    async def signal_approval(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        signal: ApprovalDecidedSignal,
+    ) -> None:
+        handle = self._client.get_workflow_handle_for(
+            AgentRunWorkflow.run,
+            agent_run_workflow_id(tenant_id, run_id),
+        )
+        try:
+            await handle.signal(
+                AgentRunWorkflow.approval_decided,
+                signal,
+                rpc_timeout=self._rpc_timeout,
+            )
+        except RPCError as error:
+            raise dependency_unavailable(
+                "The Approval decision signal could not be delivered."
             ) from error
 
     async def describe_run(

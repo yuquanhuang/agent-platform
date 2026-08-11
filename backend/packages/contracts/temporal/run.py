@@ -56,6 +56,50 @@ class RunPreparationResult(BaseModel):
     runtime_type: Literal["agentscope", "codex"]
 
 
+class RunSandboxHandle(BaseModel):
+    """Small Sandbox/Lease reference safe to persist in Workflow History."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workflow_contract_version: Literal["1.0"] = "1.0"
+    sandbox_instance_id: str = Field(min_length=3, max_length=255)
+    lease_id: str = Field(min_length=3, max_length=255)
+    workspace_uri: str = Field(min_length=1, max_length=4096)
+
+
+class ProvisionRunSandboxInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workflow_contract_version: Literal["1.0"] = "1.0"
+    tenant_id: UUID
+    run_id: UUID
+    execution_attempt: int = Field(ge=1)
+    run_spec: RunSpecReference
+    runtime_type: Literal["agentscope", "codex"]
+    request_id: str = Field(min_length=1, max_length=128)
+    trace_id: str = Field(min_length=1, max_length=128)
+
+
+class ReleaseRunSandboxInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workflow_contract_version: Literal["1.0"] = "1.0"
+    tenant_id: UUID
+    run_id: UUID
+    execution_attempt: int = Field(ge=1)
+    sandbox: RunSandboxHandle
+    request_id: str = Field(min_length=1, max_length=128)
+    trace_id: str = Field(min_length=1, max_length=128)
+
+
+class ReleaseRunSandboxResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workflow_contract_version: Literal["1.0"] = "1.0"
+    sandbox_instance_id: str = Field(min_length=3, max_length=255)
+    status: Literal["TERMINATED", "QUARANTINED"]
+
+
 class ExecuteAgentRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -66,6 +110,7 @@ class ExecuteAgentRunInput(BaseModel):
     run_spec: RunSpecReference
     timeout_seconds: int = Field(ge=1, le=86_400)
     runtime_type: Literal["agentscope", "codex"]
+    sandbox: RunSandboxHandle | None = None
     request_id: str = Field(min_length=1, max_length=128)
     trace_id: str = Field(min_length=1, max_length=128)
 
@@ -256,6 +301,17 @@ class CancelRunSignal(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class ApprovalDecidedSignal(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    signal_id: str = Field(min_length=1, max_length=128)
+    approval_id: UUID
+    decision_id: UUID
+    decision: Literal["APPROVED", "REJECTED", "EXPIRED", "CANCELLED"]
+    ticket_ref: str | None = Field(default=None, min_length=1, max_length=2048)
+    decided_at: datetime
+
+
 class AgentRunWorkflowState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -265,6 +321,8 @@ class AgentRunWorkflowState(BaseModel):
     current_activity: str | None = Field(default=None, max_length=128)
     execution_attempt: int = Field(ge=0)
     runtime_handle_ref: str | None = Field(default=None, max_length=2048)
+    runtime_session_id: str | None = Field(default=None, max_length=255)
+    sandbox_instance_id: str | None = Field(default=None, max_length=255)
     latest_sequence_no: int = Field(ge=0)
     cancel_requested: bool
     waiting_approval_id: str | None = Field(default=None, max_length=255)

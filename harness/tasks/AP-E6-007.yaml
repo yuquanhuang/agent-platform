@@ -1,0 +1,54 @@
+task_id: AP-E6-007
+title: AgentScope Runtime Bridge 与高风险工具审批/审计纵向 E2E
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - AgentScope 2.0.5 RequireUserConfirmEvent/RequireExternalExecutionEvent 与平台 Runtime Bridge
+    - AgentScope 状态受控保存、Temporal Activity heartbeat 和不进入 Workflow History 的敏感状态边界
+    - 高风险工具 Approval 创建、等待、决定、一次性 Execution Ticket 取回和 Tool Gateway 受控执行
+    - ExternalExecutionResultEvent 恢复、RunEvent 顺序、Run 状态恢复和 Audit 写入纵向验证
+    - HIGH 风险有效策略编译为不可变 REQUIRE_APPROVAL Bundle 快照并提升 Bundle compiler 版本
+    - Runtime service 身份与 Tool Gateway requester/tenant/member/permission 逐次校验协同
+  excludes:
+    - runtime-worker-agentscope/main.py 的生产进程装配和可部署入口激活
+    - 生产 AgentScopeSessionFactory、可信 RunSpec/Bundle Tool Binding Resolver 和加密受控对象存储 State Store
+    - Worker 崩溃后的 checkpoint 恢复、Approval/Ticket/Run/Signal 对账和周期 expiry sweep
+    - 生产 MCP Gateway、Secret Broker、真实外部工具网络 Executor 及 Registry manifest digest 回填
+decisions:
+  - 保持 R10 OpenAPI、RunEvent Schema、RunSpec、Temporal V1 DTO 和 execute_agent_run_v1 -> RuntimeCompletion 历史契约不变
+  - Runtime 只消费显式注入的不可变 RunSpec/Bundle 事实；AgentScope 对象、完整状态、nonce 和完整参数不进入 Temporal History、公共响应或日志
+  - Approval 等待保持在单次 Activity 内并通过 heartbeat 标记等待阶段；拒绝/取消稳定收敛为 RUN_CANCELLING，过期失败关闭
+  - APPROVED 后由 HMAC Issuer 重建 Ticket nonce/ref/hash，Tool Gateway 逐次重校验并先消费 Ticket 再调用 Executor，形成 at-most-once 边界
+  - HIGH 风险从 POLICY_APPROVAL_REQUIRED 发布阻断调整为不可变 REQUIRE_APPROVAL 快照；DENY/CRITICAL 仍阻断
+  - Bundle compiler 从 1.1.0 提升为 1.2.0，既有 Bundle/Deployment 必须重新发布，不兼容旧 Runtime 语义
+compatibility:
+  - 冻结公共契约和前端生成代码无变化；Temporal Activity 返回仍为既有 RuntimeCompletion
+  - Bundle compiler 版本变化是安全兼容窗口，旧 1.1.0 Bundle 在 Admission 中按版本不匹配失败关闭
+  - 未新增 Python 或 Node 依赖；未新增数据库迁移
+verification:
+  commands:
+    - AgentScope Runtime Bridge、Policy、Bundle、Tool Gateway 和 Temporal 定向测试
+    - 真实 PostgreSQL Resource Registry 高风险审批/执行/审计纵向 E2E
+    - 真实 Temporal Workflow/Activity/Signal/Replay 验证
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - AgentScope control event 能暂停并创建 durable Approval，Run 进入 WAITING_APPROVAL
+  - 批准只通过一次性 Ticket 恢复执行；跨 Run、参数/Schema/Policy/Deployment 变化和 Ticket 重放均拒绝
+  - Tool Gateway 执行后 ExternalExecutionResultEvent 注回 AgentScope，Run 恢复并完成正常文本终态
+  - RunEvent 顺序包含 approval_required、approval_resolved、tool_call_result 和文本终态，且 Audit 至少覆盖 approval.request、approval.approve、ticket.consume、tool.execute
+  - Secret、nonce、完整参数、AgentScope state 和高频事件不进入 Temporal History 或公共审计响应
+results:
+  - Runtime/Policy/Bundle/Tool Gateway/Temporal 定向测试 43 passed
+  - Activity、Runtime Bridge 和 Tool Gateway 定向测试 17 passed
+  - 真实 PostgreSQL Resource Registry 纵向 E2E 1 passed
+  - 真实 Temporal 测试 9 passed
+  - make check：后端 652 passed、14 skipped；前端 26 个测试文件、85 passed，生产构建通过
+  - 真实 PostgreSQL/Temporal make check-all：后端 665 passed、1 skipped；前端 26 个测试文件、85 passed；R10 契约 31 个完整性文件、168 个 operationId、17 个生成文件零漂移
+follow_up:
+  - AP-E7-001 装配真实 AgentScope Session/RunSpec/Bundle/State Store，并补 Worker 崩溃恢复、Approval/Ticket/Run/Signal 对账和 expiry sweep
+  - 接入生产 MCP Gateway、Secret Broker、外部工具网络 Executor 和可信 workload identity 后再开放生产高风险工具
+  - 保留 RunEvent 全局唯一登记表加 recorded_at 月分区事件表、真实 Redis、AP-E1-009 Registry digest、AJV standalone codegen、Artifact attachment、Audit 归档和 Provider/数据库/对象存储孤儿对账待办

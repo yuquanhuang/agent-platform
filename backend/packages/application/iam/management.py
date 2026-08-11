@@ -503,6 +503,7 @@ class IamManagementService:
             "model_config",
             "agent",
             "session",
+            "artifact",
         } or not access.allows(resource, "read"):
             raise permission_denied()
         return _operation(record)

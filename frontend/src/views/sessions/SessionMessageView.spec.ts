@@ -11,6 +11,7 @@ vi.mock('@/services/sessions', () => ({
   sessionService: {
     get: vi.fn(),
     listMessages: vi.fn(),
+    listRuns: vi.fn(),
   },
 }));
 
@@ -52,7 +53,10 @@ function queryClient(): QueryClient {
 async function mountView() {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/sessions/:id/messages', component: SessionMessageView }],
+    routes: [
+      { path: '/sessions/:id/messages', component: SessionMessageView },
+      { path: '/runs/:id', name: 'run-detail', component: { template: '<div />' } },
+    ],
   });
   await router.push(`/sessions/${session.id}/messages`);
   await router.isReady();
@@ -66,6 +70,11 @@ describe('SessionMessageView', () => {
     vi.clearAllMocks();
     vi.mocked(sessionService.get).mockResolvedValue(session);
     vi.mocked(sessionService.listMessages).mockResolvedValue(messagePage);
+    vi.mocked(sessionService.listRuns).mockResolvedValue({
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    });
   });
 
   it('renders immutable content parts as safe text and supports branch filtering', async () => {
@@ -96,5 +105,28 @@ describe('SessionMessageView', () => {
 
     expect(wrapper.text()).toContain('已删除 Session 不提供消息正文');
     expect(sessionService.listMessages).not.toHaveBeenCalled();
+    expect(sessionService.listRuns).not.toHaveBeenCalled();
+  });
+
+  it('links persisted Session runs to the independent Run detail route', async () => {
+    vi.mocked(sessionService.listRuns).mockResolvedValue({
+      items: [
+        {
+          id: 'run-001',
+          session_id: session.id,
+          snapshot_id: 'snapshot-001',
+          deployment_id: session.default_deployment_id,
+          status: 'RUNNING',
+          created_at: '2026-08-09T08:00:00Z',
+        },
+      ],
+      next_cursor: null,
+      has_more: false,
+    });
+
+    const wrapper = await mountView();
+    await flushPromises();
+
+    expect(wrapper.get('a[href="/runs/run-001"]').text()).toContain('run-001');
   });
 });

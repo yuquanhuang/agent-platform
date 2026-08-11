@@ -1,0 +1,209 @@
+{
+  "plan_updated": [
+    {
+      "name": "plan_update",
+      "rawEvent": {
+        "eventId": "event-1",
+        "eventType": "plan_updated",
+        "payload": {
+          "plan_id": "plan-1",
+          "steps": [
+            {
+              "status": "completed",
+              "step_id": "step-1",
+              "title": "Inspect"
+            }
+          ]
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      },
+      "timestamp": 1786233600000,
+      "type": "CUSTOM",
+      "value": {
+        "eventId": "event-1",
+        "eventType": "plan_updated",
+        "payload": {
+          "plan_id": "plan-1",
+          "steps": [
+            {
+              "status": "completed",
+              "step_id": "step-1",
+              "title": "Inspect"
+            }
+          ]
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      }
+    }
+  ],
+  "run_cancelled": [
+    {
+      "name": "run_cancelled",
+      "rawEvent": {
+        "eventId": "event-1",
+        "eventType": "run_cancelled",
+        "payload": {
+          "cancelled_by": "user-1",
+          "forced": false,
+          "reason": "user request"
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      },
+      "timestamp": 1786233600000,
+      "type": "CUSTOM",
+      "value": {
+        "eventId": "event-1",
+        "eventType": "run_cancelled",
+        "payload": {
+          "cancelled_by": "user-1",
+          "forced": false,
+          "reason": "user request"
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      }
+    },
+    {
+      "rawEvent": {
+        "eventId": "event-1",
+        "eventType": "run_cancelled",
+        "payload": {
+          "cancelled_by": "user-1",
+          "forced": false,
+          "reason": "user request"
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      },
+      "result": {
+        "cancelled_by": "user-1",
+        "forced": false,
+        "reason": "user request"
+      },
+      "runId": "run-1",
+      "threadId": "session-1",
+      "timestamp": 1786233600000,
+      "type": "RUN_FINISHED"
+    }
+  ],
+  "run_started": [
+    {
+      "rawEvent": {
+        "eventId": "event-1",
+        "eventType": "run_started",
+        "payload": {
+          "runtime_target_id": "runtime-target-1",
+          "runtime_type": "agentscope",
+          "sandbox_id": null
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      },
+      "runId": "run-1",
+      "threadId": "session-1",
+      "timestamp": 1786233600000,
+      "type": "RUN_STARTED"
+    }
+  ],
+  "run_succeeded": [
+    {
+      "outcome": {
+        "type": "success"
+      },
+      "rawEvent": {
+        "eventId": "event-1",
+        "eventType": "run_succeeded",
+        "payload": {
+          "result_message_id": "message-1",
+          "result_quality": "NORMAL",
+          "usage": {
+            "estimated": false,
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "reasoning_tokens": 0
+          },
+          "warnings": []
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      },
+      "result": {
+        "result_message_id": "message-1",
+        "result_quality": "NORMAL",
+        "usage": {
+          "estimated": false,
+          "input_tokens": 3,
+          "output_tokens": 5,
+          "reasoning_tokens": 0
+        },
+        "warnings": []
+      },
+      "runId": "run-1",
+      "threadId": "session-1",
+      "timestamp": 1786233600000,
+      "type": "RUN_FINISHED"
+    }
+  ],
+  "run_timeout": [
+    {
+      "code": "RUN_TIMEOUT",
+      "message": "Run timed out during runtime after 30 seconds.",
+      "rawEvent": {
+        "eventId": "event-1",
+        "eventType": "run_timeout",
+        "payload": {
+          "stage": "runtime",
+          "timeout_seconds": 30
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      },
+      "timestamp": 1786233600000,
+      "type": "RUN_ERROR"
+    }
+  ],
+  "text_delta": [
+    {
+      "delta": "hello",
+      "messageId": "message-1",
+      "rawEvent": {
+        "eventId": "event-1",
+        "eventType": "text_delta",
+        "payload": {
+          "delta": "hello",
+          "message_id": "message-1"
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      },
+      "timestamp": 1786233600000,
+      "type": "TEXT_MESSAGE_CONTENT"
+    }
+  ],
+  "tool_call_result": [
+    {
+      "content": "one result",
+      "messageId": "event-1",
+      "rawEvent": {
+        "eventId": "event-1",
+        "eventType": "tool_call_result",
+        "payload": {
+          "artifact_refs": [],
+          "error_code": null,
+          "result_summary": "one result",
+          "status": "succeeded",
+          "tool_call_id": "tool-call-1"
+        },
+        "runId": "run-1",
+        "sequenceNo": 1
+      },
+      "role": "tool",
+      "timestamp": 1786233600000,
+      "toolCallId": "tool-call-1",
+      "type": "TOOL_CALL_RESULT"
+    }
+  ]
+}

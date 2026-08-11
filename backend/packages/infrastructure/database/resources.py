@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.application.public import RequestMetadata
 from packages.contracts.generated.resource_content import (
+    ResourceContentMcp,
     ResourceContentModelConfig,
     ResourceContentModelProvider,
 )
@@ -31,6 +32,7 @@ from packages.contracts.public import (
 )
 from packages.domain.outbox import OutboxEvent, OutboxStatus
 from packages.domain.public import (
+    IdempotencyReplay,
     MutationOutcome,
     OperationRecord,
     OperationStatus,
@@ -51,13 +53,16 @@ from packages.domain.public import (
 from packages.infrastructure.database.idempotency import (
     claim_idempotency,
     complete_idempotency,
+    get_idempotency_replay,
 )
 from packages.infrastructure.database.models import (
     AuditLogModel,
+    McpCapabilityDiscoveryModel,
     ModelBindingSnapshotModel,
     OperationRecordModel,
     ResourceDefinitionModel,
     ResourceVersionModel,
+    SkillSupplyChainScanModel,
 )
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxWriter
 from packages.infrastructure.database.uow import TenantUnitOfWork
@@ -68,6 +73,25 @@ class SqlAlchemyResourceRegistry:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+
+    async def get_idempotency_replay(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        operation_type: str,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> IdempotencyReplay | None:
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            return await get_idempotency_replay(
+                unit_of_work.session,
+                tenant_id=UUID(context.tenant_id),
+                actor_id=actor_id,
+                operation_type=operation_type,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
 
     async def create_definition(
         self,
@@ -302,6 +326,8 @@ class SqlAlchemyResourceRegistry:
         idempotency_key: str,
         request_hash: str,
         metadata: RequestMetadata,
+        scan_attestation_id: UUID | None = None,
+        mcp_discovery_attestation_id: UUID | None = None,
     ) -> MutationOutcome[ResourceVersionRecord]:
         tenant_id = UUID(context.tenant_id)
         async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
@@ -341,6 +367,25 @@ class SqlAlchemyResourceRegistry:
                 require_provider_enabled=True,
             )
             content_hash = canonical_content_hash(content)
+            scan = await _require_skill_scan(
+                session,
+                tenant_id=tenant_id,
+                definition_id=resource_id,
+                draft_resource_version=definition.resource_version,
+                content_hash=content_hash,
+                resource_type=resource_type,
+                scan_attestation_id=scan_attestation_id,
+            )
+            discovery = await _require_mcp_discovery(
+                session,
+                tenant_id=tenant_id,
+                definition_id=resource_id,
+                draft_resource_version=definition.resource_version,
+                content_hash=content_hash,
+                resource_type=resource_type,
+                discovery_attestation_id=mcp_discovery_attestation_id,
+                content=content,
+            )
             duplicate = await session.scalar(
                 select(ResourceVersionModel.id).where(
                     ResourceVersionModel.tenant_id == tenant_id,
@@ -383,6 +428,12 @@ class SqlAlchemyResourceRegistry:
             definition.updated_by = actor_id
             definition.updated_at = now
             await session.flush()
+            if scan is not None:
+                scan.published_version_id = version_model.id
+                await session.flush()
+            if discovery is not None:
+                discovery.published_version_id = version_model.id
+                await session.flush()
             await _create_model_binding_snapshot(
                 session,
                 tenant_id=tenant_id,
@@ -399,7 +450,14 @@ class SqlAlchemyResourceRegistry:
                 resource_type=resource_type,
                 resource_id=resource_id,
                 metadata=metadata,
-                change={"version_no": next_version, "content_hash": content_hash},
+                change={
+                    "version_no": next_version,
+                    "content_hash": content_hash,
+                    "scan_attestation_id": str(scan.id) if scan is not None else None,
+                    "mcp_discovery_attestation_id": (
+                        str(discovery.id) if discovery is not None else None
+                    ),
+                },
             )
             await complete_idempotency(
                 session,
@@ -692,6 +750,122 @@ class SqlAlchemyResourceRegistry:
             )
             return MutationOutcome(value=result)
 
+    async def request_mcp_capability_discovery(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_id: UUID,
+        expected_resource_version: int,
+        content_hash: str,
+        idempotency_key: str,
+        request_hash: str,
+        metadata: RequestMetadata,
+    ) -> MutationOutcome[OperationRecord] | None:
+        """Persist an MCP discovery request without contacting its endpoint."""
+
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            record_id, replay = await claim_idempotency(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type="mcp.discover",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return MutationOutcome(replay=replay)
+            definition = await session.scalar(
+                select(ResourceDefinitionModel)
+                .where(
+                    ResourceDefinitionModel.tenant_id == tenant_id,
+                    ResourceDefinitionModel.resource_type == "mcp",
+                    ResourceDefinitionModel.id == resource_id,
+                    ResourceDefinitionModel.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if definition is None:
+                return None
+            if definition.resource_version != expected_resource_version:
+                raise resource_version_conflict()
+            content = parse_resource_content(definition.current_draft_json)
+            if not isinstance(content, ResourceContentMcp):
+                raise resource_state_conflict(
+                    "MCP content is unavailable for discovery."
+                )
+            if canonical_content_hash(content) != content_hash:
+                raise resource_state_conflict("MCP content changed before discovery.")
+            now = datetime.now(UTC)
+            operation = OperationRecordModel(
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                operation_type="mcp.discover",
+                status="ACCEPTED",
+                resource_type="mcp",
+                resource_id=resource_id,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(operation)
+            await session.flush()
+            SqlAlchemyOutboxWriter(session, context).add(
+                OutboxEvent(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    aggregate_type="mcp",
+                    aggregate_id=resource_id,
+                    event_type="mcp.capability_discovery_requested",
+                    payload={
+                        "operation_id": str(operation.id),
+                        "requested_by": str(actor_id),
+                        "definition_id": str(resource_id),
+                        "draft_resource_version": expected_resource_version,
+                        "content_hash": content_hash,
+                        "transport": content.transport,
+                        "endpoint": content.endpoint,
+                        "header_templates": content.header_templates or {},
+                        "secret_refs": content.secret_refs,
+                        "timeout_seconds": content.timeout_seconds,
+                        "allowed_tools": content.allowed_tools or [],
+                    },
+                    payload_schema_version=1,
+                    status=OutboxStatus.PENDING,
+                    attempts=0,
+                    next_attempt_at=now,
+                    created_at=now,
+                )
+            )
+            result = _operation_record(operation)
+            await _add_audit(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action="mcp.capability_discovery.requested",
+                resource_type="mcp",
+                resource_id=resource_id,
+                metadata=metadata,
+                change={
+                    "operation_id": str(operation.id),
+                    "content_hash": content_hash,
+                },
+            )
+            await complete_idempotency(
+                session,
+                record_id,
+                response_status=202,
+                response_body={
+                    "operation_id": str(operation.id),
+                    "status": "ACCEPTED",
+                    "status_url": f"/api/v1/operations/{operation.id}",
+                },
+                response_etag=None,
+                response_ref=str(operation.id),
+            )
+            return MutationOutcome(value=result)
+
     async def delete_definition(
         self,
         context: TenantContext,
@@ -808,6 +982,8 @@ class SqlAlchemyResourceRegistry:
         idempotency_key: str,
         request_hash: str,
         metadata: RequestMetadata,
+        scan_attestation_id: UUID | None = None,
+        mcp_discovery_attestation_id: UUID | None = None,
     ) -> MutationOutcome[ResourceVersionRecord] | None:
         tenant_id = UUID(context.tenant_id)
         async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
@@ -847,6 +1023,26 @@ class SqlAlchemyResourceRegistry:
                 return None
             source_content = _validated_content(
                 resource_type, parse_resource_content(source.content_json)
+            )
+            scan = await _require_skill_scan(
+                session,
+                tenant_id=tenant_id,
+                definition_id=resource_id,
+                draft_resource_version=definition.resource_version,
+                content_hash=source.content_hash,
+                resource_type=resource_type,
+                scan_attestation_id=scan_attestation_id,
+            )
+            discovery = await _require_mcp_discovery(
+                session,
+                tenant_id=tenant_id,
+                definition_id=resource_id,
+                draft_resource_version=definition.resource_version,
+                content_hash=source.content_hash,
+                resource_type=resource_type,
+                discovery_attestation_id=mcp_discovery_attestation_id,
+                content=source_content,
+                source_version_id=source.id,
             )
             provider_dependency = await _validate_resource_dependencies(
                 session,
@@ -888,6 +1084,12 @@ class SqlAlchemyResourceRegistry:
             definition.updated_by = actor_id
             definition.updated_at = now
             await session.flush()
+            if scan is not None:
+                scan.published_version_id = version.id
+                await session.flush()
+            if discovery is not None:
+                discovery.published_version_id = version.id
+                await session.flush()
             await _clone_or_create_model_binding_snapshot(
                 session,
                 tenant_id=tenant_id,
@@ -909,6 +1111,10 @@ class SqlAlchemyResourceRegistry:
                     "source_version_id": str(source.id),
                     "version_no": next_version,
                     "content_hash": source.content_hash,
+                    "scan_attestation_id": str(scan.id) if scan is not None else None,
+                    "mcp_discovery_attestation_id": (
+                        str(discovery.id) if discovery is not None else None
+                    ),
                 },
             )
             await complete_idempotency(
@@ -1014,6 +1220,136 @@ def _validated_content(
         return parsed
     except ValueError as exc:
         raise validation_error(str(exc)) from exc
+
+
+async def _require_skill_scan(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    definition_id: UUID,
+    draft_resource_version: int,
+    content_hash: str,
+    resource_type: ResourceType,
+    scan_attestation_id: UUID | None,
+) -> SkillSupplyChainScanModel | None:
+    if resource_type != "skill":
+        if scan_attestation_id is not None:
+            raise resource_state_conflict(
+                "Supply-chain scan evidence is only valid for Skill publication."
+            )
+        return None
+    if scan_attestation_id is None:
+        raise resource_state_conflict(
+            "Skill publication requires passed supply-chain scan evidence."
+        )
+    scan = await session.scalar(
+        select(SkillSupplyChainScanModel)
+        .where(
+            SkillSupplyChainScanModel.tenant_id == tenant_id,
+            SkillSupplyChainScanModel.id == scan_attestation_id,
+            SkillSupplyChainScanModel.definition_id == definition_id,
+        )
+        .with_for_update()
+    )
+    if (
+        scan is None
+        or scan.status != "PASSED"
+        or scan.draft_resource_version != draft_resource_version
+        or scan.content_hash != content_hash
+        or scan.published_version_id is not None
+    ):
+        raise resource_state_conflict(
+            "Skill scan evidence does not match the exact publication input."
+        )
+    return scan
+
+
+async def _require_mcp_discovery(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    definition_id: UUID,
+    draft_resource_version: int,
+    content_hash: str,
+    resource_type: ResourceType,
+    discovery_attestation_id: UUID | None,
+    content: ResourceContentValue,
+    source_version_id: UUID | None = None,
+) -> McpCapabilityDiscoveryModel | None:
+    if resource_type != "mcp":
+        if discovery_attestation_id is not None:
+            raise resource_state_conflict(
+                "MCP discovery evidence is only valid for MCP publication."
+            )
+        return None
+    if discovery_attestation_id is None:
+        raise resource_state_conflict(
+            "MCP publication requires passed capability discovery evidence."
+        )
+    if not isinstance(content, ResourceContentMcp):
+        raise resource_state_conflict("MCP content is unavailable for publication.")
+    allowed_tools = tuple(content.allowed_tools or ())
+    discovery = await session.scalar(
+        select(McpCapabilityDiscoveryModel)
+        .where(
+            McpCapabilityDiscoveryModel.tenant_id == tenant_id,
+            McpCapabilityDiscoveryModel.id == discovery_attestation_id,
+            McpCapabilityDiscoveryModel.definition_id == definition_id,
+        )
+        .with_for_update()
+    )
+    if (
+        discovery is None
+        or discovery.status != "PASSED"
+        or discovery.content_hash != content_hash
+        or discovery.capability_hash is None
+        or not _mcp_allowed_tools_match(discovery.tools_json, allowed_tools)
+    ):
+        raise resource_state_conflict(
+            "MCP discovery evidence does not match the exact publication input."
+        )
+    if source_version_id is None:
+        if (
+            discovery.draft_resource_version != draft_resource_version
+            or discovery.published_version_id is not None
+        ):
+            raise resource_state_conflict(
+                "MCP discovery evidence does not match the exact publication input."
+            )
+        return discovery
+    if discovery.published_version_id != source_version_id:
+        raise resource_state_conflict(
+            "MCP rollback requires discovery evidence bound to the source version."
+        )
+    clone = McpCapabilityDiscoveryModel(
+        tenant_id=tenant_id,
+        definition_id=definition_id,
+        operation_id=None,
+        draft_resource_version=draft_resource_version,
+        content_hash=content_hash,
+        status="PASSED",
+        protocol_version=discovery.protocol_version,
+        server_name=discovery.server_name,
+        server_version=discovery.server_version,
+        tools_json=list(discovery.tools_json),
+        capability_hash=discovery.capability_hash,
+        findings_json=list(discovery.findings_json),
+        discovered_at=discovery.discovered_at,
+        discovered_by=discovery.discovered_by,
+        source_discovery_id=discovery.id,
+    )
+    session.add(clone)
+    await session.flush()
+    return clone
+
+
+def _mcp_allowed_tools_match(
+    tools_json: list[dict[str, object]], allowed_tools: tuple[str, ...]
+) -> bool:
+    discovered = {
+        name for tool in tools_json if isinstance((name := tool.get("name")), str)
+    }
+    return len(discovered) == len(tools_json) and set(allowed_tools) <= discovered
 
 
 async def _validate_resource_dependencies(

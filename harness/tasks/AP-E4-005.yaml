@@ -1,0 +1,49 @@
+task_id: AP-E4-005
+title: RunEvent 到 AG-UI 的无状态出口映射
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - 官方 ag-ui-protocol 0.1.19 Event 模型、联合类型校验和 camelCase 序列化
+    - 20 类冻结 RunEvent 的无状态映射、source sequence 保留和 Golden 快照
+    - run_cancelled 的 CUSTOM + RUN_FINISHED 原子一对多批次，以及成功、失败、超时终态语义
+    - Query Service Thinking 脱敏与真实 PostgreSQL 102 条 RunEvent 协同验证
+  excludes:
+    - 修改冻结 RunEvent SSE Payload 或新增 AG-UI 网络路由
+    - Vue Reducer、断线恢复 UI 和终态冲突 E2E（AP-E4-006～007）
+    - RunEvent 分区迁移、生产 Redis/Secret 部署装配
+decisions:
+  - PostgreSQL RunEvent 保持唯一事实源；Adapter 不持有 Run 生命周期状态，也不改变 Cursor
+  - 每个 RunEvent 产生一个 AgUiEventBatch；取消事件的一对多输出必须作为同一 source sequence 原子处理
+  - run_created、run_queued、thinking_delta、approval_resolved、task_progress 使用稳定 CUSTOM 保真输出
+  - AG-UI 不支持 role=tool 的文本开始事件时输出 CUSTOM，不冒充 assistant
+  - Adapter 输入必须先经过权限和 Thinking 脱敏；rawEvent 只投影该授权后的 RunEvent Payload
+compatibility:
+  - R9 OpenAPI、RunEvent JSON Schema、生成 DTO、SSE data 和数据库结构未修改
+  - 新增 Python 运行时依赖 ag-ui-protocol==0.1.19，仅直接依赖现有 Pydantic
+  - 现有 /api/v1/runs/{run_id}/stream 继续逐条发送 RunEvent JSON
+verification:
+  commands:
+    - targeted AG-UI adapter and RunEvent query tests
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test pytest tests/integration/resources/test_resource_registry.py -q
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 所有冻结 RunEvent 均产生稳定输出，不静默丢弃事件
+  - 标准事件通过官方 AG-UI 联合类型验证，代表映射由 Golden 快照锁定
+  - Thinking 脱敏内容不会在 Query 到 AG-UI 链路恢复为原文
+  - 102 条真实 PostgreSQL 事件保持 source sequence 1～102，终态唯一且最后为 RUN_FINISHED
+results:
+  - 新增无状态 RunEventAgUiAdapter、AgUiEventBatch、官方序列化入口和应用层公共导出
+  - 定向测试 31 passed；真实 PostgreSQL 协同测试 1 passed
+  - backend-check 429 passed、13 skipped；check-all 后端 441 passed、1 skipped，前端 38 passed
+  - 契约 31 个完整性文件、168 operationId、16 个生成文件零漂移
+follow_up:
+  - AP-E4-006 实现按 RunEvent sequence_no 推进的 Vue 独立 Reducer
+  - AP-E4-007 完成断线恢复、回放和终态冲突 E2E
+  - 可用 Redis 端点后执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成全局唯一登记表与 recorded_at 月分区事件表迁移

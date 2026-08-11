@@ -1,6 +1,6 @@
 # Agent 平台 AI Coding 开发总纲
 
-> 文档版本：V1.9
+> 文档版本：V2.0
 > 文档状态：开发输入基线  
 > 基线清单：[agent-platform-baseline.yaml](./agent-platform-baseline.yaml)
 
@@ -210,7 +210,7 @@ Schema/状态机
 ```yaml
 task_id: AP-E<epic>-NNN
 title: 明确、单一的交付目标
-baseline: agent-platform-v1-dev-baseline-2026-08-r9
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
 baseline_integrity:
   hash_algorithm: sha256
   verified_files: []

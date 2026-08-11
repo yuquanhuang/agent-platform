@@ -9,26 +9,39 @@ from uuid import UUID
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+from packages.application.artifacts import (
+    ARTIFACT_DELETE_REQUESTED_EVENT,
+    ARTIFACT_SCAN_REQUESTED_EVENT,
+)
+from packages.application.metadata import RequestMetadata
 from packages.application.model_gateway import BudgetPermit
+from packages.contracts.generated.core_models import ArtifactUploadCreateRequest
 from packages.contracts.model_gateway import (
     ImmutableReference,
     ModelGatewayRequest,
     ModelUsage,
 )
-from packages.contracts.public import SubjectType, TenantContext
+from packages.contracts.public import PlatformError, SubjectType, TenantContext
 from packages.domain.model_gateway import (
     ModelBinding,
     ModelRoute,
     ModelUsageRecord,
     ProviderError,
 )
+from packages.infrastructure.database.audit_security import audit_change_digest
+from packages.infrastructure.database.models import AuditLogModel
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxStore
-from packages.infrastructure.database.public import create_session_factory
+from packages.infrastructure.database.public import (
+    SqlAlchemyArtifactStore,
+    SqlAlchemyAuditQueryStore,
+    create_session_factory,
+)
+from packages.infrastructure.database.uow import PlatformUnitOfWork, TenantUnitOfWork
 from packages.infrastructure.model_gateway import (
     SqlAlchemyModelBudgetGuard,
     SqlAlchemyModelGatewayStore,
@@ -47,6 +60,14 @@ OUTBOX_A = "55555555-5555-4555-8555-555555555555"
 PROBE_A = "66666666-6666-4666-8666-666666666666"
 MODEL_USAGE_A = "77777777-7777-4777-8777-777777777777"
 HASH = "sha256:" + "a" * 64
+ARTIFACT_A = UUID("88888888-8888-4888-8888-888888888888")
+ARTIFACT_FAILED = UUID("99999999-9999-4999-8999-999999999999")
+AUDIT_A = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1")
+AUDIT_A_OLDER = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2")
+AUDIT_B = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1")
+AUDIT_PLATFORM = UUID("cccccccc-cccc-4ccc-8ccc-ccccccccccc1")
+AUDIT_RUN_A = UUID("dddddddd-dddd-4ddd-8ddd-ddddddddddd1")
+AUDIT_RUN_B = UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1")
 
 
 def require_database_url() -> str:
@@ -91,6 +112,180 @@ async def drop_test_role(database_url: str) -> None:
 def reset_test_database(database_url: str) -> None:
     asyncio.run(drop_test_role(database_url))
     migrate_to_base(database_url)
+
+
+async def verify_audit_controls(
+    app_engine: AsyncEngine, tenant_context: TenantContext
+) -> None:
+    factory = create_session_factory(app_engine)
+    tenant_b_context = tenant_context.model_copy(update={"tenant_id": TENANT_B})
+    older_at = datetime(2026, 8, 8, 10, 0, tzinfo=UTC)
+    newer_at = datetime(2026, 8, 8, 11, 0, tzinfo=UTC)
+
+    async with TenantUnitOfWork(factory, tenant_context) as unit:
+        unit.session.add_all(
+            [
+                AuditLogModel(
+                    id=AUDIT_A_OLDER,
+                    tenant_id=UUID(TENANT_A),
+                    actor_type="service",
+                    actor_id=UUID(USER_A),
+                    action="tool.execute",
+                    resource_type="tool",
+                    resource_id=AUDIT_RUN_A,
+                    result="SUCCESS",
+                    reason_codes=[],
+                    request_id="req-audit-older",
+                    trace_id="trace-audit-older",
+                    metadata_json={
+                        "run_id": str(AUDIT_RUN_A),
+                        "secret_ref": "secret://tenant/a/tool",
+                        "ticket_nonce": "plain-nonce",
+                        "arguments": {"path": "/production"},
+                        "content_hash": HASH,
+                        "tool_schema_hash": HASH,
+                        "token_count": 12,
+                    },
+                    created_at=older_at,
+                ),
+                AuditLogModel(
+                    id=AUDIT_A,
+                    tenant_id=UUID(TENANT_A),
+                    actor_type="service",
+                    actor_id=UUID(USER_A),
+                    action="run.cancel",
+                    resource_type="run",
+                    resource_id=AUDIT_RUN_B,
+                    result="DENIED",
+                    reason_codes=["POLICY_DENIED"],
+                    request_id="req-audit-newer",
+                    trace_id="trace-audit-newer",
+                    metadata_json={"policy_version": "policy-v1"},
+                    created_at=newer_at,
+                ),
+            ]
+        )
+
+    async with TenantUnitOfWork(factory, tenant_b_context) as unit:
+        unit.session.add(
+            AuditLogModel(
+                id=AUDIT_B,
+                tenant_id=UUID(TENANT_B),
+                actor_type="service",
+                actor_id=UUID(USER_A),
+                action="tenant-b-only",
+                resource_type="run",
+                resource_id=AUDIT_RUN_A,
+                result="SUCCESS",
+                reason_codes=[],
+                request_id="req-audit-b",
+                trace_id="trace-audit-b",
+                metadata_json={},
+                created_at=newer_at,
+            )
+        )
+
+    async with PlatformUnitOfWork(factory) as unit:
+        unit.session.add(
+            AuditLogModel(
+                id=AUDIT_PLATFORM,
+                tenant_id=None,
+                actor_type="service",
+                actor_id=UUID(USER_A),
+                action="platform.maintenance",
+                resource_type="platform",
+                resource_id=None,
+                result="SUCCESS",
+                reason_codes=[],
+                request_id="req-audit-platform",
+                trace_id="trace-audit-platform",
+                metadata_json={},
+                created_at=newer_at,
+            )
+        )
+
+    store = SqlAlchemyAuditQueryStore(factory)
+    first_page, next_cursor = await store.list_audit_logs(
+        tenant_context,
+        action=None,
+        resource_type=None,
+        actor_id=None,
+        run_id=None,
+        occurred_from=None,
+        occurred_to=None,
+        limit=1,
+        cursor=None,
+    )
+    assert [record.event_id for record in first_page] == [AUDIT_A]
+    assert next_cursor is not None
+    second_page, terminal_cursor = await store.list_audit_logs(
+        tenant_context,
+        action=None,
+        resource_type=None,
+        actor_id=None,
+        run_id=None,
+        occurred_from=None,
+        occurred_to=None,
+        limit=1,
+        cursor=next_cursor,
+    )
+    assert [record.event_id for record in second_page] == [AUDIT_A_OLDER]
+    assert terminal_cursor is None
+
+    filtered, _ = await store.list_audit_logs(
+        tenant_context,
+        action="tool.execute",
+        resource_type="tool",
+        actor_id=UUID(USER_A),
+        run_id=AUDIT_RUN_A,
+        occurred_from=older_at,
+        occurred_to=older_at,
+        limit=20,
+        cursor=None,
+    )
+    assert [record.event_id for record in filtered] == [AUDIT_A_OLDER]
+
+    async with TenantUnitOfWork(factory, tenant_context, read_only=True) as unit:
+        persisted = (
+            await unit.session.scalars(
+                select(AuditLogModel).where(AuditLogModel.id == AUDIT_A_OLDER)
+            )
+        ).one()
+        assert persisted.run_id == AUDIT_RUN_A
+        assert persisted.metadata_json["secret_ref"] == "[REDACTED]"
+        assert persisted.metadata_json["ticket_nonce"] == "[REDACTED]"
+        assert persisted.metadata_json["arguments"] == "[REDACTED]"
+        assert persisted.metadata_json["content_hash"] == HASH
+        assert persisted.metadata_json["tool_schema_hash"] == HASH
+        assert persisted.metadata_json["token_count"] == 12
+        assert persisted.change_digest == audit_change_digest(persisted.metadata_json)
+
+    async with PlatformUnitOfWork(factory) as unit:
+        visible_ids = set(
+            (
+                await unit.session.scalars(
+                    select(AuditLogModel.id).where(
+                        AuditLogModel.id.in_(
+                            [AUDIT_A, AUDIT_A_OLDER, AUDIT_B, AUDIT_PLATFORM]
+                        )
+                    )
+                )
+            ).all()
+        )
+        assert visible_ids == {AUDIT_A, AUDIT_A_OLDER, AUDIT_B, AUDIT_PLATFORM}
+
+    with pytest.raises(DBAPIError, match="immutable and retained"):
+        async with TenantUnitOfWork(factory, tenant_context) as unit:
+            await unit.session.execute(
+                text("UPDATE audit_log SET action = action WHERE id = :audit_id"),
+                {"audit_id": AUDIT_A},
+            )
+    with pytest.raises(DBAPIError, match="immutable and retained"):
+        async with TenantUnitOfWork(factory, tenant_context) as unit:
+            await unit.session.execute(
+                text("DELETE FROM audit_log WHERE id = :audit_id"),
+                {"audit_id": AUDIT_A},
+            )
 
 
 async def verify_rls(database_url: str) -> None:
@@ -228,6 +423,7 @@ async def verify_rls(database_url: str) -> None:
                 request_id="req-outbox-postgresql",
                 trace_id="trace-outbox-postgresql",
             )
+            await verify_audit_controls(app_engine, tenant_context)
             now = datetime(2026, 8, 7, tzinfo=UTC)
             claimed = await outbox_store.claim_ready(
                 tenant_context,
@@ -245,6 +441,303 @@ async def verify_rls(database_url: str) -> None:
             )
 
             policy_factory = create_session_factory(app_engine)
+            artifact_store = SqlAlchemyArtifactStore(policy_factory)
+            artifact_now = datetime.now(UTC)
+            artifact_request = ArtifactUploadCreateRequest(
+                name="postgresql-result.txt",
+                size=12,
+                content_type="text/plain",
+                content_hash=HASH,
+            )
+            artifact = await artifact_store.create_upload(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                owner_user_id=UUID(USER_A),
+                request=artifact_request,
+                quarantine_object_uri=(
+                    f"quarantine://tenant/{TENANT_A}/artifact/{ARTIFACT_A}/source"
+                ),
+                upload_expires_at=artifact_now + timedelta(minutes=15),
+                expires_at=artifact_now + timedelta(days=30),
+                idempotency_key="postgresql-artifact-create",
+                request_hash="artifact-create-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-create",
+                    trace_id="trace-artifact-create",
+                ),
+            )
+            assert artifact.status == "UPLOADING"
+            replayed_artifact = await artifact_store.create_upload(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                owner_user_id=UUID(USER_A),
+                request=artifact_request,
+                quarantine_object_uri=(
+                    f"quarantine://tenant/{TENANT_A}/artifact/{ARTIFACT_A}/source"
+                ),
+                upload_expires_at=artifact_now + timedelta(minutes=15),
+                expires_at=artifact_now + timedelta(days=30),
+                idempotency_key="postgresql-artifact-create",
+                request_hash="artifact-create-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-create-replay",
+                    trace_id="trace-artifact-create-replay",
+                ),
+            )
+            assert replayed_artifact.id == ARTIFACT_A
+            with pytest.raises(PlatformError) as reused_artifact_key:
+                await artifact_store.create_upload(
+                    tenant_context,
+                    artifact_id=ARTIFACT_A,
+                    owner_user_id=UUID(USER_A),
+                    request=artifact_request,
+                    quarantine_object_uri=(
+                        f"quarantine://tenant/{TENANT_A}/artifact/{ARTIFACT_A}/source"
+                    ),
+                    upload_expires_at=artifact_now + timedelta(minutes=15),
+                    expires_at=artifact_now + timedelta(days=30),
+                    idempotency_key="postgresql-artifact-create",
+                    request_hash="different-artifact-create-hash",
+                    metadata=RequestMetadata(
+                        request_id="req-artifact-create-conflict",
+                        trace_id="trace-artifact-create-conflict",
+                    ),
+                )
+            assert reused_artifact_key.value.code == "IDEMPOTENCY_KEY_REUSED"
+            scanning = await artifact_store.mark_scanning(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                owner_user_id=UUID(USER_A),
+                idempotency_key="postgresql-artifact-complete",
+                request_hash="artifact-complete-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-complete",
+                    trace_id="trace-artifact-complete",
+                ),
+                now=artifact_now,
+            )
+            assert scanning is not None
+            assert scanning.status == "SCANNING"
+            replayed_scanning = await artifact_store.mark_scanning(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                owner_user_id=UUID(USER_A),
+                idempotency_key="postgresql-artifact-complete",
+                request_hash="artifact-complete-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-complete-replay",
+                    trace_id="trace-artifact-complete-replay",
+                ),
+                now=artifact_now,
+            )
+            assert replayed_scanning is not None
+            assert replayed_scanning.status == "SCANNING"
+            scan_now = scanning.updated_at
+            artifact_outbox = SqlAlchemyOutboxStore(
+                policy_factory,
+                event_types=frozenset({ARTIFACT_SCAN_REQUESTED_EVENT}),
+            )
+            scan_events = await artifact_outbox.claim_ready(
+                tenant_context,
+                now=scan_now,
+                limit=10,
+                lease_duration=timedelta(seconds=30),
+            )
+            assert len(scan_events) == 1
+            assert scan_events[0].aggregate_id == ARTIFACT_A
+            available = await artifact_store.complete_scan(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                status="AVAILABLE",
+                object_uri=(f"artifact://tenant/{TENANT_A}/artifact/{ARTIFACT_A}"),
+                scan_result={
+                    "schema_version": "artifact-scan/v1",
+                    "decision": "PASSED",
+                    "scanned_at": scan_now.isoformat(),
+                },
+                now=scan_now,
+            )
+            assert available.status == "AVAILABLE"
+            await artifact_outbox.mark_published(
+                tenant_context, scan_events[0].id, now=scan_now
+            )
+            download_confirmed = await artifact_store.confirm_download(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                owner_user_id=UUID(USER_A),
+                grant_expires_at=scan_now + timedelta(minutes=5),
+                metadata=RequestMetadata(
+                    request_id="req-artifact-download",
+                    trace_id="trace-artifact-download",
+                ),
+                now=scan_now,
+            )
+            assert download_confirmed is True
+
+            expired = await artifact_store.get_downloadable(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                owner_user_id=UUID(USER_A),
+                metadata=RequestMetadata(
+                    request_id="req-artifact-expire",
+                    trace_id="trace-artifact-expire",
+                ),
+                now=artifact_now + timedelta(days=31),
+            )
+            assert expired is not None
+            assert expired.status == "EXPIRED"
+            deletion = await artifact_store.request_delete(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                owner_user_id=UUID(USER_A),
+                idempotency_key="postgresql-artifact-delete",
+                request_hash="artifact-delete-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-delete",
+                    trace_id="trace-artifact-delete",
+                ),
+                now=artifact_now + timedelta(days=31, seconds=1),
+            )
+            assert deletion is not None
+            assert deletion.value is not None
+            assert deletion.value.status == "ACCEPTED"
+            delete_operation_id = deletion.value.id
+            replayed_deletion = await artifact_store.request_delete(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                owner_user_id=UUID(USER_A),
+                idempotency_key="postgresql-artifact-delete",
+                request_hash="artifact-delete-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-delete-replay",
+                    trace_id="trace-artifact-delete-replay",
+                ),
+                now=artifact_now + timedelta(days=31, seconds=2),
+            )
+            assert replayed_deletion is not None
+            assert replayed_deletion.replay is not None
+            delete_outbox = SqlAlchemyOutboxStore(
+                policy_factory,
+                event_types=frozenset({ARTIFACT_DELETE_REQUESTED_EVENT}),
+            )
+            delete_events = await delete_outbox.claim_ready(
+                tenant_context,
+                now=artifact_now + timedelta(days=31, seconds=2),
+                limit=10,
+                lease_duration=timedelta(seconds=30),
+            )
+            assert len(delete_events) == 1
+            cleanup_target = await artifact_store.get_for_delete(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                operation_id=delete_operation_id,
+            )
+            assert cleanup_target is not None
+            assert cleanup_target.status == "DELETING"
+            await artifact_store.complete_delete(
+                tenant_context,
+                artifact_id=ARTIFACT_A,
+                operation_id=delete_operation_id,
+                now=artifact_now + timedelta(days=31, seconds=3),
+            )
+            await delete_outbox.mark_published(
+                tenant_context,
+                delete_events[0].id,
+                now=artifact_now + timedelta(days=31, seconds=3),
+            )
+
+            async with app_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "SELECT set_config"
+                        "('app.current_tenant_id', :tenant_id, true)"
+                    ),
+                    {"tenant_id": TENANT_B},
+                )
+                visible_artifacts = (
+                    await connection.execute(text("SELECT id FROM artifact"))
+                ).scalars()
+                assert list(visible_artifacts) == []
+
+            async with app_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "SELECT set_config"
+                        "('app.current_tenant_id', :tenant_id, true)"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+                lifecycle_state = (
+                    await connection.execute(
+                        text(
+                            "SELECT a.status, a.deleted_at IS NOT NULL, o.status "
+                            "FROM artifact a JOIN operation_record o "
+                            "ON o.tenant_id = a.tenant_id "
+                            "AND o.resource_id = a.id "
+                            "WHERE a.id = :artifact_id AND o.id = :operation_id"
+                        ),
+                        {
+                            "artifact_id": ARTIFACT_A,
+                            "operation_id": delete_operation_id,
+                        },
+                    )
+                ).one()
+                assert tuple(lifecycle_state) == ("DELETED", True, "SUCCEEDED")
+
+            failed_artifact = await artifact_store.create_upload(
+                tenant_context,
+                artifact_id=ARTIFACT_FAILED,
+                owner_user_id=UUID(USER_A),
+                request=artifact_request,
+                quarantine_object_uri=(
+                    f"quarantine://tenant/{TENANT_A}/artifact/"
+                    f"{ARTIFACT_FAILED}/source"
+                ),
+                upload_expires_at=artifact_now + timedelta(minutes=15),
+                expires_at=artifact_now + timedelta(days=30),
+                idempotency_key="postgresql-artifact-failed-create",
+                request_hash="artifact-failed-create-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-failed-create",
+                    trace_id="trace-artifact-failed-create",
+                ),
+            )
+            await artifact_store.fail_upload(
+                tenant_context,
+                artifact_id=failed_artifact.id,
+                owner_user_id=UUID(USER_A),
+                code="ARTIFACT_UPLOAD_MISMATCH",
+                now=artifact_now + timedelta(seconds=1),
+            )
+            failed_deletion = await artifact_store.request_delete(
+                tenant_context,
+                artifact_id=failed_artifact.id,
+                owner_user_id=UUID(USER_A),
+                idempotency_key="postgresql-artifact-failed-delete",
+                request_hash="artifact-failed-delete-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-failed-delete",
+                    trace_id="trace-artifact-failed-delete",
+                ),
+                now=artifact_now + timedelta(seconds=2),
+            )
+            assert failed_deletion is not None
+            assert failed_deletion.value is not None
+            failed_cleanup = await artifact_store.get_for_delete(
+                tenant_context,
+                artifact_id=failed_artifact.id,
+                operation_id=failed_deletion.value.id,
+            )
+            assert failed_cleanup is not None
+            assert failed_cleanup.status == "DELETING"
+            assert failed_cleanup.object_uri is None
+            await artifact_store.complete_delete(
+                tenant_context,
+                artifact_id=failed_artifact.id,
+                operation_id=failed_deletion.value.id,
+                now=artifact_now + timedelta(seconds=3),
+            )
+
             budget_guard = SqlAlchemyModelBudgetGuard(
                 policy_factory,
                 clock=lambda: datetime(2026, 8, 7, 12, 0, 10, tzinfo=UTC),
@@ -426,10 +919,16 @@ async def verify_rls(database_url: str) -> None:
                 "agent_run",
                 "agent_snapshot",
                 "agent_version",
+                "approval_decision",
+                "approval_request",
+                "artifact",
+                "audit_log",
                 "budget_reservation",
                 "chat_message",
                 "chat_session",
                 "deployment",
+                "execution_ticket",
+                "mcp_capability_discovery",
                 "model_binding_snapshot",
                 "model_rate_limit_window",
                 "model_usage",
@@ -445,7 +944,11 @@ async def verify_rls(database_url: str) -> None:
                 "run_event",
                 "run_event_counter",
                 "runtime_bundle",
+                "sandbox_instance",
+                "sandbox_lease",
+                "skill_supply_chain_scan",
                 "tenant_member",
+                "workspace",
             ]
     finally:
         await admin_engine.dispose()

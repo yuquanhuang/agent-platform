@@ -1,0 +1,58 @@
+task_id: AP-E6-003
+title: Policy 有效策略求交集和 Admission Controller
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - SandboxPolicy 在 Agent 图内按最严格资源、网络、文件系统、进程和 Artifact 约束求交
+    - Skill 权限、入口命令、镜像、超时和风险等级与有效 Sandbox/MCP 能力交叉校验
+    - MCP 授权工具、Schema Hash、风险等级和来源版本进入不可变有效策略证据
+    - Bundle permissions v2 内嵌 canonical effective-policy/v1 快照、来源和 SHA-256
+    - Run 创建、重试、RunSpec 准备和 Sandbox Provision 的服务端 Admission 门禁
+    - AgentScope Bundle compiler 1.1.0 兼容门槛，旧 Bundle 失败关闭并要求重新发布
+  excludes:
+    - 新的公共 Policy 管理 API、前端 Policy 管理页面和 R10 契约扩展
+    - ApprovalRequest/Decision、一次性 Execution Ticket 和 Tool Gateway 消费
+    - 尚未冻结的 Tenant/User/Agent 可变 Policy 持久化与管理入口
+    - Epic 7 的并发、配额、预算、队列和存储容量 Admission
+decisions:
+  - 复用冻结 Bundle Manifest 的 permission_policy_hash 和 sandbox_policy_hash，不新增公共字段
+  - 有效策略快照作为内容寻址 Bundle 文件持久化，不建立可变的平行 Policy 快照表
+  - LOW/MEDIUM 允许，HIGH 计算为 REQUIRE_APPROVAL 但在 AP-E6-004 完成前发布失败关闭
+  - CRITICAL 默认拒绝；Skill/MCP 声明风险只能提高，不能降低平台识别结果
+  - 多 Agent 不再要求 SandboxPolicy 字节一致，但必须存在唯一安全交集和单一有效策略文件
+compatibility:
+  - R10 OpenAPI、JSON Schema、生成 Client 和数据库 Schema 均不变
+  - Bundle 内部 permissions 文件从 bundle-permission-policy/v1 提升到 v2
+  - AgentScopeBundleCompiler 从 1.0.0 提升到 1.1.0；既有 Deployment 需重新发布 Bundle 后才能创建新 Run
+  - 未新增 Python 或 Node 依赖，锁文件无本阶段变更
+verification:
+  commands:
+    - targeted Policy/Bundle/Run/Sandbox/Temporal tests
+    - PostgreSQL resource registry and Sandbox lifecycle integration test
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 策略求交与输入顺序无关，资源和权限只能收窄，冲突返回稳定原因码
+  - Skill 不能扩张网络、文件系统、工具、可执行文件或镜像边界
+  - MCP 同名工具的不可变来源或 Schema 冲突失败关闭
+  - HIGH/CRITICAL 不会在 Approval 尚未实现时进入可执行 Bundle
+  - Run、Retry、RunSpec 和 Sandbox 均不能使用旧编译器或缺失安全 Hash 的 Bundle
+  - 前端和 Runtime 不能绕过服务端 Admission
+results:
+  - 定向 Policy/Bundle/Run/Sandbox/Temporal 测试 80 passed
+  - 真实 PostgreSQL Resource Registry 与 Sandbox 生命周期测试 1 passed
+  - make backend-check 为 607 passed、13 skipped
+  - 真实 PostgreSQL/Temporal make check-all 为后端 619 passed、1 skipped，前端 76 passed
+  - 契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+  - Black、Ruff、Pyright、Prettier、ESLint、Vue TypeScript 和生产构建通过
+follow_up:
+  - AP-E6-004 已完成 ApprovalRequest/Decision 控制面；HIGH Bundle 解锁推迟到 AP-E6-005 与一次性 Ticket、Tool Gateway 同步完成
+  - 冻结 Tenant/User/Agent Policy 管理契约后，将其作为更高优先级限制源注入同一求交器
+  - AP-E6-005 在 Tool Gateway 逐次重校验策略版本、工具 Schema、参数摘要和一次性 Ticket
+  - AP-E7-003 接入并发、配额、预算、队列、Sandbox 和存储容量 Admission
+  - 继续保留真实 Redis、RunEvent 月分区、Registry digest、AJV codegen 和孤儿对账待办

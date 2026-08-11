@@ -1,6 +1,6 @@
 # Agent 平台开发文档索引
 
-> 文档版本：V2.0
+> 文档版本：V2.1
 > 文档状态：开发输入基线
 
 ## 1. 文档集合与阅读顺序
@@ -208,3 +208,11 @@ Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 - 新增长时间 CREATED/CANCELLING 的幂等对账边界：缺失 Workflow 时恢复原启动意图，存在时补映射或重发取消 Signal；禁止对账直接伪造 CANCELLED。
 - 新增 `cancelling_at` 和对账索引；公共 OpenAPI、Run DTO、RunSpec、RunEvent、Message 不可变语义及前端生成代码均未改变。
 - 同步提升数据库、领域、架构、Temporal、AI Coding、执行计划、测试和索引文档版本，并重新冻结 SHA-256。
+
+### Frozen Baseline 2026-08-R10
+
+- Sandbox Start Process、Cancel Process 和 Release 请求冻结携带 Run、Attempt、execution fencing token 与 Trace 证明；旧 Attempt、过期 Lease 和旧 token 失败关闭。
+- Terminate/Destroy 保留为独立管理与对账强制操作，使用 Workload Identity、强制清理权限和审计，不以 Lease token 代替管理授权。
+- 冻结 canonical Workspace URI、结构化身份隔离、文件描述符级路径打开、软/硬链接与 TOCTOU 防护、Run 配额及七天保留生命周期。
+- 新增 Workspace 持久化、RLS、不可变配额和状态机；Artifact 上传、扫描、下载与删除仍由 AP-E5-004/005 独立实现。
+- 同步提升 Sandbox、AI Coding、执行计划、测试、追踪矩阵和索引文档版本，并重新冻结 SHA-256。

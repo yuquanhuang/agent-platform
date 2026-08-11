@@ -1,0 +1,51 @@
+task_id: AP-E6-006
+title: Audit 写入、查询、保留和敏感字段脱敏
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - 冻结 GET /api/v1/audit-logs 的 Tenant 权限、过滤和稳定游标分页
+    - 统一 AuditLog ORM 写入前的敏感字段脱敏、大小边界和 digest 重算
+    - AuditLog run_id 查询列、索引、RLS、平台事务上下文和不可变保留 Trigger
+    - tenant_admin audit:list 权限回填和 Vue/Element Plus 审计查询页面
+  excludes:
+    - 未冻结的 Audit metadata、reason_codes、digest、source_ip 或 client 公共响应扩展
+    - 未确认合规期限前的物理删除、归档、冷存储或分区淘汰
+    - AP-E6-007 的 AgentScope Runtime Bridge 和高风险工具纵向 E2E
+decisions:
+  - 保持 R10 AuditRecord/AuditPage 公共响应不变，不向浏览器返回内部 metadata 或敏感事实
+  - 使用统一 ORM before_insert 防线保护现有 Audit 生产者，避免逐个调用方遗漏脱敏
+  - Tenant 查询显式限定 tenant_id，平台级 tenant_id 为空的事实不向租户泄漏
+  - AuditLog 禁止 UPDATE/DELETE；当前默认无限期保留，待合规策略冻结后另行增加归档和淘汰
+  - PlatformUnitOfWork 使用事务级 app.platform_context，仅作为显式平台持久化边界
+compatibility:
+  - 新增 Alembic 0029_audit_query_retention 和内部 run_id 列；冻结 OpenAPI、生成 Client 和响应字段无变化
+  - resource_id 数据库为空时继续映射为空字符串，兼容冻结 AuditRecord 必填 string
+  - 未新增 Python 或 Node 依赖，锁文件无本阶段新增项
+verification:
+  commands:
+    - targeted Audit service、API、ORM、migration 和 Vue tests
+    - PostgreSQL Audit RLS、过滤、游标、脱敏、run_id、Platform UoW 和不可变 Trigger integration test
+    - make backend-check
+    - make frontend-check
+    - make contract-check
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - audit:list 在服务端强制校验，Tenant 只能查询自己的 Audit，平台 Audit 不泄漏
+  - action、resource_type、actor_id、run_id 和时间范围过滤与稳定游标分页可用
+  - Secret、Token、nonce、Prompt、完整参数、原始内容和 URL 在写入前统一脱敏
+  - Audit UPDATE/DELETE 被数据库拒绝，Platform 显式事务仍可读写平台级事实
+  - 前端具备 loading、empty、error、过滤、刷新和服务端分页状态
+results:
+  - 定向后端测试 46 passed；前端完整测试 26 个文件、85 passed
+  - 真实 PostgreSQL Audit/RLS 集成测试 1 passed
+  - make backend-check 为 646 passed、14 skipped；make frontend-check 和 make contract-check 通过
+  - 真实 PostgreSQL/Temporal make check-all 为后端 659 passed、1 skipped；唯一 skip 为未配置真实 Redis
+follow_up:
+  - AP-E6-007 实现生产 AgentScope 暂停、审批、Ticket 取回、外部执行恢复和高风险工具 E2E
+  - 冻结合规保留期限、归档介质、月分区和合法淘汰流程后再扩展 Audit 运维能力
+  - 可信代理和来源身份契约明确后补 source_ip/client，当前不得从不可信 Header 直接入库
+  - 继续保留真实 Redis、RunEvent 全局登记表加月分区、Registry digest、AJV codegen 和孤儿对账待办

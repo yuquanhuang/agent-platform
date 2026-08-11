@@ -43,6 +43,12 @@ const { sidebarCollapsed } = storeToRefs(appShellStore);
         <ElMenuItem index="/sessions">
           <span>Session 管理</span>
         </ElMenuItem>
+        <ElMenuItem index="/approvals">
+          <span>审批中心</span>
+        </ElMenuItem>
+        <ElMenuItem index="/admin/audit">
+          <span>审计日志</span>
+        </ElMenuItem>
       </ElMenu>
     </ElAside>
 

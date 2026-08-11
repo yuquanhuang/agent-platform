@@ -21,7 +21,10 @@ def index_names(table_name: str) -> set[str]:
 def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
     assert {
         "app_user",
+        "approval_decision",
+        "approval_request",
         "agent_binding",
+        "artifact",
         "agent_definition",
         "agent_snapshot",
         "agent_run",
@@ -29,6 +32,7 @@ def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
         "audit_log",
         "budget_reservation",
         "idempotency_record",
+        "mcp_capability_discovery",
         "model_binding_snapshot",
         "model_rate_limit_window",
         "operation_record",
@@ -40,7 +44,12 @@ def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
         "run_attempt",
         "run_event",
         "run_event_counter",
+        "sandbox_instance",
+        "sandbox_lease",
+        "skill_supply_chain_scan",
+        "workspace",
         "deployment",
+        "execution_ticket",
         "chat_message",
         "chat_session",
         "role",
@@ -65,6 +74,9 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         "model_binding_snapshot": (
             "ix_model_binding_snapshot__tenant_model_config_definition"
         ),
+        "mcp_capability_discovery": (
+            "ix_mcp_capability_discovery__tenant_definition_discovered_at"
+        ),
         "budget_reservation": ("ix_budget_reservation__tenant_run_status_expires"),
         "model_rate_limit_window": ("ix_model_rate_limit_window__window_started_at"),
         "agent_definition": "uq_agent_definition__tenant_id_id",
@@ -80,6 +92,16 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         "run_attempt": "uq_run_attempt__tenant_id_id",
         "run_event": "ix_run_event__tenant_run_sequence",
         "run_event_counter": "ix_run_event_counter__tenant_run",
+        "sandbox_instance": "uq_sandbox_instance__tenant_id_id",
+        "sandbox_lease": "uq_sandbox_lease__tenant_id_id",
+        "workspace": "uq_workspace__tenant_id_id",
+        "artifact": "ix_artifact__tenant_owner_created_at",
+        "approval_request": "ix_approval_request__tenant_status_expires_at",
+        "approval_decision": "uq_approval_decision__tenant_id_id",
+        "execution_ticket": "ix_execution_ticket__tenant_run_expires_at",
+        "skill_supply_chain_scan": (
+            "ix_skill_supply_chain_scan__tenant_definition_scanned_at"
+        ),
     }
 
     for table_name, expected_index in expected_tenant_indexes.items():
@@ -88,6 +110,36 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         assert expected_index in index_names(table_name) | constraint_names(
             table_name, UniqueConstraint
         )
+
+
+def test_execution_ticket_freezes_bindings_and_single_use_state() -> None:
+    table = Base.metadata.tables["execution_ticket"]
+
+    assert {
+        "tenant_id",
+        "approval_id",
+        "run_id",
+        "execution_attempt",
+        "requester_id",
+        "tool_name",
+        "tool_schema_hash",
+        "parameter_digest",
+        "policy_version",
+        "deployment_id",
+        "nonce_hash",
+        "expires_at",
+        "single_use",
+        "consumed_at",
+    } <= set(table.c.keys())
+    assert "uq_execution_ticket__approval_id" in constraint_names(
+        "execution_ticket", UniqueConstraint
+    )
+    assert {
+        "fk_execution_ticket__tenant_approval__approval_request",
+        "fk_execution_ticket__tenant_run__agent_run",
+        "fk_execution_ticket__tenant_requester__tenant_member",
+        "fk_execution_ticket__tenant_deployment__deployment",
+    } <= constraint_names("execution_ticket", ForeignKeyConstraint)
 
 
 def test_model_usage_metadata_has_normalized_usage_fields_and_indexes() -> None:
@@ -170,6 +222,67 @@ def test_model_gateway_admission_metadata_is_tenant_scoped() -> None:
     assert window.c.request_count.nullable is False
 
 
+def test_skill_scan_metadata_is_immutable_and_version_bindable() -> None:
+    table = Base.metadata.tables["skill_supply_chain_scan"]
+
+    assert {
+        "tenant_id",
+        "definition_id",
+        "draft_resource_version",
+        "content_hash",
+        "scanner_name",
+        "scanner_version",
+        "policy_version",
+        "status",
+        "findings_json",
+        "report_hash",
+        "sbom_json",
+        "sbom_hash",
+        "signature_status",
+        "provenance_status",
+        "scanned_by",
+        "published_version_id",
+    } <= set(table.c.keys())
+    assert {
+        "fk_skill_supply_chain_scan__tenant_definition",
+        "fk_skill_supply_chain_scan__tenant_published_version",
+    } <= constraint_names("skill_supply_chain_scan", ForeignKeyConstraint)
+    assert "uq_skill_supply_chain_scan__published_version_id" in constraint_names(
+        "skill_supply_chain_scan", UniqueConstraint
+    )
+
+
+def test_mcp_discovery_metadata_is_immutable_and_version_bindable() -> None:
+    table = Base.metadata.tables["mcp_capability_discovery"]
+
+    assert {
+        "tenant_id",
+        "definition_id",
+        "operation_id",
+        "draft_resource_version",
+        "content_hash",
+        "status",
+        "protocol_version",
+        "server_name",
+        "server_version",
+        "tools_json",
+        "capability_hash",
+        "findings_json",
+        "discovered_by",
+        "source_discovery_id",
+        "published_version_id",
+    } <= set(table.c.keys())
+    assert {
+        "fk_mcp_capability_discovery__tenant_definition",
+        "fk_mcp_capability_discovery__tenant_published_version",
+        "fk_mcp_capability_discovery__tenant_source",
+    } <= constraint_names("mcp_capability_discovery", ForeignKeyConstraint)
+    assert {
+        "uq_mcp_capability_discovery__operation_id",
+        "uq_mcp_capability_discovery__published_version_id",
+    } <= constraint_names("mcp_capability_discovery", UniqueConstraint)
+
+
 def test_agent_draft_metadata_has_cas_bindings_and_route_uniqueness() -> None:
     definition = Base.metadata.tables["agent_definition"]
     binding = Base.metadata.tables["agent_binding"]
@@ -236,6 +349,38 @@ def test_chat_session_metadata_pins_user_agent_and_deployment() -> None:
         "ix_chat_session__tenant_user_updated_at",
         "ix_chat_session__tenant_agent_created_at",
     } <= index_names("chat_session")
+
+
+def test_artifact_metadata_separates_quarantine_from_trusted_storage() -> None:
+    table = Base.metadata.tables["artifact"]
+
+    assert {
+        "tenant_id",
+        "workspace_id",
+        "run_id",
+        "owner_user_id",
+        "quarantine_object_uri",
+        "object_uri",
+        "content_hash",
+        "size_bytes",
+        "content_type",
+        "status",
+        "scan_result_json",
+        "upload_expires_at",
+        "expires_at",
+    } <= set(table.c.keys())
+    assert {
+        "fk_artifact__tenant_owner__tenant_member",
+        "fk_artifact__tenant_workspace_run_owner__workspace",
+    } <= constraint_names("artifact", ForeignKeyConstraint)
+    assert {
+        "ck_artifact__trusted_object_status",
+        "ck_artifact__scan_result_status",
+        "ck_artifact__workspace_run_binding",
+    } <= constraint_names("artifact", CheckConstraint)
+    scan_result_type = table.c.scan_result_json.type
+    assert isinstance(scan_result_type, JSON)
+    assert scan_result_type.none_as_null is True
 
 
 def test_chat_message_metadata_enforces_parent_chain_and_branch_order() -> None:
@@ -372,6 +517,91 @@ def test_run_event_metadata_enforces_identity_payload_and_replay_indexes() -> No
     assert "ck_run_event_counter__next_sequence_no" in constraint_names(
         "run_event_counter", CheckConstraint
     )
+
+
+def test_sandbox_metadata_pins_immutable_policy_bundle_and_fenced_lease() -> None:
+    instance = Base.metadata.tables["sandbox_instance"]
+    lease = Base.metadata.tables["sandbox_lease"]
+
+    assert {
+        "tenant_id",
+        "user_id",
+        "session_id",
+        "run_id",
+        "execution_attempt",
+        "scope",
+        "image_digest",
+        "policy_ref",
+        "policy_hash",
+        "policy_schema_version",
+        "policy_json",
+        "bundle_ref",
+        "bundle_hash",
+        "workspace_uri",
+        "runtime_target_id",
+        "status",
+        "provider_ref",
+        "lease_expires_at",
+        "provision_operation_id",
+        "terminated_at",
+        "failure_code",
+    } <= set(instance.c.keys())
+    assert {
+        "tenant_id",
+        "sandbox_id",
+        "holder_run_id",
+        "execution_attempt",
+        "fencing_token_hash",
+        "acquired_at",
+        "expires_at",
+        "released_at",
+    } <= set(lease.c.keys())
+    assert {
+        "fk_sandbox_instance__tenant_run_session__agent_run",
+        "fk_sandbox_instance__tenant_user__tenant_member",
+        "fk_sandbox_instance__tenant_workspace__workspace",
+    } <= constraint_names("sandbox_instance", ForeignKeyConstraint)
+    assert {
+        "fk_sandbox_lease__tenant_sandbox__sandbox_instance",
+        "fk_sandbox_lease__tenant_run__agent_run",
+    } <= constraint_names("sandbox_lease", ForeignKeyConstraint)
+    assert "uq_sandbox_instance__tenant_run_attempt_policy" in constraint_names(
+        "sandbox_instance", UniqueConstraint
+    )
+    assert "uq_sandbox_lease__sandbox_active" in index_names("sandbox_lease")
+
+
+def test_workspace_metadata_pins_identity_retention_and_capacity() -> None:
+    workspace = Base.metadata.tables["workspace"]
+
+    assert {
+        "tenant_id",
+        "user_id",
+        "session_id",
+        "run_id",
+        "uri",
+        "quota_bytes",
+        "used_bytes",
+        "max_files",
+        "file_count",
+        "max_file_bytes",
+        "status",
+        "created_at",
+        "updated_at",
+        "expires_at",
+    } <= set(workspace.c.keys())
+    assert {
+        "fk_workspace__tenant_run_session__agent_run",
+        "fk_workspace__tenant_user__tenant_member",
+    } <= constraint_names("workspace", ForeignKeyConstraint)
+    assert {
+        "uq_workspace__tenant_uri",
+        "uq_workspace__tenant_run",
+    } <= constraint_names("workspace", UniqueConstraint)
+    assert {
+        "ix_workspace__tenant_status_expires_at",
+        "ix_workspace__tenant_session_created_at",
+    } <= index_names("workspace")
 
 
 def test_agent_snapshot_metadata_is_versioned_and_immutable_by_shape() -> None:
@@ -561,6 +791,8 @@ def test_audit_log_has_no_updateable_resource_version() -> None:
         "ix_audit_log__actor_type_actor_id",
         "ix_audit_log__resource_type_resource_id",
         "ix_audit_log__action",
+        "ix_audit_log__tenant_created_id",
+        "ix_audit_log__tenant_run_created_id",
     } <= index_names("audit_log")
 
 

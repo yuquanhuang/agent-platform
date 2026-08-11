@@ -36,10 +36,21 @@ def test_offline_upgrade_contains_foundation_tables_and_extensions() -> None:
         "audit_log",
         "agent_definition",
         "agent_binding",
+        "artifact",
+        "approval_request",
+        "approval_decision",
+        "execution_ticket",
         "agent_run",
         "run_attempt",
         "run_event",
         "run_event_counter",
+        "sandbox_instance",
+        "sandbox_lease",
+        "skill_supply_chain_scan",
+        "mcp_capability_discovery",
+        "approval_request",
+        "approval_decision",
+        "workspace",
         "agent_version",
         "agent_snapshot",
         "budget_reservation",
@@ -98,13 +109,120 @@ def test_offline_upgrade_enables_and_forces_rls_with_write_checks() -> None:
         "chat_session",
         "run_event",
         "run_event_counter",
+        "sandbox_instance",
+        "sandbox_lease",
+        "workspace",
+        "artifact",
+        "audit_log",
+        "skill_supply_chain_scan",
+        "mcp_capability_discovery",
+        "execution_ticket",
     ):
         assert f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY" in sql
         assert f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY" in sql
         assert f"CREATE POLICY tenant_isolation ON {table_name}" in sql
 
-    assert sql.count("WITH CHECK") == 25
-    assert sql.count("current_setting('app.current_tenant_id', true)") == 50
+    assert sql.count("WITH CHECK") == 35
+    assert sql.count("current_setting('app.current_tenant_id', true)") == 70
+
+
+def test_offline_upgrade_contains_approval_state_guards_and_permissions() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE approval_request" in sql
+    assert "CREATE TABLE approval_decision" in sql
+    assert "uq_approval_request__tenant_run_attempt_tool_call" in sql
+    assert "uq_approval_decision__approval_id" in sql
+    assert "trg_approval_request__guard" in sql
+    assert "CREATE TABLE execution_ticket" in sql
+    assert "uq_execution_ticket__approval_id" in sql
+    assert "trg_execution_ticket__guard" in sql
+    assert "trg_approval_decision__guard" in sql
+    for action in ("read", "list", "approve"):
+        assert f"SELECT tenant_id, id, 'approval', '{action}' FROM role" in sql
+
+
+def test_offline_upgrade_contains_audit_query_retention_and_permissions() -> None:
+    sql = render_upgrade_sql()
+
+    assert "0029_audit_query_retention" in sql
+    assert "ALTER TABLE audit_log ADD COLUMN run_id UUID" in sql
+    assert "ix_audit_log__tenant_created_id" in sql
+    assert "ix_audit_log__tenant_run_created_id" in sql
+    assert "ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY" in sql
+    assert "ALTER TABLE audit_log FORCE ROW LEVEL SECURITY" in sql
+    assert "CREATE POLICY tenant_isolation ON audit_log" in sql
+    assert "current_setting('app.platform_context', true) = 'true'" in sql
+    assert "trg_audit_log__guard" in sql
+    assert "audit log facts are immutable and retained" in sql
+    assert "SELECT tenant_id, id, 'audit', 'list' FROM role" in sql
+
+
+def test_offline_upgrade_contains_artifact_quarantine_and_scan_guards() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE artifact" in sql
+    assert "fk_artifact__tenant_owner__tenant_member" in sql
+    assert "fk_artifact__tenant_workspace_run_owner__workspace" in sql
+    assert "ck_artifact__trusted_object_status" in sql
+    assert "ck_artifact__scan_result_status" in sql
+    assert "trg_artifact__guard" in sql
+    assert "artifact.scan_requested.v1" not in sql
+    assert "SELECT tenant_id, id, 'artifact', 'create' FROM role" in sql
+    assert "SELECT tenant_id, id, 'artifact', 'read' FROM role" in sql
+
+
+def test_offline_upgrade_contains_artifact_download_and_delete_lifecycle() -> None:
+    sql = render_upgrade_sql()
+
+    assert "0024_artifact_download_delete" in sql
+    assert "status IN ('DELETING','DELETED')" in sql
+    assert "SELECT tenant_id, id, 'artifact', 'download' FROM role" in sql
+    assert "SELECT tenant_id, id, 'artifact', 'delete' FROM role" in sql
+
+
+def test_offline_upgrade_contains_skill_scan_evidence_and_permissions() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE skill_supply_chain_scan" in sql
+    assert "fk_skill_supply_chain_scan__tenant_definition" in sql
+    assert "fk_skill_supply_chain_scan__tenant_published_version" in sql
+    assert "trg_skill_supply_chain_scan__guard" in sql
+    assert "ck_skill_supply_chain_scan__published_version_status" in sql
+    for action in (
+        "create",
+        "read",
+        "list",
+        "update",
+        "delete",
+        "publish",
+        "rollback",
+        "disable",
+    ):
+        assert f"SELECT tenant_id, id, 'skill', '{action}' FROM role" in sql
+
+
+def test_offline_upgrade_contains_mcp_discovery_evidence_and_permissions() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE mcp_capability_discovery" in sql
+    assert "fk_mcp_capability_discovery__tenant_definition" in sql
+    assert "fk_mcp_capability_discovery__tenant_published_version" in sql
+    assert "fk_mcp_capability_discovery__tenant_source" in sql
+    assert "trg_mcp_capability_discovery__guard" in sql
+    assert "ck_mcp_capability_discovery__published_version_status" in sql
+    for action in (
+        "create",
+        "read",
+        "list",
+        "update",
+        "delete",
+        "publish",
+        "rollback",
+        "disable",
+        "execute",
+    ):
+        assert f"SELECT tenant_id, id, 'mcp', '{action}' FROM role" in sql
 
 
 def test_offline_upgrade_contains_idempotency_and_operation_constraints() -> None:
@@ -281,3 +399,31 @@ def test_offline_upgrade_contains_immutable_run_event_store() -> None:
     assert "ix_run_event__tenant_type_recorded_at" in sql
     assert "trg_run_event__immutable" in sql
     assert "reject_run_event_mutation" in sql
+
+
+def test_offline_upgrade_contains_fenced_sandbox_lifecycle() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE sandbox_instance" in sql
+    assert "CREATE TABLE sandbox_lease" in sql
+    assert "uq_sandbox_instance__tenant_run_attempt_policy" in sql
+    assert "uq_sandbox_lease__sandbox_active" in sql
+    assert "fk_sandbox_instance__tenant_run_session__agent_run" in sql
+    assert "fk_sandbox_lease__tenant_sandbox__sandbox_instance" in sql
+    assert "trg_sandbox_instance__guard" in sql
+    assert "trg_sandbox_lease__guard" in sql
+    assert "sandbox_instance lifecycle transition is not allowed" in sql
+    assert "sandbox_lease immutable fields cannot change" in sql
+
+
+def test_offline_upgrade_contains_workspace_identity_quota_and_guards() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE workspace" in sql
+    assert "uq_workspace__tenant_uri" in sql
+    assert "uq_workspace__tenant_run" in sql
+    assert "fk_workspace__tenant_run_session__agent_run" in sql
+    assert "fk_sandbox_instance__tenant_workspace__workspace" in sql
+    assert "INSERT INTO workspace" in sql
+    assert "trg_workspace__guard" in sql
+    assert "workspace immutable identity or quota cannot change" in sql

@@ -2,6 +2,7 @@ import type {
   OperationAccepted,
   Session,
   MessagePage,
+  RunPage,
   SessionCreateRequest,
   SessionPage,
   SessionUpdateRequest,
@@ -31,6 +32,10 @@ export const sessionService = {
     input: { limit?: number; cursor?: string; branchId?: string } = {},
   ): Promise<MessagePage> {
     return coreApiClient.listSessionMessages({ sessionId, ...input });
+  },
+
+  listRuns(sessionId: string, input: { limit?: number; cursor?: string } = {}): Promise<RunPage> {
+    return coreApiClient.listSessionRuns({ sessionId, ...input });
   },
 
   create(body: SessionCreateRequest): Promise<Session> {

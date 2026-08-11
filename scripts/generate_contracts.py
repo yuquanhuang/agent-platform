@@ -1377,6 +1377,13 @@ def render_run_event_models() -> tuple[str, str]:
     )
 
 
+def render_run_event_schema() -> str:
+    """Expose the frozen schema to browser runtime validation deterministically."""
+
+    document = load_json(CONTRACT_ROOT / "schemas" / "run-event-v1.schema.json")
+    return json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+
+
 def run_event_variants(document: Mapping[str, Any]) -> list[tuple[str, str, str]]:
     root_all_of = document.get("allOf")
     if not isinstance(root_all_of, list) or len(root_all_of) < 2:
@@ -1659,6 +1666,7 @@ def render_openapi_outputs(
 def render_outputs() -> dict[Path, str]:
     supporting_python, supporting_typescript = render_supporting_models()
     run_event_python, run_event_typescript = render_run_event_models()
+    run_event_schema = render_run_event_schema()
     core_python, core_client_python, core_ts, core_client_ts = render_openapi_outputs(
         "agent-platform-openapi-v1.yaml",
         "core_models",
@@ -1699,6 +1707,7 @@ export * from './transport';
         FRONTEND_GENERATED / "transport.ts": render_typescript_transport(),
         FRONTEND_GENERATED / "resource-content.ts": supporting_typescript,
         FRONTEND_GENERATED / "run-event.ts": run_event_typescript,
+        FRONTEND_GENERATED / "run-event.schema.json": run_event_schema,
         FRONTEND_GENERATED / "core-models.ts": core_ts,
         FRONTEND_GENERATED / "core-client.ts": core_client_ts,
         FRONTEND_GENERATED / "resources-models.ts": resources_ts,
@@ -1713,9 +1722,13 @@ def expected_generated_files(outputs: Mapping[Path, str]) -> set[Path]:
 
 def actual_generated_files() -> set[Path]:
     files: set[Path] = set()
-    for root, suffix in ((BACKEND_GENERATED, ".py"), (FRONTEND_GENERATED, ".ts")):
+    for root, suffixes in (
+        (BACKEND_GENERATED, (".py",)),
+        (FRONTEND_GENERATED, (".ts", ".json")),
+    ):
         if root.is_dir():
-            files.update(path.resolve() for path in root.glob(f"*{suffix}"))
+            for suffix in suffixes:
+                files.update(path.resolve() for path in root.glob(f"*{suffix}"))
     return files
 
 

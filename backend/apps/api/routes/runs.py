@@ -3,10 +3,13 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Request, status
+from starlette.responses import Response, StreamingResponse
 
+from apps.api.sse import BoundedSseResponse
 from packages.application.public import (
     RequestMetadata,
     RunEventQueryService,
+    RunEventStreamService,
     RunManagementService,
 )
 from packages.contracts.generated.core_models import (
@@ -22,6 +25,7 @@ from packages.contracts.public import (
     AuthenticatedPrincipal,
     IdentityProvider,
     dependency_unavailable,
+    validation_error,
 )
 
 
@@ -29,6 +33,8 @@ def create_run_router(
     identity_provider: IdentityProvider | None,
     service: RunManagementService | None,
     event_query_service: RunEventQueryService | None = None,
+    event_stream_service: RunEventStreamService | None = None,
+    sse_send_timeout_seconds: float = 15.0,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
 
@@ -52,6 +58,13 @@ def create_run_router(
         if identity_provider is None or event_query_service is None:
             raise dependency_unavailable("Run event query service is not configured.")
         return identity_provider.authenticate(authorization), event_query_service
+
+    def authenticate_event_stream(
+        authorization: str | None,
+    ) -> tuple[AuthenticatedPrincipal, RunEventStreamService]:
+        if identity_provider is None or event_stream_service is None:
+            raise dependency_unavailable("Run event stream service is not configured.")
+        return identity_provider.authenticate(authorization), event_stream_service
 
     @router.get(
         "/sessions/{session_id}/runs",
@@ -136,6 +149,40 @@ def create_run_router(
             metadata=metadata(request),
         )
 
+    @router.get(
+        "/runs/{run_id}/events/stream",
+        include_in_schema=False,
+    )
+    @router.get(
+        "/runs/{run_id}/stream",
+        tags=["Runs"],
+        operation_id="streamRunEvents",
+        response_class=StreamingResponse,
+    )
+    async def stream_run_events(  # pyright: ignore[reportUnusedFunction]
+        run_id: str,
+        request: Request,
+        authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+        last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+        after: Annotated[int | None, Query(ge=0)] = None,
+    ) -> Response:
+        principal, configured_service = authenticate_event_stream(authorization)
+        event_stream = await configured_service.open_stream(
+            principal,
+            run_id=run_id,
+            after=_stream_after(last_event_id, after),
+            metadata=metadata(request),
+        )
+        return BoundedSseResponse(
+            event_stream,
+            send_timeout_seconds=sse_send_timeout_seconds,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @router.post(
         "/runs/{run_id}/cancel",
         tags=["Runs"],
@@ -187,3 +234,17 @@ def create_run_router(
         )
 
     return router
+
+
+def _stream_after(last_event_id: str | None, after: int | None) -> int:
+    if last_event_id is None:
+        return after or 0
+    try:
+        parsed = int(last_event_id)
+    except ValueError as error:
+        raise validation_error(
+            "Last-Event-ID must be a non-negative integer."
+        ) from error
+    if parsed < 0 or str(parsed) != last_event_id:
+        raise validation_error("Last-Event-ID must be a non-negative integer.")
+    return parsed

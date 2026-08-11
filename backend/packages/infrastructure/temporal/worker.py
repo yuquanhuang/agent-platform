@@ -67,12 +67,14 @@ def run_orchestrator_worker_definition(
         activities=(
             platform_probe_activity,
             run_activities.prepare_agent_run,
+            run_activities.provision_run_sandbox,
             run_activities.execute_agent_run,
             run_activities.inspect_agent_runtime,
             run_activities.cancel_agent_runtime,
             run_activities.recover_agent_run,
             run_activities.finalize_agent_run,
             run_activities.finalize_agent_run_cancellation,
+            run_activities.release_run_sandbox,
         ),
     )
 

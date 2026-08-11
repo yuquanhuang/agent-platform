@@ -7,6 +7,7 @@ import { sessionService } from '@/services/sessions';
 vi.mock('@/services/api', () => ({
   coreApiClient: {
     listSessionMessages: vi.fn(),
+    listSessionRuns: vi.fn(),
     updateSession: vi.fn(),
     archiveSession: vi.fn(),
     deleteSession: vi.fn(),
@@ -66,6 +67,22 @@ describe('sessionService', () => {
       limit: 25,
       cursor: 'cursor-1',
       branchId: 'branch-1',
+    });
+  });
+
+  it('uses the frozen Session Run listing endpoint for navigation history', async () => {
+    vi.mocked(coreApiClient.listSessionRuns).mockResolvedValue({
+      items: [],
+      next_cursor: null,
+      has_more: false,
+    });
+
+    await sessionService.listRuns(session.id, { limit: 10, cursor: 'run-cursor' });
+
+    expect(coreApiClient.listSessionRuns).toHaveBeenCalledWith({
+      sessionId: session.id,
+      limit: 10,
+      cursor: 'run-cursor',
     });
   });
 

@@ -18,12 +18,18 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from packages.infrastructure.database.audit_security import (
+    audit_change_digest,
+    infer_audit_run_id,
+    sanitize_audit_metadata,
+)
 from packages.infrastructure.database.base import Base
 
 UUID_TYPE = PostgreSQLUUID(as_uuid=True)
@@ -286,6 +292,19 @@ class AuditLogModel(Base):
         CheckConstraint("result IN ('SUCCESS', 'DENIED', 'FAILED')", name="result"),
         CheckConstraint("metadata_schema_version >= 1", name="metadata_schema_version"),
         Index("ix_audit_log__tenant_id_created_at", "tenant_id", "created_at"),
+        Index(
+            "ix_audit_log__tenant_created_id",
+            "tenant_id",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_audit_log__tenant_run_created_id",
+            "tenant_id",
+            "run_id",
+            "created_at",
+            "id",
+        ),
         Index("ix_audit_log__actor_type_actor_id", "actor_type", "actor_id"),
         Index(
             "ix_audit_log__resource_type_resource_id",
@@ -308,6 +327,7 @@ class AuditLogModel(Base):
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
     resource_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    run_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
     result: Mapped[str] = mapped_column(String(20), nullable=False)
     reason_codes: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
@@ -324,6 +344,21 @@ class AuditLogModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+
+
+@event.listens_for(AuditLogModel, "before_insert")
+def _protect_audit_log_before_insert(  # pyright: ignore[reportUnusedFunction]
+    _mapper: object, _connection: object, target: AuditLogModel
+) -> None:
+    original_metadata = target.metadata_json or {}
+    if target.run_id is None:
+        target.run_id = infer_audit_run_id(
+            resource_type=target.resource_type,
+            resource_id=target.resource_id,
+            metadata=original_metadata,
+        )
+    target.metadata_json = sanitize_audit_metadata(original_metadata)
+    target.change_digest = audit_change_digest(target.metadata_json)
 
 
 class IdempotencyRecordModel(Base):
@@ -1594,6 +1629,610 @@ class RunAttemptModel(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class ApprovalRequestModel(Base):
+    """Durable approval request bound to one immutable tool invocation."""
+
+    __tablename__ = "approval_request"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["agent_run.tenant_id", "agent_run.id"],
+            name="fk_approval_request__tenant_run__agent_run",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "requester_id"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_approval_request__tenant_requester__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "deployment_id"],
+            ["deployment.tenant_id", "deployment.id"],
+            name="fk_approval_request__tenant_deployment__deployment",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_approval_request__tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "execution_attempt",
+            "tool_call_id",
+            name="uq_approval_request__tenant_run_attempt_tool_call",
+        ),
+        CheckConstraint("execution_attempt >= 1", name="execution_attempt"),
+        CheckConstraint("length(tool_call_id) >= 1", name="tool_call_id"),
+        CheckConstraint("length(tool_name) >= 1", name="tool_name"),
+        CheckConstraint(
+            "tool_schema_hash ~ '^sha256:[a-f0-9]{64}$'",
+            name="tool_schema_hash",
+        ),
+        CheckConstraint(
+            "parameter_digest ~ '^sha256:[a-f0-9]{64}$'",
+            name="parameter_digest",
+        ),
+        CheckConstraint("length(policy_version) >= 1", name="policy_version"),
+        CheckConstraint(
+            "status IN ('PENDING','APPROVED','REJECTED','EXPIRED','CANCELLED','CONSUMED')",
+            name="status",
+        ),
+        CheckConstraint("expires_at > created_at", name="expires_at"),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        CheckConstraint("updated_at >= created_at", name="updated_at"),
+        Index(
+            "ix_approval_request__tenant_status_expires_at",
+            "tenant_id",
+            "status",
+            "expires_at",
+        ),
+        Index(
+            "ix_approval_request__tenant_run_created_at",
+            "tenant_id",
+            "run_id",
+            text("created_at DESC"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    execution_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    requester_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    tool_call_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    tool_schema_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    parameter_digest: Mapped[str] = mapped_column(String(80), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    deployment_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'PENDING'")
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    self_approval_allowed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ApprovalDecisionModel(Base):
+    """Append-only decision for one approval request."""
+
+    __tablename__ = "approval_decision"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "approval_id"],
+            ["approval_request.tenant_id", "approval_request.id"],
+            name="fk_approval_decision__tenant_approval__approval_request",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "actor_id"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_approval_decision__tenant_actor__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_approval_decision__tenant_id_id"),
+        UniqueConstraint("approval_id", name="uq_approval_decision__approval_id"),
+        CheckConstraint("decision IN ('APPROVED','REJECTED')", name="decision"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    approval_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ExecutionTicketModel(Base):
+    """One-time authorization bound to an immutable approved tool call."""
+
+    __tablename__ = "execution_ticket"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "approval_id"],
+            ["approval_request.tenant_id", "approval_request.id"],
+            name="fk_execution_ticket__tenant_approval__approval_request",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["agent_run.tenant_id", "agent_run.id"],
+            name="fk_execution_ticket__tenant_run__agent_run",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "requester_id"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_execution_ticket__tenant_requester__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "deployment_id"],
+            ["deployment.tenant_id", "deployment.id"],
+            name="fk_execution_ticket__tenant_deployment__deployment",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_execution_ticket__tenant_id_id"),
+        UniqueConstraint("approval_id", name="uq_execution_ticket__approval_id"),
+        CheckConstraint("execution_attempt >= 1", name="execution_attempt"),
+        CheckConstraint("length(tool_name) >= 1", name="tool_name"),
+        CheckConstraint(
+            "tool_schema_hash ~ '^sha256:[a-f0-9]{64}$'", name="tool_schema_hash"
+        ),
+        CheckConstraint(
+            "parameter_digest ~ '^sha256:[a-f0-9]{64}$'", name="parameter_digest"
+        ),
+        CheckConstraint("length(policy_version) >= 1", name="policy_version"),
+        CheckConstraint("nonce_hash ~ '^sha256:[a-f0-9]{64}$'", name="nonce_hash"),
+        CheckConstraint("single_use IS TRUE", name="single_use"),
+        CheckConstraint("expires_at > created_at", name="expires_at"),
+        CheckConstraint(
+            "consumed_at IS NULL OR consumed_at >= created_at", name="consumed_at"
+        ),
+        Index(
+            "ix_execution_ticket__tenant_run_expires_at",
+            "tenant_id",
+            "run_id",
+            "expires_at",
+        ),
+        Index(
+            "ix_execution_ticket__tenant_approval",
+            "tenant_id",
+            "approval_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    approval_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    execution_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    requester_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    tool_schema_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    parameter_digest: Mapped[str] = mapped_column(String(80), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    deployment_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    nonce_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    single_use: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class WorkspaceModel(Base):
+    """Logical Workspace identity and bounded usage counters."""
+
+    __tablename__ = "workspace"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "session_id"],
+            ["agent_run.tenant_id", "agent_run.id", "agent_run.session_id"],
+            name="fk_workspace__tenant_run_session__agent_run",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_workspace__tenant_user__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_workspace__tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            "run_id",
+            "user_id",
+            name="uq_workspace__tenant_id_run_user",
+        ),
+        UniqueConstraint("tenant_id", "uri", name="uq_workspace__tenant_uri"),
+        UniqueConstraint("tenant_id", "run_id", name="uq_workspace__tenant_run"),
+        CheckConstraint("quota_bytes > 0", name="quota_bytes"),
+        CheckConstraint(
+            "used_bytes >= 0 AND used_bytes <= quota_bytes", name="used_bytes"
+        ),
+        CheckConstraint("max_files > 0", name="max_files"),
+        CheckConstraint(
+            "file_count >= 0 AND file_count <= max_files", name="file_count"
+        ),
+        CheckConstraint(
+            "max_file_bytes > 0 AND max_file_bytes <= quota_bytes",
+            name="max_file_bytes",
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE','SEALED','QUARANTINED','DELETING','DELETED')",
+            name="status",
+        ),
+        CheckConstraint("expires_at > created_at", name="expires_at"),
+        Index(
+            "ix_workspace__tenant_status_expires_at",
+            "tenant_id",
+            "status",
+            "expires_at",
+        ),
+        Index(
+            "ix_workspace__tenant_session_created_at",
+            "tenant_id",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    session_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    uri: Mapped[str] = mapped_column(String(4096), nullable=False)
+    quota_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    used_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    max_files: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    file_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    max_file_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'ACTIVE'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ArtifactModel(Base):
+    """User-owned Artifact metadata spanning quarantine and trusted storage."""
+
+    __tablename__ = "artifact"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "owner_user_id"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_artifact__tenant_owner__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "workspace_id", "run_id", "owner_user_id"],
+            [
+                "workspace.tenant_id",
+                "workspace.id",
+                "workspace.run_id",
+                "workspace.user_id",
+            ],
+            name="fk_artifact__tenant_workspace_run_owner__workspace",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_artifact__tenant_id_id"),
+        CheckConstraint(
+            "(workspace_id IS NULL AND run_id IS NULL) OR "
+            "(workspace_id IS NOT NULL AND run_id IS NOT NULL)",
+            name="workspace_run_binding",
+        ),
+        CheckConstraint(
+            "size_bytes > 0 AND size_bytes <= 104857600", name="size_bytes"
+        ),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        CheckConstraint(
+            "status IN ('UPLOADING','SCANNING','AVAILABLE','REJECTED','FAILED',"
+            "'EXPIRED','DELETING','DELETED')",
+            name="status",
+        ),
+        CheckConstraint(
+            "(status IN ('AVAILABLE','EXPIRED') AND object_uri IS NOT NULL) OR "
+            "(status IN ('UPLOADING','SCANNING','REJECTED','FAILED') "
+            "AND object_uri IS NULL) OR status IN ('DELETING','DELETED')",
+            name="trusted_object_status",
+        ),
+        CheckConstraint(
+            "scan_result_json IS NULL OR jsonb_typeof(scan_result_json) = 'object'",
+            name="scan_result_json",
+        ),
+        CheckConstraint(
+            "(status IN ('AVAILABLE','REJECTED','FAILED') "
+            "AND scan_result_json IS NOT NULL) OR "
+            "status NOT IN ('AVAILABLE','REJECTED','FAILED')",
+            name="scan_result_status",
+        ),
+        CheckConstraint("upload_expires_at > created_at", name="upload_expires_at"),
+        CheckConstraint("expires_at > created_at", name="expires_at"),
+        CheckConstraint(
+            "(status = 'DELETED' AND deleted_at IS NOT NULL) OR "
+            "(status <> 'DELETED' AND deleted_at IS NULL)",
+            name="deleted_at_status",
+        ),
+        Index(
+            "ix_artifact__tenant_owner_created_at",
+            "tenant_id",
+            "owner_user_id",
+            "created_at",
+        ),
+        Index(
+            "ix_artifact__tenant_run_status",
+            "tenant_id",
+            "run_id",
+            "status",
+        ),
+        Index(
+            "ix_artifact__tenant_status_expires_at", "tenant_id", "status", "expires_at"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    workspace_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    run_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    owner_user_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    quarantine_object_uri: Mapped[str] = mapped_column(String(2048), nullable=False)
+    object_uri: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'UPLOADING'")
+    )
+    required_output: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    scan_result_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    upload_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class SandboxInstanceModel(Base):
+    """Tenant-isolated materialization of one Provider-backed Sandbox."""
+
+    __tablename__ = "sandbox_instance"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "session_id"],
+            ["agent_run.tenant_id", "agent_run.id", "agent_run.session_id"],
+            name="fk_sandbox_instance__tenant_run_session__agent_run",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "user_id"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_sandbox_instance__tenant_user__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "workspace_uri"],
+            ["workspace.tenant_id", "workspace.uri"],
+            name="fk_sandbox_instance__tenant_workspace__workspace",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_sandbox_instance__tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "execution_attempt",
+            "policy_hash",
+            name="uq_sandbox_instance__tenant_run_attempt_policy",
+        ),
+        UniqueConstraint(
+            "provision_operation_id",
+            name="uq_sandbox_instance__provision_operation_id",
+        ),
+        CheckConstraint("scope IN ('run','session')", name="scope"),
+        CheckConstraint("execution_attempt >= 1", name="execution_attempt"),
+        CheckConstraint(
+            "status IN ('REQUESTED','PROVISIONING','READY','IN_USE','FAILED',"
+            "'QUARANTINED','TERMINATING','TERMINATED')",
+            name="status",
+        ),
+        CheckConstraint(
+            "image_digest ~ '^[^@[:space:]]+@sha256:[a-f0-9]{64}$'",
+            name="image_digest",
+        ),
+        CheckConstraint("policy_hash ~ '^sha256:[a-f0-9]{64}$'", name="policy_hash"),
+        CheckConstraint("bundle_hash ~ '^sha256:[a-f0-9]{64}$'", name="bundle_hash"),
+        CheckConstraint("jsonb_typeof(policy_json) = 'object'", name="policy_json"),
+        CheckConstraint(
+            "terminated_at IS NULL OR status = 'TERMINATED'",
+            name="terminated_status",
+        ),
+        Index(
+            "ix_sandbox_instance__tenant_run_attempt",
+            "tenant_id",
+            "run_id",
+            "execution_attempt",
+        ),
+        Index(
+            "ix_sandbox_instance__tenant_status_updated_at",
+            "tenant_id",
+            "status",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    session_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    execution_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    image_digest: Mapped[str] = mapped_column(String(2048), nullable=False)
+    policy_ref: Mapped[str] = mapped_column(String(2048), nullable=False)
+    policy_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    policy_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    policy_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    bundle_ref: Mapped[str] = mapped_column(String(2048), nullable=False)
+    bundle_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    workspace_uri: Mapped[str] = mapped_column(String(4096), nullable=False)
+    runtime_target_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default=text("'REQUESTED'")
+    )
+    provider_ref: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    provision_operation_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("operation_record.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    terminated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    failure_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class SandboxLeaseModel(Base):
+    """One immutable fencing grant with an append-only release timestamp."""
+
+    __tablename__ = "sandbox_lease"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "sandbox_id"],
+            ["sandbox_instance.tenant_id", "sandbox_instance.id"],
+            name="fk_sandbox_lease__tenant_sandbox__sandbox_instance",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "holder_run_id"],
+            ["agent_run.tenant_id", "agent_run.id"],
+            name="fk_sandbox_lease__tenant_run__agent_run",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_sandbox_lease__tenant_id_id"),
+        CheckConstraint("execution_attempt >= 1", name="execution_attempt"),
+        CheckConstraint(
+            "fencing_token_hash ~ '^sha256:[a-f0-9]{64}$'",
+            name="fencing_token_hash",
+        ),
+        CheckConstraint("expires_at > acquired_at", name="expires_at"),
+        CheckConstraint(
+            "released_at IS NULL OR released_at >= acquired_at",
+            name="released_at",
+        ),
+        Index(
+            "uq_sandbox_lease__sandbox_active",
+            "sandbox_id",
+            unique=True,
+            postgresql_where=text("released_at IS NULL"),
+        ),
+        Index(
+            "ix_sandbox_lease__tenant_run_expires_at",
+            "tenant_id",
+            "holder_run_id",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    sandbox_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    holder_run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    execution_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    fencing_token_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    released_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class RunEventModel(Base):
     """Immutable user-visible execution event fact."""
 
@@ -1846,6 +2485,185 @@ class ResourceVersionModel(Base):
     published_by: Mapped[UUID] = mapped_column(
         UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
     )
+
+
+class SkillSupplyChainScanModel(Base):
+    """Immutable terminal Skill scan evidence bound once to a published version."""
+
+    __tablename__ = "skill_supply_chain_scan"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "definition_id"],
+            ["resource_definition.tenant_id", "resource_definition.id"],
+            name="fk_skill_supply_chain_scan__tenant_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "published_version_id"],
+            ["resource_version.tenant_id", "resource_version.id"],
+            name="fk_skill_supply_chain_scan__tenant_published_version",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_skill_supply_chain_scan__tenant_id_id"
+        ),
+        UniqueConstraint(
+            "published_version_id",
+            name="uq_skill_supply_chain_scan__published_version_id",
+        ),
+        CheckConstraint("draft_resource_version >= 1", name="draft_resource_version"),
+        CheckConstraint("status IN ('PASSED','REJECTED','FAILED')", name="status"),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        CheckConstraint("report_hash ~ '^sha256:[a-f0-9]{64}$'", name="report_hash"),
+        CheckConstraint("sbom_hash ~ '^sha256:[a-f0-9]{64}$'", name="sbom_hash"),
+        CheckConstraint(
+            "signature_status IN ('VERIFIED','UNVERIFIED','NOT_PROVIDED')",
+            name="signature_status",
+        ),
+        CheckConstraint(
+            "provenance_status IN ('VERIFIED','UNVERIFIED','NOT_PROVIDED')",
+            name="provenance_status",
+        ),
+        CheckConstraint("jsonb_typeof(findings_json) = 'array'", name="findings_json"),
+        CheckConstraint("jsonb_typeof(sbom_json) = 'object'", name="sbom_json"),
+        CheckConstraint(
+            "published_version_id IS NULL OR status = 'PASSED'",
+            name="published_version_status",
+        ),
+        Index(
+            "ix_skill_supply_chain_scan__tenant_definition_scanned_at",
+            "tenant_id",
+            "definition_id",
+            "scanned_at",
+        ),
+        Index(
+            "ix_skill_supply_chain_scan__tenant_content_hash_status",
+            "tenant_id",
+            "content_hash",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    definition_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    draft_resource_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    scanner_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    scanner_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    findings_json: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    report_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    sbom_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    sbom_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    signature_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    provenance_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    scanned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    scanned_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    published_version_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+
+
+class McpCapabilityDiscoveryModel(Base):
+    """Immutable MCP capability discovery evidence bound once to a version."""
+
+    __tablename__ = "mcp_capability_discovery"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "definition_id"],
+            ["resource_definition.tenant_id", "resource_definition.id"],
+            name="fk_mcp_capability_discovery__tenant_definition",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "published_version_id"],
+            ["resource_version.tenant_id", "resource_version.id"],
+            name="fk_mcp_capability_discovery__tenant_published_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_discovery_id"],
+            [
+                "mcp_capability_discovery.tenant_id",
+                "mcp_capability_discovery.id",
+            ],
+            name="fk_mcp_capability_discovery__tenant_source",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_mcp_capability_discovery__tenant_id_id"
+        ),
+        UniqueConstraint(
+            "operation_id", name="uq_mcp_capability_discovery__operation_id"
+        ),
+        UniqueConstraint(
+            "published_version_id",
+            name="uq_mcp_capability_discovery__published_version_id",
+        ),
+        CheckConstraint("draft_resource_version >= 1", name="draft_resource_version"),
+        CheckConstraint("status IN ('PASSED','REJECTED','FAILED')", name="status"),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        CheckConstraint(
+            "capability_hash IS NULL OR capability_hash ~ '^sha256:[a-f0-9]{64}$'",
+            name="capability_hash",
+        ),
+        CheckConstraint("jsonb_typeof(findings_json) = 'array'", name="findings_json"),
+        CheckConstraint("jsonb_typeof(tools_json) = 'array'", name="tools_json"),
+        CheckConstraint(
+            "published_version_id IS NULL OR status = 'PASSED'",
+            name="published_version_status",
+        ),
+        Index(
+            "ix_mcp_capability_discovery__tenant_definition_discovered_at",
+            "tenant_id",
+            "definition_id",
+            "discovered_at",
+        ),
+        Index(
+            "ix_mcp_capability_discovery__tenant_content_hash_status",
+            "tenant_id",
+            "content_hash",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    definition_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    operation_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    draft_resource_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    protocol_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    server_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    server_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tools_json: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    capability_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    findings_json: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    discovered_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_discovery_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    published_version_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
 
 
 class ModelBindingSnapshotModel(Base):

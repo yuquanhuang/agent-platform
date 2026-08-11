@@ -1,0 +1,57 @@
+task_id: AP-E6-002
+title: MCP 配置、Discover、能力冻结和安全校验
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - 复用冻结 MCP Resource API 和异步 Operation/Outbox 完成配置、Discover、发布与回滚
+    - streamable_http HTTPS、DNS Host、Header Template、Secret Reference 和 allowed_tools 校验
+    - 隔离 MCP Gateway 返回的工具 Schema、风险等级、Schema Hash 和 capability_hash 规范化
+    - 不可变 mcp_capability_discovery 证据、FORCE RLS、审计和一次性发布绑定
+    - 回滚在发布事务内复制源版本能力证据并绑定新版本
+    - Bundle Reader 和 AgentScope Bundle 携带授权工具、能力 Hash、Schema Hash 与风险等级
+    - tenant_admin MCP 权限、API/数据库组合和独立 Event Worker Discover 路由
+  excludes:
+    - STDIO、旧 SSE transport 和新的公共 MCP 契约
+    - 生产 MCP Gateway、Secret Broker、DNS/Redirect/egress Adapter
+    - 前端 MCP 管理页面和独立能力证据查询 API
+decisions:
+  - 保持 R10 OpenAPI、Resource Content Schema 和生成 Client 不变，仅支持 streamable_http
+  - API 进程只写 Operation/Outbox，不连接 MCP、不解析 Secret、不执行命令
+  - Header 只保存当前租户 secret:// 占位符，证据和日志不保存 Secret 明文或远程原始响应
+  - 发布必须精确匹配 definition_id、draft_resource_version、content_hash 和 allowed_tools
+  - 回滚只复用源已发布版本的 PASSED 证据，并在同一事务创建新不可变证据
+compatibility:
+  - 新增 Alembic 0026_mcp_capability_discovery；现有冻结 operationId 和字段无变化
+  - Bundle 内部 MCP 文件新增 capability_evidence，纯领域输入仍兼容无证据构造，数据库链路失败关闭
+  - 未新增 Python 或 Node 依赖，uv.lock 和 pnpm-lock.yaml 无本阶段变更
+verification:
+  commands:
+    - targeted MCP/API/Bundle/IAM/migration/model tests
+    - PostgreSQL resource registry and RLS integration tests
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - HTTP、IP、localhost、内部域、URL 凭据/query 和非法 Secret/Header 被拒绝
+  - 不可信工具 Schema、重复工具、缺失 allowed_tools 和超限响应被拒绝并保存安全摘要
+  - Discover 重投在 Operation 已终态时不再次调用 Gateway
+  - 只有精确 PASSED 证据可发布，证据跨租户不可见且不可删除、改写或重复绑定
+  - 回滚保留源 capability_hash，并以新证据绑定新版本
+  - 无 PASSED 能力证据的 MCP Version 不进入数据库 Bundle 链路
+results:
+  - 定向 MCP/API/Bundle/IAM/迁移/模型测试 84 passed
+  - 真实 PostgreSQL Resource Registry 与 RLS 集成测试分别通过
+  - make backend-check 为 601 passed、13 skipped
+  - 真实 PostgreSQL/Temporal make check-all 为后端 613 passed、1 skipped，前端 76 passed
+  - 契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+  - Black、Ruff、Pyright、Prettier、ESLint、Vue TypeScript、生产构建、uv lock 和 diff 检查通过
+follow_up:
+  - 部署生产 MCP Gateway、Secret Broker、逐次 DNS/Redirect/egress 校验和独立 Worker main
+  - 冻结 STDIO/SSE 或独立能力证据查询契约后再扩展公共 API
+  - 前端 MCP 管理页面按后续 UI 任务接入现有冻结 API
+  - AP-E6-003 实现有效策略求交集和 Admission Controller
+  - 继续保留真实 Redis、RunEvent 月分区、Registry digest、AJV codegen 和孤儿对账待办

@@ -5,18 +5,21 @@ description = "Agent Platform backend applications and shared packages"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ag-ui-protocol==0.1.19",
     "agentscope>=2.0,<2.1",
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     "cryptography<49; platform_system == 'Darwin' and platform_machine == 'x86_64'",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "jsonschema>=4.26.0",
     "opentelemetry-api>=1.44.0",
     "opentelemetry-exporter-otlp>=1.44.0",
     "opentelemetry-sdk>=1.44.0",
     "prometheus-client>=0.26.0",
     "pydantic>=2",
     "pydantic-settings>=2",
+    "pyyaml>=6.0.3",
     "redis>=8.1.0",
     "sqlalchemy[asyncio]>=2",
     "temporalio>=1.31.0",

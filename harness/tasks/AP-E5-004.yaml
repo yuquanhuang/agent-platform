@@ -1,0 +1,58 @@
+task_id: AP-E5-004
+title: Artifact 上传、完成与安全扫描流程
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - 冻结 createArtifactUpload/getArtifact/completeArtifactUpload 的后端实现
+    - Artifact 领域状态机、PostgreSQL 元数据、RLS、审计、幂等和 0023 迁移
+    - 受限隔离区上传授权、服务端对象大小/Hash/Content-Type 完成校验
+    - artifact.scan_requested.v1 Outbox、异步扫描、通过后原子发布可信对象
+    - 与 Workspace、Run、Tenant Member 和既有 Event Worker 轮询边界协同
+  excludes:
+    - createArtifactDownload、短期下载 URL、EXPIRED/DELETING/DELETED 流程
+    - Sandbox artifacts:export 内部请求 DTO 和 HTTP 路由扩展
+    - 生产 S3/MinIO、恶意文件扫描器、TenantContextSource 和 Event Worker main 激活
+    - ZIP/TAR 解包、Zip Slip、压缩炸弹和完整隔离 E2E
+decisions:
+  - 通用 Artifact 使用独立 ObjectStore/Scanner Port，不复用 Release Bundle 的签名/SBOM 领域接口
+  - 上传只进入 tenant/artifact 绑定的隔离区对象；AVAILABLE 前不得生成下载或作为可信 Runtime 输入
+  - Complete 只信任对象存储服务端观察的大小、摘要和 Content-Type，不信任客户端重复上报或对象元数据自述
+  - SCANNING 与 Outbox 在同一事务提交；扫描通过后先幂等提升对象，再以状态 CAS 标记 AVAILABLE
+  - 公共直传 Artifact 允许 workspace_id/run_id 为空；Workspace 导出必须同时绑定 workspace/run/owner，待内部 DTO 冻结后接线
+compatibility:
+  - 不修改 R10 OpenAPI、SandboxPolicy、RunEvent Schema 或生成客户端
+  - 新增 0023_artifact_upload_scan，内部 API 消费方不需要迁移请求模型
+  - 不新增 Python/Node 依赖，生产对象存储和扫描器由部署环境注入
+verification:
+  commands:
+    - targeted domain/service/api/database/outbox tests
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 创建上传要求 artifact:create、活动成员、合法名称/MIME/大小/sha256 和 Idempotency-Key
+  - 相同请求重试复用 Artifact，不同请求复用 Key 返回 409
+  - Complete 的对象缺失、过期、大小/Hash/MIME 不一致失败关闭且不进入 SCANNING
+  - 扫描通过后才 AVAILABLE；恶意内容 REJECTED；依赖失败有界重试，耗尽后 FAILED
+  - 跨租户和非 Owner 的 create/get/complete 被拒绝或按不存在处理
+open_questions:
+  - Sandbox artifacts:export 的请求 DTO、fencing 字段和响应模型需在后续扩展冻结内部契约前人工确认
+results:
+  - 三条冻结 Artifact API、领域状态机、0023 迁移、RLS、Owner 权限、审计和共享幂等已完成
+  - Complete 只使用对象存储服务端观察值；SCANNING 与 artifact.scan_requested.v1 Outbox 原子提交
+  - 扫描通过后仅接受 canonical artifact URI；恶意内容 REJECTED，依赖失败有界重试并收敛 FAILED
+  - 定向 65 passed；真实 PostgreSQL Artifact/RLS/Outbox/幂等链路 1 passed
+  - make check-all 后端 534 passed、1 skipped；前端 76 passed；R10 契约和 17 个生成文件零漂移
+follow_up:
+  - AP-E5-005 实现 createArtifactDownload、权限求交、短期 URL、EXPIRED 和删除流程
+  - 扩展冻结 Sandbox artifacts:export 内部 DTO 后接通 Workspace/Run/Owner 绑定和 required_output
+  - 生产部署注入 S3/MinIO、恶意文件 Scanner、Trusted Publisher、TenantContextSource 并激活 Event Worker main
+  - Run attachments 继续失败关闭，直到 Artifact AVAILABLE 校验进入不可变 RunSpec 和 Runtime 输入契约
+  - AP-E5-006 覆盖 ZIP/TAR、Zip Slip、压缩炸弹、特殊文件和完整隔离 E2E
+  - 可用 Redis 端点后执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成 RunEvent 全局唯一登记表与 recorded_at 月分区事件表
+  - 现有 CI 回填 AP-E1-009 生产 AgentScope 镜像 registry digest

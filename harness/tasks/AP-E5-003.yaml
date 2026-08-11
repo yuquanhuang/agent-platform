@@ -1,0 +1,57 @@
+task_id: AP-E5-003
+title: Workspace URI、路径隔离、容量限制与生命周期
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - R10 冻结 Sandbox Start/Cancel/Release 的 RunAttempt fencing proof
+    - canonical Workspace URI、结构化 tenant/user/session/run 身份和子路径校验
+    - 基于可信 Workspace root fd 的逐段 O_NOFOLLOW 路径打开、特殊文件/链接/TOCTOU 防护
+    - Workspace ORM、RLS、不可变配额、状态机、0022 迁移和历史 Sandbox 回填
+    - Provision、Release、Terminate、Destroy、失败和隔离状态的 Workspace 生命周期协同
+    - Workspace 字节/文件数量核算及单文件上限校验
+  excludes:
+    - Artifact 上传、对象存储、扫描、下载、过期和删除
+    - Docker、Kubernetes、gVisor、Kata 或本地进程生产 Provider
+    - 生产 Workspace 物理根映射、Provision Token Verifier、Policy Resolver 和 Sandbox Manager main 激活
+decisions:
+  - Workspace URI 是唯一跨层逻辑标识，物理路径不得进入 API、数据库业务字段或日志
+  - 路径防护消费可信 Provider 已打开的 root fd，逐级使用 dir_fd、O_DIRECTORY、O_NOFOLLOW 和 O_CLOEXEC
+  - 候选文件额外使用 O_NONBLOCK，避免 FIFO 在文件类型校验前阻塞；fstat 只接受单链接普通文件
+  - 配额由不可变 SandboxPolicy 冻结；Provider 磁盘限制负责写入时物理边界，数据库记录负责平台核算和后续对账
+  - Release 可在 RunAttempt 终态后使用最后一次有效 Lease token 幂等清理；Terminate/Destroy 使用独立强制管理权限
+compatibility:
+  - R10 内部 Sandbox Start/Cancel/Release 请求新增必填 fencing proof，调用方与 Sandbox Manager 必须协同发布
+  - 新增 0022_workspace_isolation；升级回填既有 Sandbox Workspace 并增加复合外键，降级删除 Workspace 元数据
+  - 未修改公共 OpenAPI、SandboxPolicy JSON Schema、RunEvent Schema 或前端生成契约
+  - 未新增 Python 或 Node 依赖
+verification:
+  commands:
+    - targeted Workspace URI/path, Sandbox API/lifecycle, migration and model tests
+    - make contract-check
+    - make backend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 非 canonical、跨租户/用户/Session/Run、空段、点段、转义和非 NFC Workspace URI 被拒绝
+  - 软链接、硬链接、FIFO、非普通文件、路径替换和超单文件限制失败关闭，不泄露物理路径
+  - Workspace 配额、身份和保留期不可变，用量超限返回 WORKSPACE_QUOTA_EXCEEDED
+  - Provision 原子建立 Workspace；正常清理封存，无法确认清理时进入 QUARANTINED
+  - 旧 Attempt、过期 Lease 或错误 fencing token 不能 Start/Cancel/Release
+results:
+  - Workspace URI/path 定向 14 passed；真实 PostgreSQL 迁移/RLS 与完整资源链路 2 passed
+  - 真实 PostgreSQL/Temporal 全仓门禁后端 514 passed、仅真实 Redis 1 skipped
+  - 前端 22 个测试文件、76 passed，并完成生产构建
+  - R10 契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+follow_up:
+  - AP-E5-004 实现 Artifact 上传、完成、隔离区对象存储和扫描流程
+  - AP-E5-005 实现 Artifact 下载、权限、过期和删除
+  - AP-E5-006 增加真实隔离 Provider、Zip Slip、压缩炸弹、设备文件/Socket 和完整隔离 E2E
+  - AP-E7-001 增加 Workspace/Provider/数据库用量与生命周期对账、过期清理和告警
+  - 为 Sandbox Manager 注入生产 Provider、Token Verifier、Policy Resolver、Workspace root mapper 后再激活 main
+  - 增加 RunSandboxController 生产 HTTP Adapter
+  - 可用 Redis 端点后执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成 RunEvent 全局唯一登记表与 recorded_at 月分区迁移
+  - 现有 CI 回填 AP-E1-009 生产 AgentScope 镜像 registry digest
+  - 前端 Run 详情继续扩展前评估 AJV standalone codegen

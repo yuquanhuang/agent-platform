@@ -15,6 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from packages.application.metadata import RequestMetadata
 from packages.application.outbox import PermanentOutboxError, RetryableOutboxError
 from packages.application.outbox.run import WorkflowStartOutcome
+from packages.application.policy import (
+    AdmissionDenied,
+    RuntimeBundleAdmissionFacts,
+    admit_runtime_bundle,
+)
 from packages.application.reconciliation import RunReconciliationCandidate
 from packages.application.runs import RUN_REQUESTED_EVENT
 from packages.application.temporal.run_activities import (
@@ -848,6 +853,17 @@ class SqlAlchemyRunStore:
                 raise resource_state_conflict(
                     "The Run Runtime Bundle has not passed security scanning."
                 )
+            try:
+                admit_runtime_bundle(
+                    RuntimeBundleAdmissionFacts(
+                        compiler_name=bundle.compiler_name,
+                        compiler_version=bundle.compiler_version,
+                        scan_status=bundle.scan_status,
+                        manifest=bundle.manifest_json,
+                    )
+                )
+            except AdmissionDenied as error:
+                raise resource_state_conflict(f"{error.code}: {error}") from error
             if bundle.runtime_type not in {"agentscope", "codex"}:
                 raise resource_state_conflict("The Run Runtime type is unsupported.")
             user_text = content[0].text
@@ -1439,6 +1455,9 @@ class SqlAlchemyRunStore:
             raise resource_state_conflict(
                 "The requested Deployment is unavailable for this Session Agent."
             )
+        await self._admit_deployment(
+            session, tenant_id=tenant_id, deployment=deployment
+        )
         return deployment
 
     async def _retry_deployment(
@@ -1483,7 +1502,40 @@ class SqlAlchemyRunStore:
             raise resource_state_conflict(
                 "The requested retry Deployment is unavailable."
             )
+        await self._admit_deployment(
+            session, tenant_id=tenant_id, deployment=deployment
+        )
         return deployment
+
+    async def _admit_deployment(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        deployment: DeploymentModel,
+    ) -> None:
+        bundle = await session.scalar(
+            select(RuntimeBundleModel).where(
+                RuntimeBundleModel.tenant_id == tenant_id,
+                RuntimeBundleModel.id == deployment.bundle_id,
+                RuntimeBundleModel.snapshot_id == deployment.snapshot_id,
+            )
+        )
+        if bundle is None:
+            raise resource_state_conflict(
+                "The Deployment Runtime Bundle is unavailable for admission."
+            )
+        try:
+            admit_runtime_bundle(
+                RuntimeBundleAdmissionFacts(
+                    compiler_name=bundle.compiler_name,
+                    compiler_version=bundle.compiler_version,
+                    scan_status=bundle.scan_status,
+                    manifest=bundle.manifest_json,
+                )
+            )
+        except AdmissionDenied as error:
+            raise resource_state_conflict(f"{error.code}: {error}") from error
 
 
 def _resource_id(value: str) -> UUID:

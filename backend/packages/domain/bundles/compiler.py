@@ -13,7 +13,7 @@ import posixpath
 import re
 from collections.abc import Iterable, Mapping
 from datetime import UTC
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -24,6 +24,13 @@ from packages.domain.bundles.model import (
     BundleFile,
     BundleResourceInput,
     CompiledRuntimeBundle,
+)
+from packages.domain.policy import (
+    McpPolicySource,
+    PolicyCompilationError,
+    PolicyResourceSource,
+    SkillPolicySource,
+    compile_effective_policy,
 )
 from packages.domain.resources.model import (
     ResourceContentMcp,
@@ -37,7 +44,7 @@ from packages.domain.resources.model import (
 
 BUNDLE_MANIFEST_SCHEMA_VERSION = "1.0"
 BUNDLE_COMPILER_NAME = "AgentScopeBundleCompiler"
-BUNDLE_COMPILER_VERSION = "1.0.0"
+BUNDLE_COMPILER_VERSION = "1.2.0"
 BUNDLE_RUNTIME_TYPE = "agentscope"
 _HASH_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 _MODE_RE = re.compile(r"^0[0-7]{3}$")
@@ -69,7 +76,11 @@ def compile_agentscope_bundle(
 
     files: list[BundleFile] = []
     security_permissions: list[dict[str, object]] = []
-    sandbox_policies: list[bytes] = []
+    sandbox_policies: list[
+        tuple[PolicyResourceSource, ResourceContentSandboxProfile]
+    ] = []
+    skill_policies: list[SkillPolicySource] = []
+    mcp_policies: list[McpPolicySource] = []
     binding_payloads: list[dict[str, object]] = []
     runtime_agents: list[dict[str, object]] = []
 
@@ -126,6 +137,12 @@ def compile_agentscope_bundle(
                     ),
                 }
             )
+            skill_policies.append(
+                SkillPolicySource(
+                    source=_policy_source(resource, "skill"),
+                    manifest=content.manifest,
+                )
+            )
             for skill_file in sorted(content.files, key=lambda item: item.path):
                 normalized = _safe_relative_path(skill_file.path)
                 artifact = artifact_map.get(skill_file.artifact_id)
@@ -154,38 +171,73 @@ def compile_agentscope_bundle(
             key=_resource_sort_key,
         ):
             content = cast(ResourceContentMcp, resource.content)
+            capability = resource.mcp_capability_snapshot
+            mcp_payload = resource_content_json(content)
+            permission: dict[str, object] = {
+                "kind": "mcp",
+                "resource_id": str(resource.resource_id),
+                "version_id": str(resource.version_id),
+                "allowed_tools": list(content.allowed_tools or []),
+            }
+            if capability is not None:
+                authorized = [
+                    tool
+                    for tool in capability.tools
+                    if tool.name in capability.allowed_tools
+                ]
+                mcp_payload["capability_evidence"] = {
+                    "discovery_id": str(capability.id),
+                    "capability_hash": capability.capability_hash,
+                    "protocol_version": capability.protocol_version,
+                    "server": {
+                        "name": capability.server_name,
+                        "version": capability.server_version,
+                    },
+                    "allowed_tools": list(capability.allowed_tools),
+                    "tools": [
+                        {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "input_schema": tool.input_schema,
+                            "output_schema": tool.output_schema,
+                            "schema_hash": tool.schema_hash,
+                            "risk_level": tool.risk_level,
+                        }
+                        for tool in authorized
+                    ],
+                }
+                permission["capability_hash"] = capability.capability_hash
+                permission["tools"] = [
+                    {
+                        "name": tool.name,
+                        "schema_hash": tool.schema_hash,
+                        "risk_level": tool.risk_level,
+                    }
+                    for tool in authorized
+                ]
+                mcp_policies.append(
+                    McpPolicySource(
+                        source=_policy_source(resource, "mcp"),
+                        tools=tuple(authorized),
+                    )
+                )
             path = f"{prefix}mcp/{resource.resource_id}.json"
             files.append(
                 BundleFile(
                     path=path,
-                    content=_json_bytes(resource_content_json(content)),
+                    content=_json_bytes(mcp_payload),
                     mode="0644",
                     source_type="mcp",
                     source_id=str(resource.version_id),
                 )
             )
             mcp_paths.append(path)
-            security_permissions.append(
-                {
-                    "kind": "mcp",
-                    "resource_id": str(resource.resource_id),
-                    "version_id": str(resource.version_id),
-                    "allowed_tools": list(content.allowed_tools or []),
-                }
-            )
+            security_permissions.append(permission)
 
         for resource in node.resources:
             if resource.resource_type == "sandbox":
                 content = cast(ResourceContentSandboxProfile, resource.content)
-                policy_bytes = _json_bytes(
-                    cast(
-                        dict[str, JsonValue],
-                        content.policy.model_dump(
-                            mode="json", by_alias=True, exclude_none=True
-                        ),
-                    )
-                )
-                sandbox_policies.append(policy_bytes)
+                sandbox_policies.append((_policy_source(resource, "sandbox"), content))
 
         for resource in node.resources:
             binding_payloads.append(
@@ -214,20 +266,35 @@ def compile_agentscope_bundle(
             }
         )
 
-    if not sandbox_policies:
-        raise BundleCompilationError(
-            "SANDBOX_POLICY_REQUIRED",
-            "An AgentScope Bundle requires an immutable sandbox profile.",
+    try:
+        effective_policy = compile_effective_policy(
+            sandbox_policies=(
+                (source, content.policy) for source, content in sandbox_policies
+            ),
+            skills=skill_policies,
+            mcps=mcp_policies,
         )
-    if len({policy for policy in sandbox_policies}) != 1:
+    except PolicyCompilationError as error:
+        raise BundleCompilationError(error.code, str(error)) from error
+    if effective_policy.decision == "DENY":
         raise BundleCompilationError(
-            "MULTIPLE_SANDBOX_POLICIES",
-            "All Agent graph nodes must use one effective sandbox policy.",
+            effective_policy.reason_codes[0],
+            "The effective policy denies this Agent graph.",
         )
-    sandbox_bytes = sandbox_policies[0]
+    effective_policy_payload = cast(
+        dict[str, object], json.loads(effective_policy.canonical_json)
+    )
+    sandbox_bytes = _json_bytes(
+        cast(
+            dict[str, JsonValue],
+            effective_policy.sandbox_policy.model_dump(mode="json"),
+        )
+    )
     permission_bytes = _json_bytes(
         {
-            "schema_version": "bundle-permission-policy/v1",
+            "schema_version": "bundle-permission-policy/v2",
+            "effective_policy_hash": effective_policy.policy_hash,
+            "effective_policy": effective_policy_payload,
             "entries": sorted(
                 security_permissions,
                 key=lambda value: (
@@ -589,6 +656,7 @@ def _verify_manifest_security(
         raise BundleCompilationError(
             "BUNDLE_SECURITY_HASH_MISMATCH", "Bundle security policy hash mismatch"
         )
+    _verify_effective_policy_file(permission_file)
     secret_refs = security["secret_refs"]
     if not isinstance(secret_refs, list):
         raise BundleCompilationError(
@@ -609,6 +677,49 @@ def _verify_manifest_security(
     ):
         raise BundleCompilationError(
             "MANIFEST_SCHEMA_INVALID", "Manifest Secret references are unsafe"
+        )
+
+
+def _verify_effective_policy_file(permission_file: BundleFile) -> None:
+    try:
+        payload_value: object = json.loads(permission_file.content)
+    except (TypeError, ValueError) as error:
+        raise BundleCompilationError(
+            "BUNDLE_EFFECTIVE_POLICY_INVALID",
+            "The effective policy file is not valid JSON.",
+        ) from error
+    if not isinstance(payload_value, dict):
+        raise BundleCompilationError(
+            "BUNDLE_EFFECTIVE_POLICY_INVALID",
+            "The effective policy file shape is invalid.",
+        )
+    payload = cast(dict[str, object], payload_value)
+    if set(payload) != {
+        "schema_version",
+        "effective_policy_hash",
+        "effective_policy",
+        "entries",
+    }:
+        raise BundleCompilationError(
+            "BUNDLE_EFFECTIVE_POLICY_INVALID",
+            "The effective policy file shape is invalid.",
+        )
+    effective_value = payload.get("effective_policy")
+    effective = (
+        cast(dict[str, object], effective_value)
+        if isinstance(effective_value, dict)
+        else None
+    )
+    if (
+        payload.get("schema_version") != "bundle-permission-policy/v2"
+        or effective is None
+        or payload.get("effective_policy_hash") != _hash_json(effective)
+        or effective.get("schema_version") != "effective-policy/v1"
+        or effective.get("decision") not in {"ALLOW", "REQUIRE_APPROVAL"}
+    ):
+        raise BundleCompilationError(
+            "BUNDLE_EFFECTIVE_POLICY_INVALID",
+            "The effective policy snapshot is invalid or not admitted.",
         )
 
 
@@ -749,6 +860,29 @@ def _validate_nodes(nodes: tuple[BundleAgentInput, ...]) -> None:
                     raise BundleCompilationError(
                         "MODEL_BINDING_SNAPSHOT_INVALID", str(resource.version_id)
                     )
+            if (
+                resource.resource_type == "mcp"
+                and resource.mcp_capability_snapshot is not None
+            ):
+                capability = resource.mcp_capability_snapshot
+                content = cast(ResourceContentMcp, resource.content)
+                tool_names = {tool.name for tool in capability.tools}
+                if (
+                    capability.tenant_id != node.tenant_id
+                    or capability.definition_id != resource.resource_id
+                    or capability.published_version_id != resource.version_id
+                    or capability.content_hash != resource.content_hash
+                    or not _HASH_RE.fullmatch(capability.capability_hash)
+                    or tuple(content.allowed_tools or ()) != capability.allowed_tools
+                    or not set(capability.allowed_tools) <= tool_names
+                    or any(
+                        not _HASH_RE.fullmatch(tool.schema_hash)
+                        for tool in capability.tools
+                    )
+                ):
+                    raise BundleCompilationError(
+                        "MCP_CAPABILITY_SNAPSHOT_INVALID", str(resource.version_id)
+                    )
         child_bindings = [
             item for item in typed_bindings if item.get("resource_type") == "agent"
         ]
@@ -882,6 +1016,17 @@ def _resource_sort_key(resource: BundleResourceInput) -> tuple[str, str, str]:
 def _resource_type(resource_type: str) -> str:
     return {"model_config": "model", "sandbox_profile": "sandbox"}.get(
         resource_type, resource_type
+    )
+
+
+def _policy_source(
+    resource: BundleResourceInput, kind: Literal["sandbox", "skill", "mcp"]
+) -> PolicyResourceSource:
+    return PolicyResourceSource(
+        kind=kind,
+        resource_id=resource.resource_id,
+        version_id=resource.version_id,
+        content_hash=resource.content_hash,
     )
 
 

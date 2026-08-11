@@ -26,6 +26,8 @@ from packages.domain.public import (
     BundleArtifactInput,
     BundleCompilationError,
     BundleResourceInput,
+    McpCapabilitySnapshotInput,
+    McpDiscoveredTool,
     compile_agentscope_bundle,
     verify_compiled_bundle,
 )
@@ -349,7 +351,7 @@ def test_compiler_packages_skill_artifacts_and_mcp_secret_references() -> None:
                 "inputs": {"type": "object"},
                 "outputs": {"type": "object"},
                 "sandbox": {
-                    "imageDigest": f"registry.example/skill@sha256:{'2' * 64}",
+                    "imageDigest": f"registry.example/runtime@sha256:{'d' * 64}",
                     "timeoutSeconds": 60,
                     "riskLevel": "LOW",
                 },
@@ -377,6 +379,28 @@ def test_compiler_packages_skill_artifacts_and_mcp_secret_references() -> None:
         timeout_seconds=30,
         allowed_tools=["search.query"],
     )
+    mcp_capability = McpCapabilitySnapshotInput(
+        id=UUID("12121212-1212-4121-8121-121212121212"),
+        tenant_id=TENANT_ID,
+        definition_id=MCP_ID,
+        published_version_id=MCP_VERSION_ID,
+        content_hash=canonical_content_hash(mcp),
+        capability_hash="sha256:" + "1" * 64,
+        protocol_version="2025-06-18",
+        server_name="search-mcp",
+        server_version="1.0.0",
+        allowed_tools=("search.query",),
+        tools=(
+            McpDiscoveredTool(
+                name="search.query",
+                description="Search approved public sources.",
+                input_schema={"type": "object"},
+                output_schema=None,
+                schema_hash="sha256:" + "2" * 64,
+                risk_level="MEDIUM",
+            ),
+        ),
+    )
     root = _root()
     content = deepcopy(root.snapshot_content)
     bindings_value = content["bindings"]
@@ -396,6 +420,7 @@ def test_compiler_packages_skill_artifacts_and_mcp_secret_references() -> None:
             version_id=MCP_VERSION_ID,
             content_hash=canonical_content_hash(mcp),
             content=mcp,
+            mcp_capability_snapshot=mcp_capability,
         ),
     )
     for resource in resources[-2:]:
@@ -437,7 +462,54 @@ def test_compiler_packages_skill_artifacts_and_mcp_secret_references() -> None:
     assert bundle.file(f"mcp/{MCP_ID}.json").content
     security = cast(dict[str, JsonValue], bundle.manifest["security"])
     assert security["secret_refs"] == [f"secret://tenant/{TENANT_ID}/mcp/search"]
+    mcp_file = json.loads(bundle.file(f"mcp/{MCP_ID}.json").content)
+    assert mcp_file["capability_evidence"]["capability_hash"] == ("sha256:" + "1" * 64)
+    assert mcp_file["capability_evidence"]["tools"][0]["schema_hash"] == (
+        "sha256:" + "2" * 64
+    )
     assert (
         "secret-purpose:search-api"
         in bundle.file("security/permissions.json").content.decode()
     )
+    permissions = json.loads(bundle.file("security/permissions.json").content)
+    assert permissions["schema_version"] == "bundle-permission-policy/v2"
+    assert permissions["effective_policy"]["decision"] == "ALLOW"
+    assert permissions["effective_policy"]["maximum_risk_level"] == "MEDIUM"
+
+    high_resources = tuple(
+        (
+            replace(
+                resource,
+                mcp_capability_snapshot=replace(
+                    resource.mcp_capability_snapshot,
+                    tools=tuple(
+                        replace(tool, risk_level="HIGH")
+                        for tool in resource.mcp_capability_snapshot.tools
+                    ),
+                ),
+            )
+            if resource.resource_type == "mcp"
+            and resource.mcp_capability_snapshot is not None
+            else resource
+        )
+        for resource in resources
+    )
+    high_bundle = compile_agentscope_bundle(
+        replace(root, resources=high_resources),
+        (
+            BundleArtifactInput(
+                artifact_id="artifact-skill-md",
+                content_hash=f"sha256:{hashlib.sha256(skill_md).hexdigest()}",
+                content=skill_md,
+            ),
+            BundleArtifactInput(
+                artifact_id="artifact-manifest",
+                content_hash=f"sha256:{hashlib.sha256(manifest_yaml).hexdigest()}",
+                content=manifest_yaml,
+            ),
+        ),
+    )
+    high_permissions = json.loads(high_bundle.file("security/permissions.json").content)
+    assert high_permissions["effective_policy"]["decision"] == "REQUIRE_APPROVAL"
+    assert high_permissions["effective_policy"]["maximum_risk_level"] == "HIGH"
+    verify_compiled_bundle(high_bundle)

@@ -1,0 +1,52 @@
+task_id: AP-E4-007
+title: RunEvent 断线恢复、回放与 Run 详情纵向验收
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - 冻结 RunEvent JSON Schema 的前端生成产物、AJV 2020-12 运行时校验和安全错误边界
+    - SSE chunk/CRLF/heartbeat/多行 data 解析、id/sequence_no 一致性、帧上限和取消释放
+    - 历史优先、缺口补洞、Last-Event-ID、指数退避、终态高水位追平和冲突失败关闭
+    - 独立 /runs/:id Vue 详情页、Session Run 导航和纵向组件集成验收
+  excludes:
+    - 修改冻结 OpenAPI、RunEvent Schema、后端 SSE Payload 或 PostgreSQL 事实语义
+    - 将实时投影写入不可变 Session Message 历史或 Vue Query Cache
+    - RunEvent 全局登记表与 recorded_at 月分区迁移、真实 Redis 条件环境补测
+decisions:
+  - PostgreSQL RunEvent 继续是唯一事实源；浏览器实时流只传输和唤醒，缺口必须回查历史
+  - JSON Schema 由契约生成器确定性输出到前端，不维护第二套手写运行时 DTO
+  - SSE 协议、Schema、身份或终态冲突失败关闭；网络中断和可重试 HTTP 错误使用有上限指数退避
+  - 组件卸载只 Abort 当前浏览器订阅，不调用 cancelRun，不改变服务端 Run 生命周期
+  - Thinking 展示依赖已授权查询端点的服务端脱敏结果；普通用户不会收到未脱敏原文
+compatibility:
+  - R9 OpenAPI、RunEvent JSON Schema、后端路由、数据库和部署配置均未修改
+  - 新增前端运行时依赖 ajv 8.20.0、ajv-formats 3.0.1，并同步 pnpm-lock.yaml
+  - Run 详情按路由懒加载；AJV 与 Schema 使该路由 chunk 为 181.07 kB、gzip 53.02 kB
+verification:
+  commands:
+    - targeted RunEvent validator, SSE parser, coordinator and Run detail tests
+    - pnpm audit --prod
+    - make contract-check
+    - make frontend-check
+    - make backend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+    - browser responsive route validation at 1280x720 and 390x844
+acceptance:
+  - SSE 帧进入 Reducer 前通过冻结 Schema，非法 JSON、字段、事件名、id 和过大帧均失败关闭
+  - 初次历史回放先于 SSE；缺口回查 PostgreSQL，重连携带最后已应用 sequence_no 并指数退避
+  - 终态必须重新查询高水位并追平后关闭；终态后事实冲突显示错误且停止订阅
+  - Run 页面展示状态、连接、消息、Runtime、计划、工具、审批、任务、Artifact 和 Warning
+  - Session Message 页面保持不可变只读边界，仅提供独立 Run 详情导航
+results:
+  - 新增 19 项 AP-E4-007 定向测试；前端全量 22 个文件、76 项测试通过
+  - check-all 后端 441 passed、1 skipped；前端 76 passed
+  - 契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+  - 生产依赖审计无已知漏洞；桌面和窄屏路由无横向溢出
+follow_up:
+  - AP-E5-001 实现 SandboxPolicy、内部 API 和 Sandbox Provider Port
+  - 可用 Redis 端点后执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成全局唯一登记表与 recorded_at 月分区事件表迁移
+  - 现有 CI 回填 AP-E1-009 生产 AgentScope 镜像 registry digest
+  - Run 页面继续扩展前评估 AJV standalone codegen，以降低懒加载 chunk 体积

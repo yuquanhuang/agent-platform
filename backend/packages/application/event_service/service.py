@@ -106,6 +106,23 @@ class RunEventPageRecord:
     events: tuple[RunEventRecord, ...]
     latest_sequence_no: int
     has_more: bool
+    is_terminal: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RunEventReadAccess:
+    context: TenantContext
+    user_id: UUID
+    run_id: UUID
+    can_view_sensitive: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RunEventReadPage:
+    events: tuple[RunEvent, ...]
+    latest_sequence_no: int
+    has_more: bool
+    is_terminal: bool
 
 
 class RunEventQueryAccessResolver(Protocol):
@@ -211,31 +228,61 @@ class RunEventQueryService:
         limit: int,
         metadata: RequestMetadata,
     ) -> RunEventPage:
+        access = await self.authorize(principal, run_id=run_id, metadata=metadata)
+        page = await self.read_page(access, after=after, limit=limit)
+        return RunEventPage(
+            items=list(page.events),
+            has_more=page.has_more,
+            latest_sequence_no=page.latest_sequence_no,
+        )
+
+    async def authorize(
+        self,
+        principal: AuthenticatedPrincipal,
+        *,
+        run_id: str,
+        metadata: RequestMetadata,
+    ) -> RunEventReadAccess:
+        access = await self._access_resolver.resolve_tenant_access(principal, metadata)
+        if not access.allows("run", "read"):
+            raise permission_denied()
+        return RunEventReadAccess(
+            context=access.context,
+            user_id=_resource_id(access.context.subject_id),
+            run_id=_resource_id(run_id),
+            can_view_sensitive=access.allows("run", "view_sensitive"),
+        )
+
+    async def read_page(
+        self,
+        access: RunEventReadAccess,
+        *,
+        after: int,
+        limit: int,
+    ) -> RunEventReadPage:
         if after < 0:
             raise validation_error("after must be greater than or equal to 0.")
         if not 1 <= limit <= 200:
             raise validation_error("limit must be between 1 and 200.")
-        access = await self._access_resolver.resolve_tenant_access(principal, metadata)
-        if not access.allows("run", "read"):
-            raise permission_denied()
         page = await self._store.list_events(
             access.context,
-            user_id=_resource_id(access.context.subject_id),
-            run_id=_resource_id(run_id),
+            user_id=access.user_id,
+            run_id=access.run_id,
             after=after,
             limit=limit,
         )
         if page is None:
             raise resource_not_found()
         _validate_sequence_page(page, after=after)
-        can_view_sensitive = access.allows("run", "view_sensitive")
-        return RunEventPage(
-            items=[
-                _run_event(record, can_view_sensitive=can_view_sensitive)
-                for record in page.events
-            ],
+        events = tuple(
+            _run_event(record, can_view_sensitive=access.can_view_sensitive)
+            for record in page.events
+        )
+        return RunEventReadPage(
+            events=events,
             has_more=page.has_more,
             latest_sequence_no=page.latest_sequence_no,
+            is_terminal=page.is_terminal,
         )
 
 

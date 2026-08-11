@@ -46,6 +46,9 @@ class FakeRunActivities:
     async def prepare_agent_run(self, input: object) -> None:
         return None
 
+    async def provision_run_sandbox(self, input: object) -> None:
+        return None
+
     async def execute_agent_run(self, input: object) -> None:
         return None
 
@@ -62,6 +65,9 @@ class FakeRunActivities:
         return None
 
     async def finalize_agent_run_cancellation(self, input: object) -> None:
+        return None
+
+    async def release_run_sandbox(self, input: object) -> None:
         return None
 
 
@@ -99,4 +105,4 @@ def test_run_worker_registers_agent_workflow_and_only_run_activities() -> None:
 
     assert definition.task_queue == RUN_ORCHESTRATOR_TASK_QUEUE
     assert definition.workflows == (PlatformProbeWorkflow, AgentRunWorkflow)
-    assert len(definition.activities) == 8
+    assert len(definition.activities) == 10

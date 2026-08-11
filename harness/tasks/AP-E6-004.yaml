@@ -1,0 +1,61 @@
+task_id: AP-E6-004
+title: ApprovalRequest/Decision、过期和自审批阻断
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - 复用冻结 Approval API、WAITING_APPROVAL 和 approval_required/approval_resolved RunEvent
+    - ApprovalRequest 状态机、不可变 Decision、CAS、幂等、过期和自审批阻断
+    - PostgreSQL FORCE RLS、绑定字段不可变触发器、tenant_admin 权限和审计
+    - Run 从 RUNNING 进入 WAITING_APPROVAL，拒绝进入 CANCELLING，过期进入 TIMEOUT
+    - Temporal approval_decided Signal 的幂等、首个决议不可变、拒绝/过期取消行为
+    - Vue/Element Plus 审批中心、过滤、分页、Run 跳转、批准/拒绝和错误提示
+  excludes:
+    - AP-E6-005 的一次性 Execution Ticket、Tool Gateway 消费和批准后恢复执行
+    - AgentScope RequireUserConfirmEvent 到 ApprovalCoordinator 的生产 Runtime Bridge
+    - AP-E6-007 的高风险工具审批、执行与审计纵向 E2E
+    - 周期过期 Worker main、Signal Outbox 和 AP-E7-001 对账补发
+decisions:
+  - 保持 R10 OpenAPI、RunEvent Schema 和生成 Client 不变，不新增平行 Approval DTO
+  - 批准只形成不可变审批事实，ticket_ref 在 AP-E6-005 前保持为空，不直接授权工具执行
+  - HIGH 风险 Bundle 继续以 POLICY_APPROVAL_REQUIRED 阻止发布，待 AP-E6-005 同 Ticket/Gateway 一次解锁
+  - 决策先持久化再发送 Temporal Signal；依赖失败返回可重试 503，相同 Idempotency-Key 会重放并补发 Signal
+  - 自动过期的 decided_by 使用全零 UUID service actor sentinel，以满足 R10 冻结字段；后续扩展 actor type 时再升级契约
+compatibility:
+  - 新增 Alembic 0027_approval_control_plane；冻结 API、字段和事件语义无变化
+  - Temporal execute_agent_run_v1 仍只返回 RuntimeCompletion，未引入破坏 History Replay 的 union
+  - 未新增 Python 或 Node 依赖，锁文件无本阶段新增项
+verification:
+  commands:
+    - targeted Approval/API/Temporal/ORM/migration tests
+    - PostgreSQL resource registry Approval/RLS integration test
+    - Temporal approval Signal and History Replay integration test
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 请求绑定 tool/schema/parameter/policy/deployment/run/attempt 后不可改写，跨租户不可见
+  - 自审批在应用层返回 403，数据库触发器继续失败关闭；CAS 和幂等语义稳定
+  - Decision 不可更新或删除，重复决策只重放原结果，不制造第二个事实
+  - approval_required/resolved 与 Run 状态、序号计数器、Outbox 和审计原子提交
+  - 重复或冲突 Temporal Signal 不覆盖同 Approval 的首个决议，History Replay 通过
+  - 前端不能把 APPROVED 展示为已执行，并明确还需要一次性 Ticket
+results:
+  - 审批定向测试 77 passed，Signal 失败幂等补发回归 5 passed
+  - 真实 PostgreSQL 迁移、RLS、不可变触发器、Run/RunEvent 和幂等集成测试 1 passed
+  - 真实 Temporal 重复 Signal、首个决议不可变、取消和 History Replay 测试 1 passed
+  - make backend-check 为 629 passed、14 skipped
+  - 真实 PostgreSQL/Temporal make check-all 为后端 642 passed、1 skipped，前端 81 passed
+  - make frontend-check 为 24 个测试文件、81 tests，并完成生产构建
+  - 契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+follow_up:
+  - AP-E6-005 实现 Execution Ticket、Tool Gateway 逐次重校验、一次消费和 APPROVED 恢复执行
+  - AP-E6-005 完成前不得移除 HIGH Bundle 的 POLICY_APPROVAL_REQUIRED 发布阻断
+  - AP-E6-007 完成 AgentScope Runtime Bridge 与高风险工具审批/执行/审计 E2E
+  - AP-E7-001 增加 Approval Signal 对账补发；生产 Event Worker 接入周期性过期 sweep
+  - 若扩展系统 actor 类型，替换全零 UUID sentinel 并按兼容流程升级冻结契约
+  - 继续保留真实 Redis、RunEvent 月分区、Registry digest、AJV codegen 和孤儿对账待办

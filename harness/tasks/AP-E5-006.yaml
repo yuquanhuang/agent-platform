@@ -1,0 +1,59 @@
+task_id: AP-E5-006
+title: 隔离、安全清理与 Artifact E2E
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - ZIP/TAR 安全检查、Zip Slip、链接、特殊条目、归档炸弹和嵌套归档阻断
+    - 签名上传/下载 URL 的精确 Origin、HTTPS、localhost 和 IP literal 防护
+    - Artifact Scan Dispatcher 强制组合隔离区内容读取与归档检查
+    - 两租户、同租户跨用户、Run 权限和来源失效的受控对象存储纵向 E2E
+    - 下载能力撤销、清理故障残留、幂等重试和最终对象删除验证
+    - Workspace Socket 文件类型回归验证
+  excludes:
+    - 生产 S3/MinIO SDK Adapter、TenantContextSource 和 Event Worker main 激活
+    - 生产 Sandbox Provider、egress proxy/NetworkPolicy 和每次连接 DNS/重定向执行
+    - Sandbox artifacts:export 内部 DTO 与 Run Attachment 冻结扩展
+    - Provider/数据库/对象存储孤儿对账与自动修复
+decisions:
+  - 归档检查只读取受限隔离区内容和成员元数据，不向宿主文件系统解包
+  - V1 嵌套归档层数固定为 0；输入上限沿用冻结 API 的 100 MiB
+  - 默认限制 2000 条目、单成员 100 MiB、展开总量 512 MiB、压缩比 100
+  - API 数据库组合启用 Artifact Store 时必须配置 AP_ARTIFACT_PUBLIC_ORIGINS
+  - 私有 MinIO 可显式配置 HTTP DNS Origin，但 localhost 和所有 IP literal 始终拒绝
+  - 清理失败后 Artifact 保持 DELETING，已签发能力仍先撤销，重试成功后才写 DELETED
+compatibility:
+  - 不修改 R10 OpenAPI、Artifact DTO、RunEvent Schema 或前端生成 Client
+  - ArtifactManagementService 内部构造要求显式 URL Policy，部署需同步设置 public origins
+  - 未新增数据库迁移、Python/Node 依赖或锁文件变化
+verification:
+  commands:
+    - targeted Artifact security/service/scan/lifecycle/Workspace/composition/E2E tests
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 路径穿越、绝对路径、Windows drive、重复路径、ZIP symlink 和 TAR 特殊条目被拒绝
+  - 加密 ZIP、文件数、单文件、展开量、压缩比和嵌套归档超限被拒绝
+  - 两租户同名 Artifact 不冲突，跨 tenant/Owner 不可见，Run 权限和来源状态继续求交
+  - 旧下载授权不能访问其他租户，删除开始后立即失效
+  - 对象删除首次失败不伪造成功，重试后隔离区和可信区对象均清空
+  - Audit 测试记录不包含 URL、Token 或对象内容
+results:
+  - 定向安全与纵向链路 63 passed
+  - make backend-check 为 561 passed、13 skipped
+  - 真实 PostgreSQL/Temporal make check-all 为后端 573 passed、1 skipped，前端 76 passed
+  - 契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+  - Black、Ruff、Pyright、Prettier、ESLint、Vue TypeScript、生产构建、uv lock 和 diff 检查通过
+follow_up:
+  - 部署生产 S3/MinIO Object Store/Scanner/Publisher/Reader/Revocation/Delete Adapter 并激活 Event Worker main
+  - 生产 egress proxy/NetworkPolicy 必须逐次校验 DNS 解析 IP 和每个 HTTP redirect，应用 Origin 校验不能替代网络层
+  - AP-E7-001 实现 Provider/数据库/Workspace/Object Storage 孤儿对账、告警和自动修复
+  - 生产隔离 Provider 认证补充真实设备节点、文件系统 Socket、并发 rename/link 和 hostile mount 测试
+  - 冻结 Sandbox artifacts:export 与 Run Attachment 契约后再接通 Workspace 导出和不可变 RunSpec
+  - 可用 Redis 端点后执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成 RunEvent 全局唯一登记表与 recorded_at 月分区事件表
+  - 现有 CI 回填 AP-E1-009 registry digest，并在前端扩展前评估 AJV standalone codegen

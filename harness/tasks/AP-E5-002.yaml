@@ -1,0 +1,53 @@
+task_id: AP-E5-002
+title: SandboxInstance、Lease 与 provision/destroy 生命周期
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - SandboxInstance/SandboxLease 领域模型、SQLAlchemy 持久化、RLS、约束和 0021 迁移
+    - Provision 幂等、Run/Attempt/Deployment/Bundle/Policy/Workspace 身份校验
+    - Lease、SHA-256 fencing、进程控制、释放、终止、销毁、失败隔离和恢复编排
+    - Temporal Run Workflow 显式 provision、Runtime Sandbox Handle 传递和 finally 清理
+    - 数据库部署装配、Provider 超时配置、审计与 Operation 原子持久化
+  excludes:
+    - Docker、Kubernetes、gVisor、Kata 或本地进程生产 Provider
+    - 生产 Provision Token Verifier、不可变 SandboxPolicy Resolver 和 Sandbox Manager main 激活
+    - Workspace 物理路径解析、软链接/TOCTOU 防护、容量统计和 Artifact 流程
+decisions:
+  - 数据库是 Sandbox 状态、Lease 和 fencing 的权威；Provider 只返回受控观察结果
+  - MVP 只允许 Run Sandbox，Workspace 必须绑定 tenant/user/session/run 且 Bundle 来自 Run Deployment
+  - Provider 调用有界超时；销毁或恢复无法确认时进入 QUARANTINED，不伪造 TERMINATED
+  - Temporal 使用 ap-e5-002-run-sandbox-v1 patch 接入生命周期，所有终态和异常路径在 finally 释放
+  - provision token 和 fencing token 不进入 Provider Spec、Workflow History、日志或响应明文
+compatibility:
+  - 未修改 R9 冻结 OpenAPI、SandboxPolicy JSON Schema 或前端生成契约
+  - 新增 0021_sandbox_lifecycle；升级建立两表、RLS、唯一约束和不可变/状态转换触发器，降级删除本阶段对象
+  - 新增 AP_SANDBOX_PROVIDER_TIMEOUT_SECONDS，默认 60 秒；未新增 Python/Node 依赖
+verification:
+  commands:
+    - targeted Sandbox lifecycle, composition, migration and Temporal tests
+    - make contract-check
+    - make backend-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - Provision 重试返回原 Operation，不同请求 Hash 冲突；Provider 崩溃窗口可恢复
+  - 同一 Sandbox 最多一个活动 Lease，旧 Attempt 或 fencing token 不能获得控制权
+  - 状态、Operation、Audit、Lease 和终止结果保持事务一致，非法数据库状态转换被拒绝
+  - Run 成功、失败、取消和安全恢复都执行 Sandbox 清理，无法确认清理时进入 QUARANTINED
+  - 跨租户、错误 Run/Attempt、非 Deployment Bundle、Policy Hash 和 Workspace 身份漂移失败关闭
+results:
+  - 全量后端 485 passed、13 个环境条件 skip；真实 PostgreSQL/Temporal 497 passed、仅真实 Redis 1 skip
+  - 前端 76 passed 并完成生产构建；契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+  - Black、Ruff、Pyright strict、Prettier、ESLint、Vue TypeScript、uv lock 与 git diff 门禁通过
+follow_up:
+  - AP-E5-003 实现 Workspace URI、受控物理路径、软链接/TOCTOU 防护、配额和生命周期
+  - AP-E5-004/005 实现 Artifact 上传、扫描、下载、过期和删除
+  - 为 Sandbox Manager 注入真实隔离 Provider、生产 Token Verifier 与不可变 Policy Resolver 后再激活 main
+  - 增加 RunSandboxController 生产 HTTP Adapter；Release/Process fencing 契约是否扩展需人工确认
+  - AP-E7-001 增加 Provider/数据库/Run/Sandbox Reconciler 和告警
+  - 可用 Redis 端点后执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成 RunEvent 全局唯一登记表与 recorded_at 月分区迁移
+  - 现有 CI 回填 AP-E1-009 生产 AgentScope 镜像 registry digest

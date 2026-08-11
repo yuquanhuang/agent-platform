@@ -10,6 +10,22 @@ from packages.domain.agents import (
     BindingRole,
     BindingVersionPolicy,
 )
+from packages.domain.approvals import (
+    APPROVAL_STATUSES,
+    ApprovalDecision,
+    ApprovalDecisionRecord,
+    ApprovalRequestRecord,
+    ApprovalStatus,
+    ensure_approval_transition,
+)
+from packages.domain.artifacts import (
+    ARTIFACT_STATUSES,
+    ArtifactRecord,
+    ArtifactStatus,
+    artifact_uri,
+    ensure_artifact_transition,
+)
+from packages.domain.audit import AuditLogRecord, AuditResult
 from packages.domain.bundles import (
     BUNDLE_COMPILER_NAME,
     BUNDLE_COMPILER_VERSION,
@@ -24,6 +40,7 @@ from packages.domain.bundles import (
     compile_agentscope_bundle,
     verify_compiled_bundle,
 )
+from packages.domain.execution_tickets import ExecutionTicketRecord
 from packages.domain.iam.public import (
     TENANT_ADMIN_PERMISSIONS,
     IdempotencyReplay,
@@ -43,6 +60,17 @@ from packages.domain.iam.public import (
     encode_cursor,
     format_etag,
     parse_etag,
+)
+from packages.domain.mcp import (
+    McpCapabilityEvidenceRecord,
+    McpCapabilitySnapshotInput,
+    McpDiscoveredTool,
+    McpDiscoveryResponse,
+    McpDiscoveryResult,
+    McpDiscoveryStatus,
+    McpDiscoveryTarget,
+    McpRawTool,
+    McpToolRiskLevel,
 )
 from packages.domain.outbox import OutboxEvent, OutboxStatus, retry_delay
 from packages.domain.publishing import (
@@ -103,6 +131,19 @@ from packages.domain.runs import (
     ensure_run_attempt_transition,
     ensure_run_transition,
 )
+from packages.domain.sandbox import (
+    SANDBOX_STATUSES,
+    WORKSPACE_STATUSES,
+    SandboxInstanceRecord,
+    SandboxLeaseRecord,
+    SandboxStatus,
+    WorkspaceRecord,
+    WorkspaceStatus,
+    WorkspaceUri,
+    ensure_sandbox_transition,
+    ensure_workspace_transition,
+    ensure_workspace_usage,
+)
 from packages.domain.sessions import (
     MessageContentPartRecord,
     MessageContentType,
@@ -112,8 +153,16 @@ from packages.domain.sessions import (
     SessionStatus,
     parse_message_content_parts,
 )
+from packages.domain.skills import (
+    SkillArtifactPayload,
+    SkillScanEvidenceRecord,
+    SkillSupplyChainScanResult,
+    ValidatedSkillPackage,
+)
 
 __all__ = [
+    "APPROVAL_STATUSES",
+    "ARTIFACT_STATUSES",
     "BUNDLE_COMPILER_NAME",
     "BUNDLE_COMPILER_VERSION",
     "BUNDLE_MANIFEST_SCHEMA_VERSION",
@@ -121,10 +170,12 @@ __all__ = [
     "RESOURCE_TYPES",
     "RUN_ATTEMPT_STATUSES",
     "RUN_STATUSES",
+    "SANDBOX_STATUSES",
     "SNAPSHOT_COMPILER_VERSION",
     "SNAPSHOT_SCHEMA_VERSION",
     "TENANT_ADMIN_PERMISSIONS",
     "TERMINAL_RUN_STATUSES",
+    "WORKSPACE_STATUSES",
     "AgentBindingRecord",
     "AgentRecord",
     "AgentReferenceRecord",
@@ -134,6 +185,14 @@ __all__ = [
     "AgentVersionRecord",
     "AgentVersionSnapshotRecord",
     "AgentVisibility",
+    "ApprovalDecision",
+    "ApprovalDecisionRecord",
+    "ApprovalRequestRecord",
+    "ApprovalStatus",
+    "ArtifactRecord",
+    "ArtifactStatus",
+    "AuditLogRecord",
+    "AuditResult",
     "BindingRole",
     "BindingVersionPolicy",
     "BundleAgentInput",
@@ -147,8 +206,18 @@ __all__ = [
     "DeploymentRecord",
     "DeploymentStatus",
     "DeploymentTransitionError",
+    "ExecutionTicketRecord",
     "IdempotencyReplay",
     "IdentitySnapshot",
+    "McpCapabilityEvidenceRecord",
+    "McpCapabilitySnapshotInput",
+    "McpDiscoveredTool",
+    "McpDiscoveryResponse",
+    "McpDiscoveryResult",
+    "McpDiscoveryStatus",
+    "McpDiscoveryTarget",
+    "McpRawTool",
+    "McpToolRiskLevel",
     "MemberRecord",
     "MembershipSnapshot",
     "MessageContentPartRecord",
@@ -187,13 +256,24 @@ __all__ = [
     "RunStatus",
     "RuntimeBundleRecord",
     "RuntimeBundleScanStatus",
+    "SandboxInstanceRecord",
+    "SandboxLeaseRecord",
+    "SandboxStatus",
     "SessionRecord",
     "SessionStatus",
+    "SkillArtifactPayload",
+    "SkillScanEvidenceRecord",
+    "SkillSupplyChainScanResult",
     "SnapshotChangeRecord",
     "SnapshotCompilationInput",
     "SnapshotPublicationRecord",
     "TenantAccess",
     "TenantRecord",
+    "ValidatedSkillPackage",
+    "WorkspaceRecord",
+    "WorkspaceStatus",
+    "WorkspaceUri",
+    "artifact_uri",
     "canonical_content_hash",
     "compile_agent_snapshot",
     "compile_agentscope_bundle",
@@ -202,10 +282,15 @@ __all__ = [
     "deployment_id",
     "diff_agent_snapshot_content",
     "encode_cursor",
+    "ensure_approval_transition",
+    "ensure_artifact_transition",
     "ensure_deployment_transition",
     "ensure_release_transition",
     "ensure_run_attempt_transition",
     "ensure_run_transition",
+    "ensure_sandbox_transition",
+    "ensure_workspace_transition",
+    "ensure_workspace_usage",
     "format_etag",
     "parse_etag",
     "parse_message_content_parts",

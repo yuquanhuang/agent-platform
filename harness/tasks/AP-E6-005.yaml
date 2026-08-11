@@ -1,0 +1,53 @@
+task_id: AP-E6-005
+title: 一次性 Execution Ticket 和 Tool Gateway 消费
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - 不可变短时 Execution Ticket、nonce Hash 和单次原子消费
+    - Approval APPROVED 决策与 Ticket 在同一 PostgreSQL 事务创建
+    - Tool Gateway 逐次重校验 Tenant、Requester、Run、Attempt、Deployment、权限和审批状态
+    - Tool、Schema、参数摘要、Policy Version 和 Deployment 不可变绑定
+    - Ticket 消费后恢复 Run，并记录消费、重放、拒绝和执行审计
+  excludes:
+    - AgentScope RequireUserConfirmEvent 和 RequireExternalExecutionEvent 的生产 Runtime Bridge
+    - HIGH 风险 Bundle 发布阻断解锁及 AP-E6-007 纵向 E2E
+    - 生产 MCP Gateway、Secret Broker 和外部工具网络 Adapter
+    - AP-E7-001 的 Approval Signal、Ticket 和执行状态对账补偿
+decisions:
+  - 保持 R10 OpenAPI、RunEvent Schema、RunSpec 和生成 Client 不变
+  - Ticket ref 只暴露 execution-ticket UUID 引用，nonce 明文不持久化、不进入 Signal 或审计
+  - 使用部署密钥 HMAC 确定性派生 nonce，支持审批 Signal 失败后的幂等重建
+  - Tool Gateway 自行规范化 JSON 并重算参数摘要，不信任调用方或模型声明
+  - 先原子消费 Ticket 再调用 Executor，外部执行失败不恢复 Ticket，形成 at-most-once 边界
+  - HIGH Bundle 继续以 POLICY_APPROVAL_REQUIRED 失败关闭，待生产 Runtime Bridge 和 E2E 完成后再评估解锁
+compatibility:
+  - 新增 Alembic 0028_execution_ticket_gateway；冻结公共 API、事件和前端行为无变化
+  - ApprovalManagementService 仅新增可选 ExecutionTicketIssuer 注入，未配置时保持失败关闭边界
+  - 未新增 Python 或 Node 依赖，锁文件无本阶段新增项
+verification:
+  commands:
+    - targeted Execution Ticket、Tool Gateway、Approval、ORM 和 migration tests
+    - PostgreSQL resource registry Execution Ticket、RLS、消费、重放、过期和审计 integration test
+    - make backend-check
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - Ticket 精确绑定审批和一次工具调用，nonce 仅保存 sha256 Hash
+  - 跨 Run、旧 Attempt、参数或 Schema/Policy/Deployment 变化均拒绝执行
+  - 消费、Approval CONSUMED 和 Run RUNNING 在同一事务完成，重放不二次调用 Executor
+  - Ticket 过期使 Approval 进入 EXPIRED、Run 进入 TIMEOUT，并保存稳定错误码和安全审计
+  - Executor 失败保存 FAILED 审计且 Ticket 不恢复，不产生伪造成功结果
+results:
+  - 定向测试 63 passed；真实 PostgreSQL Resource Registry 集成测试 1 passed
+  - make backend-check 为 638 passed、14 skipped；make check 前后端和契约门禁通过
+  - 真实 PostgreSQL/Temporal make check-all 为后端 651 passed、1 skipped，前端 24 个测试文件、81 passed
+  - R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移
+follow_up:
+  - AP-E6-006 完成 Audit 查询、保留和敏感字段脱敏的统一能力
+  - AP-E6-007 实现生产 AgentScope 暂停、审批、Ticket 取回、外部执行结果恢复和高风险工具 E2E
+  - AP-E7-001 增加 Approval Signal、Ticket、Run 和外部执行状态对账补偿
+  - 生产部署必须注入至少 32 字节的 Execution Ticket HMAC 密钥并接入 Secret 管理
+  - 继续保留真实 Redis、RunEvent 全局登记表加月分区、Registry digest、AJV codegen 和孤儿对账待办

@@ -47,6 +47,14 @@ const messagesQuery = useQuery({
   ),
 });
 
+const runsQuery = useQuery({
+  queryKey: computed(() => ['session-runs', sessionId.value]),
+  queryFn: () => sessionService.listRuns(sessionId.value, { limit: 10 }),
+  enabled: computed(
+    () => sessionQuery.isSuccess.value && sessionQuery.data.value?.status !== 'DELETED',
+  ),
+});
+
 const messages = computed(() => [...(messagesQuery.data.value?.items ?? [])]);
 
 function searchBranch(): void {
@@ -123,6 +131,34 @@ function formatCreatedAt(value: string): string {
             查询分支
           </ElButton>
         </ElSpace>
+      </ElCard>
+
+      <ElCard shadow="never" aria-labelledby="session-runs-title">
+        <template #header>
+          <ElText id="session-runs-title" tag="h2">Run 运行记录</ElText>
+        </template>
+        <ElSkeleton v-if="runsQuery.isPending.value" :rows="3" animated />
+        <ElAlert
+          v-else-if="runsQuery.isError.value"
+          title="Run 列表加载失败"
+          type="error"
+          :closable="false"
+          show-icon
+        >
+          <ElButton @click="runsQuery.refetch()">重新加载</ElButton>
+        </ElAlert>
+        <ElEmpty v-else-if="runsQuery.data.value?.items.length === 0" description="暂无 Run" />
+        <div v-else class="session-messages__runs">
+          <RouterLink
+            v-for="run in runsQuery.data.value?.items"
+            :key="run.id"
+            class="session-messages__run-link"
+            :to="{ name: 'run-detail', params: { id: run.id } }"
+          >
+            <span>{{ run.id }}</span>
+            <ElTag>{{ run.status }}</ElTag>
+          </RouterLink>
+        </div>
       </ElCard>
 
       <ElSkeleton v-if="messagesQuery.isPending.value" :rows="8" animated />
@@ -227,5 +263,24 @@ function formatCreatedAt(value: string): string {
 }
 .session-messages__pagination {
   justify-content: flex-end;
+}
+.session-messages__runs {
+  display: grid;
+  gap: var(--ap-space-2);
+}
+.session-messages__run-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ap-space-3);
+  border-radius: var(--ap-radius-sm);
+  color: var(--el-color-primary);
+  padding: var(--ap-space-2) var(--ap-space-3);
+  text-decoration: none;
+}
+.session-messages__run-link:hover,
+.session-messages__run-link:focus-visible {
+  background: var(--el-color-primary-light-9);
+  outline: none;
 }
 </style>

@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 from pydantic import SecretStr
+from temporalio.exceptions import ApplicationError
 
 from packages.application.temporal import (
     AgentRunWorkflowActivities,
@@ -15,8 +16,12 @@ from packages.application.temporal import (
     RunExecutionRequest,
     RunRuntimeCancellationRequest,
     RunRuntimeController,
+    RunRuntimeError,
     RunRuntimeExecutor,
     RunRuntimeInspectionRequest,
+    RunSandboxController,
+    RunSandboxProvisionRequest,
+    RunSandboxReleaseRequest,
     RunSpecCompilationSource,
     RunSpecCompiler,
     RuntimeEventCandidatePublisher,
@@ -36,7 +41,11 @@ from packages.contracts.temporal import (
     FinalizeAgentRunInput,
     FinalizeAgentRunResult,
     InspectAgentRuntimeInput,
+    ProvisionRunSandboxInput,
     RecoverAgentRunInput,
+    ReleaseRunSandboxInput,
+    ReleaseRunSandboxResult,
+    RunSandboxHandle,
     RunSpecReference,
     RuntimeCancellationResult,
     RuntimeCompletion,
@@ -281,11 +290,39 @@ class ControllerStub:
         )
 
 
+class SandboxControllerStub:
+    def __init__(self) -> None:
+        self.provisions: list[RunSandboxProvisionRequest] = []
+        self.releases: list[RunSandboxReleaseRequest] = []
+
+    async def provision(
+        self, context: TenantContext, *, request: RunSandboxProvisionRequest
+    ) -> RunSandboxHandle:
+        assert context.tenant_id == str(TENANT_ID)
+        self.provisions.append(request)
+        return RunSandboxHandle(
+            sandbox_instance_id="sandbox_001",
+            lease_id="lease_001",
+            workspace_uri=f"workspace://tenant/{TENANT_ID}/runs/{RUN_ID}/",
+        )
+
+    async def release(
+        self, context: TenantContext, *, request: RunSandboxReleaseRequest
+    ) -> ReleaseRunSandboxResult:
+        assert context.tenant_id == str(TENANT_ID)
+        self.releases.append(request)
+        return ReleaseRunSandboxResult(
+            sandbox_instance_id=request.sandbox.sandbox_instance_id,
+            status="TERMINATED",
+        )
+
+
 def activities(
     store: StoreStub,
     compiler: CompilerStub,
     executor: ExecutorStub,
     controller: ControllerStub | None = None,
+    sandbox_controller: SandboxControllerStub | None = None,
     publisher: PublisherStub | None = None,
 ) -> AgentRunWorkflowActivities:
     return AgentRunWorkflowActivities(
@@ -295,6 +332,11 @@ def activities(
         cast(RunRuntimeExecutor, executor),
         cast(RuntimeEventCandidatePublisher, publisher or PublisherStub()),
         cast(RunRuntimeController, controller) if controller else None,
+        (
+            cast(RunSandboxController, sandbox_controller)
+            if sandbox_controller
+            else None
+        ),
     )
 
 
@@ -340,6 +382,76 @@ async def test_execute_marks_attempt_running_before_runtime_call() -> None:
     assert [candidate.event_type for _, candidate in publisher.published] == [
         "text_delta"
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_preserves_runtime_adapter_failure_code() -> None:
+    class FailingExecutor(ExecutorStub):
+        async def execute(self, *args: object, **kwargs: object) -> RuntimeCompletion:
+            raise RunRuntimeError(
+                "RUN_CANCELLING",
+                "The approval was rejected.",
+            )
+
+    with pytest.raises(ApplicationError) as raised:
+        await activities(
+            StoreStub(), CompilerStub(), FailingExecutor()
+        ).execute_agent_run(
+            ExecuteAgentRunInput(
+                tenant_id=TENANT_ID,
+                run_id=RUN_ID,
+                execution_attempt=1,
+                run_spec=RUN_SPEC,
+                timeout_seconds=120,
+                runtime_type="agentscope",
+                request_id="req-run",
+                trace_id="trace-run",
+            )
+        )
+
+    assert getattr(raised.value, "type", None) == "RUN_CANCELLING"
+
+
+@pytest.mark.asyncio
+async def test_provision_and_release_keep_fencing_secret_inside_activity() -> None:
+    sandbox_controller = SandboxControllerStub()
+    coordinated = activities(
+        StoreStub(),
+        CompilerStub(),
+        ExecutorStub(),
+        sandbox_controller=sandbox_controller,
+    )
+    handle = await coordinated.provision_run_sandbox(
+        ProvisionRunSandboxInput(
+            tenant_id=TENANT_ID,
+            run_id=RUN_ID,
+            execution_attempt=1,
+            run_spec=RUN_SPEC,
+            runtime_type="agentscope",
+            request_id="req-sandbox",
+            trace_id="trace-sandbox",
+        )
+    )
+    released = await coordinated.release_run_sandbox(
+        ReleaseRunSandboxInput(
+            tenant_id=TENANT_ID,
+            run_id=RUN_ID,
+            execution_attempt=1,
+            sandbox=handle,
+            request_id="req-sandbox-release",
+            trace_id="trace-sandbox-release",
+        )
+    )
+
+    assert released.status == "TERMINATED"
+    assert (
+        sandbox_controller.provisions[0]
+        .fencing_token.get_secret_value()
+        .endswith("0001")
+    )
+    assert (
+        sandbox_controller.releases[0].fencing_token.get_secret_value().endswith("0001")
+    )
 
 
 @pytest.mark.asyncio

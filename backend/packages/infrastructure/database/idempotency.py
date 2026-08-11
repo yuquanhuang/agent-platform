@@ -17,6 +17,45 @@ from packages.infrastructure.database.models import IdempotencyRecordModel
 IDEMPOTENCY_TTL = timedelta(hours=24)
 
 
+async def get_idempotency_replay(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID | None,
+    actor_id: UUID,
+    operation_type: str,
+    idempotency_key: str,
+    request_hash: str,
+) -> IdempotencyReplay | None:
+    """Return a completed replay before expensive external validation starts."""
+
+    tenant_filter = (
+        IdempotencyRecordModel.tenant_id.is_(None)
+        if tenant_id is None
+        else IdempotencyRecordModel.tenant_id == tenant_id
+    )
+    record = await session.scalar(
+        select(IdempotencyRecordModel).where(
+            tenant_filter,
+            IdempotencyRecordModel.actor_id == actor_id,
+            IdempotencyRecordModel.operation_type == operation_type,
+            IdempotencyRecordModel.idempotency_key == idempotency_key,
+        )
+    )
+    if record is None or record.expires_at <= datetime.now(UTC):
+        return None
+    if record.request_hash != request_hash:
+        raise idempotency_key_reused()
+    if record.status != "COMPLETED" or record.response_body_json is None:
+        raise resource_state_conflict(
+            "The original idempotent request is still running."
+        )
+    return IdempotencyReplay(
+        response_status=record.response_status,
+        response_body=record.response_body_json,
+        response_etag=record.response_etag,
+    )
+
+
 async def claim_idempotency(
     session: AsyncSession,
     *,

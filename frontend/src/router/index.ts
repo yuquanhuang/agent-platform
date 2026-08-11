@@ -66,6 +66,24 @@ export const router = createRouter({
           component: () => import('@/views/sessions/SessionMessageView.vue'),
           meta: { permission: 'message:list' },
         },
+        {
+          path: 'runs/:id',
+          name: 'run-detail',
+          component: () => import('@/views/runs/RunDetailView.vue'),
+          meta: { permission: 'run:read' },
+        },
+        {
+          path: 'approvals',
+          name: 'approval-center',
+          component: () => import('@/views/approvals/ApprovalCenterView.vue'),
+          meta: { permission: 'approval:list' },
+        },
+        {
+          path: 'admin/audit',
+          name: 'audit-log',
+          component: () => import('@/views/admin/AuditLogView.vue'),
+          meta: { permission: 'audit:list' },
+        },
       ],
     },
     {

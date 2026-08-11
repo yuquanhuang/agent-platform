@@ -13,6 +13,7 @@ from packages.contracts.temporal import (
     AgentRunWorkflowInput,
     AgentRunWorkflowResult,
     AgentRunWorkflowState,
+    ApprovalDecidedSignal,
     CancelAgentRuntimeInput,
     CancelRunSignal,
     ExecuteAgentRunInput,
@@ -20,11 +21,15 @@ from packages.contracts.temporal import (
     FinalizeAgentRunInput,
     FinalizeAgentRunResult,
     InspectAgentRuntimeInput,
+    ProvisionRunSandboxInput,
     PublishAgentWorkflowInput,
     PublishAgentWorkflowResult,
     PublishReleaseFailureInput,
     RecoverAgentRunInput,
+    ReleaseRunSandboxInput,
+    ReleaseRunSandboxResult,
     RunPreparationResult,
+    RunSandboxHandle,
     RuntimeCancellationResult,
     RuntimeCompletion,
     RuntimeInspection,
@@ -87,21 +92,27 @@ class AgentRunWorkflow:
     def __init__(self) -> None:
         self._state: AgentRunWorkflowState | None = None
         self._processed_cancel_signal_ids: set[str] = set()
+        self._processed_approval_signal_ids: set[str] = set()
+        self._approval_resolutions: dict[UUID, ApprovalDecidedSignal] = {}
         self._cancel_requested = False
         self._execution_handle = None
         self._cancellation_enabled = False
+        self._sandbox_enabled = False
 
     @workflow.run
     async def run(self, input: AgentRunWorkflowInput) -> AgentRunWorkflowResult:
         self._cancellation_enabled = workflow.patched(
             "ap-e3-005-run-cancel-recovery-v1"
         )
+        self._sandbox_enabled = workflow.patched("ap-e5-002-run-sandbox-v1")
         self._state = AgentRunWorkflowState(
             run_id=input.run_id,
             status="CREATED",
             current_activity="prepare_agent_run_v1",
             execution_attempt=0,
             runtime_handle_ref=None,
+            runtime_session_id=None,
+            sandbox_instance_id=None,
             latest_sequence_no=0,
             cancel_requested=self._cancel_requested,
             waiting_approval_id=None,
@@ -133,38 +144,59 @@ class AgentRunWorkflow:
         while True:
             self._update_state(
                 status="PREPARING",
-                current_activity="execute_agent_run_v1",
+                current_activity=(
+                    "provision_run_sandbox_v1"
+                    if self._sandbox_enabled
+                    else "execute_agent_run_v1"
+                ),
                 execution_attempt=preparation.execution_attempt,
             )
-            try:
-                completion = await self._execute(input, preparation)
-            except asyncio.CancelledError:
-                if self._cancellation_enabled and self._cancel_requested:
-                    return await self._cancel(input)
-                raise
-            except ActivityError as error:
-                if self._cancellation_enabled and (
-                    self._cancel_requested
-                    or _activity_error_code(error) == "RUN_CANCELLING"
-                ):
-                    return await self._cancel(input)
-                if not self._cancellation_enabled:
+            sandbox: RunSandboxHandle | None = None
+            sandbox_execution_attempt = preparation.execution_attempt
+            if self._sandbox_enabled:
+                try:
+                    sandbox = await self._provision_sandbox(input, preparation)
+                except ActivityError as error:
                     finalization = await self._finalize_activity_failure(input, error)
                     self._apply_finalization(finalization)
                     raise
-                recovered = await self._recover_or_fail(
-                    input, preparation.execution_attempt, error
+            try:
+                try:
+                    completion = await self._execute(input, preparation, sandbox)
+                except asyncio.CancelledError:
+                    if self._cancellation_enabled and self._cancel_requested:
+                        return await self._cancel(input)
+                    raise
+                except ActivityError as error:
+                    if self._cancellation_enabled and (
+                        self._cancel_requested
+                        or _activity_error_code(error) == "RUN_CANCELLING"
+                    ):
+                        return await self._cancel(input)
+                    if not self._cancellation_enabled:
+                        finalization = await self._finalize_activity_failure(
+                            input, error
+                        )
+                        self._apply_finalization(finalization)
+                        raise
+                    recovered = await self._recover_or_fail(
+                        input, preparation.execution_attempt, error
+                    )
+                    if isinstance(recovered, RunPreparationResult):
+                        preparation = recovered
+                        continue
+                    return self._result(input, recovered)
+                if self._cancellation_enabled and self._cancel_requested:
+                    return await self._cancel(input)
+                finalization = await self._finalize_completion(
+                    input, preparation.execution_attempt, completion
                 )
-                if isinstance(recovered, RunPreparationResult):
-                    preparation = recovered
-                    continue
-                return self._result(input, recovered)
-            if self._cancellation_enabled and self._cancel_requested:
-                return await self._cancel(input)
-            finalization = await self._finalize_completion(
-                input, preparation.execution_attempt, completion
-            )
-            return self._result(input, finalization)
+                return self._result(input, finalization)
+            finally:
+                if sandbox is not None:
+                    await self._release_sandbox(
+                        input, sandbox_execution_attempt, sandbox
+                    )
 
     @workflow.signal(name="cancel_run")
     async def cancel_run(self, signal: CancelRunSignal) -> None:
@@ -184,6 +216,25 @@ class AgentRunWorkflow:
             if self._cancellation_enabled and self._execution_handle is not None:
                 self._execution_handle.cancel()
 
+    @workflow.signal(name="approval_decided")
+    async def approval_decided(self, signal: ApprovalDecidedSignal) -> None:
+        """Record one immutable Approval resolution without trusting tool facts."""
+
+        if signal.signal_id in self._processed_approval_signal_ids:
+            return
+        self._processed_approval_signal_ids.add(signal.signal_id)
+        existing = self._approval_resolutions.get(signal.approval_id)
+        if existing is None:
+            self._approval_resolutions[signal.approval_id] = signal
+            if signal.decision in {"REJECTED", "EXPIRED", "CANCELLED"}:
+                self._cancel_requested = True
+                if self._state is not None:
+                    self._state = self._state.model_copy(
+                        update={"cancel_requested": True}
+                    )
+                if self._execution_handle is not None:
+                    self._execution_handle.cancel()
+
     @workflow.query(name="run_state")
     def run_state(self) -> AgentRunWorkflowState:
         if self._state is None:
@@ -191,7 +242,10 @@ class AgentRunWorkflow:
         return self._state
 
     async def _execute(
-        self, input: AgentRunWorkflowInput, preparation: RunPreparationResult
+        self,
+        input: AgentRunWorkflowInput,
+        preparation: RunPreparationResult,
+        sandbox: RunSandboxHandle | None,
     ) -> RuntimeCompletion:
         execution_input = ExecuteAgentRunInput(
             tenant_id=input.tenant_id,
@@ -200,6 +254,7 @@ class AgentRunWorkflow:
             run_spec=preparation.run_spec,
             timeout_seconds=preparation.timeout_seconds,
             runtime_type=preparation.runtime_type,
+            sandbox=sandbox,
             request_id=input.request_id,
             trace_id=input.trace_id,
         )
@@ -220,6 +275,73 @@ class AgentRunWorkflow:
             return await self._execution_handle
         finally:
             self._execution_handle = None
+
+    async def _provision_sandbox(
+        self, input: AgentRunWorkflowInput, preparation: RunPreparationResult
+    ) -> RunSandboxHandle:
+        handle = await workflow.execute_activity(
+            "provision_run_sandbox_v1",
+            ProvisionRunSandboxInput(
+                tenant_id=input.tenant_id,
+                run_id=input.run_id,
+                execution_attempt=preparation.execution_attempt,
+                run_spec=preparation.run_spec,
+                runtime_type=preparation.runtime_type,
+                request_id=input.request_id,
+                trace_id=input.trace_id,
+            ),
+            start_to_close_timeout=timedelta(minutes=2),
+            schedule_to_close_timeout=timedelta(minutes=5),
+            result_type=RunSandboxHandle,
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=1),
+                maximum_interval=timedelta(seconds=15),
+                maximum_attempts=5,
+            ),
+        )
+        self._update_state(
+            sandbox_instance_id=handle.sandbox_instance_id,
+            current_activity="execute_agent_run_v1",
+        )
+        return handle
+
+    async def _release_sandbox(
+        self,
+        input: AgentRunWorkflowInput,
+        execution_attempt: int,
+        sandbox: RunSandboxHandle,
+    ) -> None:
+        self._update_state(current_activity="release_run_sandbox_v1")
+        try:
+            await workflow.execute_activity(
+                "release_run_sandbox_v1",
+                ReleaseRunSandboxInput(
+                    tenant_id=input.tenant_id,
+                    run_id=input.run_id,
+                    execution_attempt=execution_attempt,
+                    sandbox=sandbox,
+                    request_id=input.request_id,
+                    trace_id=input.trace_id,
+                ),
+                start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=5),
+                result_type=ReleaseRunSandboxResult,
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    maximum_interval=timedelta(seconds=15),
+                    maximum_attempts=5,
+                ),
+            )
+        except ActivityError:
+            # Run finalization remains authoritative; AP-E7-001 reconciles leaked
+            # Sandbox instances from terminal Run facts.
+            workflow.logger.error(
+                "Run Sandbox release exhausted retries run_id=%s sandbox_id=%s",
+                input.run_id,
+                sandbox.sandbox_instance_id,
+            )
+        finally:
+            self._update_state(current_activity=None)
 
     async def _recover_or_fail(
         self,

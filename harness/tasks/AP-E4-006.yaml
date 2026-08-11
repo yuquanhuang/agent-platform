@@ -1,0 +1,55 @@
+task_id: AP-E4-006
+title: Vue 独立 RunEvent Reducer 与复合键状态隔离
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - 20 类冻结 RunEvent 的纯函数 UI 投影与穷尽类型检查
+    - sequence_no 重复、旧事件、乱序缺口、历史补洞和 latest_sequence_no 高水位语义
+    - 文本、Thinking、计划、工具、审批、任务、Artifact、Warning 和唯一终态投影
+    - tenant_id + session_id + run_id 复合键 Pinia Registry 与租户清理
+    - 复用生成 Client 的 RunEvent 历史和 SSE Service 边界、Last-Event-ID 校验
+  excludes:
+    - Run 页面、SSE 帧解析、自动重连和指数退避（AP-E4-007）
+    - 修改 Session Message 持久化历史或把临时投影写入 Vue Query Cache
+    - 修改 AG-UI Adapter、冻结 OpenAPI/RunEvent Schema 或后端 SSE
+decisions:
+  - PostgreSQL RunEvent 仍是唯一事实源；Reducer 只保存可重建 UI 投影
+  - sequence_no 小于等于 lastSequenceNo 时忽略；大于 expected 时记录缺口且不应用事件
+  - 终态后新事实记录 terminalConflict，保留首个终态并禁止流关闭
+  - 审批批准恢复 RUNNING，拒绝/取消进入 CANCELLING，过期进入 TIMEOUT，与冻结 Run 状态机一致
+  - Thinking 只有 canViewThinking=true 时进入结构化正文投影，但事件序号始终推进
+  - 不保存完整原始事件数组，避免长 Run 无界增长和敏感 Payload 长期驻留
+  - SessionMessageView 保持只读持久化历史；实时投影按复合键单独管理
+compatibility:
+  - R9 OpenAPI、RunEvent JSON Schema、生成 DTO、SSE data 和数据库结构未修改
+  - 未新增 Node/Python 依赖或锁文件变化
+  - AP-E4-005 AG-UI 出口和本阶段 Vue RunEvent Reducer 保持独立消费者边界
+verification:
+  commands:
+    - pnpm format:check
+    - pnpm lint
+    - pnpm typecheck
+    - pnpm test
+    - pnpm build
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - git diff --check
+acceptance:
+  - 重复和旧事件不改变投影；缺口事件暂停并可在补齐后继续
+  - 全部 20 类 RunEvent 产生确定性结构化投影，普通用户不保存 Thinking 正文
+  - 终态唯一，存在缺口、终态冲突或未追平高水位时不得关闭流
+  - 不同 tenant/session/run 的同名资源不串用状态，租户切换可清理投影
+  - 历史分页和 SSE 使用同一生成 Client/Reducer 边界，Last-Event-ID 来自已应用序号
+results:
+  - 新增纯函数 RunEvent Reducer、Pinia Registry、Run Service 和 19 项定向测试
+  - 前端 18 个测试文件、57 项测试通过
+  - check-all 后端 441 passed、1 skipped；前端 57 passed
+  - 契约 31 个完整性文件、168 operationId、16 个生成文件零漂移
+  - 无依赖、契约、数据库或后端公共行为变化
+follow_up:
+  - AP-E4-007 实现 SSE 运行时解析、历史补洞、重连退避、终态关闭和 Run 页面 E2E
+  - SSE JSON 运行时验证应由契约生成或统一传输适配层提供，不手写重复 DTO
+  - 可用 Redis 端点后继续执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成全局唯一登记表与 recorded_at 月分区事件表迁移

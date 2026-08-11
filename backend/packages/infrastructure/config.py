@@ -58,6 +58,7 @@ class AppSettings(BaseSettings):
         Annotated[str, Field(min_length=1, max_length=255)] | None
     ) = None
     object_storage_credential_ref: SecretReference | None = None
+    artifact_public_origins: tuple[str, ...] = ()
     temporal_address: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     temporal_namespace: Annotated[str, Field(min_length=1, max_length=255)] | None = (
         None
@@ -66,6 +67,11 @@ class AppSettings(BaseSettings):
     worker_shutdown_grace_seconds: Annotated[float, Field(ge=0, le=300)] = 30.0
     outbox_batch_size: Annotated[int, Field(ge=1, le=500)] = 50
     outbox_max_attempts: Annotated[int, Field(ge=1, le=100)] = 10
+    sse_page_size: Annotated[int, Field(ge=1, le=200)] = 200
+    sse_heartbeat_seconds: Annotated[float, Field(gt=0, le=300)] = 15.0
+    sse_poll_interval_seconds: Annotated[float, Field(gt=0, le=60)] = 1.0
+    sse_send_timeout_seconds: Annotated[float, Field(gt=0, le=300)] = 15.0
+    sandbox_provider_timeout_seconds: Annotated[float, Field(gt=0, le=300)] = 60.0
     metrics_allowed_networks: tuple[str, ...] = ("127.0.0.1/32", "::1/128")
     oidc_issuer: AnyHttpUrl | None = None
     oidc_client_id: Annotated[str, Field(min_length=1, max_length=255)] | None = None

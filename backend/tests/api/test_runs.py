@@ -18,6 +18,7 @@ from packages.application.public import (
     RunEventQueryService,
     RunEventQueryStore,
     RunEventRecord,
+    RunEventStreamService,
     RunManagementService,
     RunStore,
 )
@@ -73,6 +74,7 @@ def record() -> RunRecord:
 class Stub:
     def __init__(self) -> None:
         self.current_record = record()
+        self.event_afters: list[int] = []
 
     async def resolve_tenant_access(
         self, principal: AuthenticatedPrincipal, metadata: RequestMetadata
@@ -110,6 +112,15 @@ class Stub:
         return self.current_record
 
     async def list_events(self, _context: TenantContext, **_kwargs: object):
+        after = cast(int, _kwargs["after"])
+        self.event_afters.append(after)
+        if after >= 1:
+            return RunEventPageRecord(
+                events=(),
+                latest_sequence_no=1,
+                has_more=False,
+                is_terminal=True,
+            )
         return RunEventPageRecord(
             events=(
                 RunEventRecord(
@@ -134,6 +145,7 @@ class Stub:
             ),
             latest_sequence_no=1,
             has_more=False,
+            is_terminal=True,
         )
 
     async def request_cancel(self, _context: TenantContext, **_kwargs: object):
@@ -152,14 +164,16 @@ class Stub:
 def build_app():
     settings = AppSettings()
     stub = Stub()
-    return create_app(
+    event_query = RunEventQueryService(stub, cast(RunEventQueryStore, stub))
+    application = create_app(
         settings,
         identity_provider=MockIdentityProvider(settings, now=lambda: NOW),
         run_service=RunManagementService(stub, cast(RunStore, stub)),
-        run_event_query_service=RunEventQueryService(
-            stub, cast(RunEventQueryStore, stub)
-        ),
+        run_event_query_service=event_query,
+        run_event_stream_service=RunEventStreamService(event_query),
     )
+    application.state.run_stub = stub
+    return application
 
 
 def test_app_openapi_registers_frozen_run_operations() -> None:
@@ -171,9 +185,74 @@ def test_app_openapi_registers_frozen_run_operations() -> None:
         "createRun",
         "getRun",
         "listRunEvents",
+        "streamRunEvents",
         "cancelRun",
         "retryRun",
     } <= operation_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path_suffix", ["stream", "events/stream"])
+async def test_stream_run_events_supports_frozen_and_accepted_compatibility_paths(
+    path_suffix: str,
+) -> None:
+    transport = httpx.ASGITransport(app=build_app())
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            f"/api/v1/runs/{RUN_ID}/{path_suffix}?after=0",
+            headers={
+                "Authorization": "Bearer mock",
+                "X-Request-ID": "req-run-stream",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "id: 1\nevent: run_event\ndata:" in response.text
+    assert '"event_type":"run_created"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_stream_last_event_id_takes_precedence_over_query_after() -> None:
+    application = build_app()
+    transport = httpx.ASGITransport(app=application)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            f"/api/v1/runs/{RUN_ID}/stream?after=0",
+            headers={
+                "Authorization": "Bearer mock",
+                "Last-Event-ID": "1",
+                "X-Request-ID": "req-run-resume",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.content == b""
+    assert application.state.run_stub.event_afters == [1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_event_id", ["-1", "01", "not-a-sequence"])
+async def test_stream_rejects_invalid_last_event_id(last_event_id: str) -> None:
+    transport = httpx.ASGITransport(app=build_app())
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            f"/api/v1/runs/{RUN_ID}/stream?after=0",
+            headers={
+                "Authorization": "Bearer mock",
+                "Last-Event-ID": last_event_id,
+                "X-Request-ID": "req-run-invalid-resume",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 @pytest.mark.asyncio

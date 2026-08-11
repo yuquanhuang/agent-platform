@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.application.event_service import (
+    RUN_EVENTS_APPENDED_EVENT,
     EventAppendItem,
     EventBatchFailure,
     EventBatchStoreOutcome,
@@ -44,7 +45,6 @@ from packages.infrastructure.database.models import (
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxWriter
 from packages.infrastructure.database.uow import TenantUnitOfWork
 
-RUN_EVENTS_APPENDED_EVENT = "run.events_appended.v1"
 TERMINAL_EVENT_STATUSES = {
     "run_succeeded": "SUCCEEDED",
     "run_failed": "FAILED",
@@ -373,6 +373,100 @@ class SqlAlchemyRunEventStore:
         return EventBatchStoreOutcome(items=tuple(_complete_results(results)))
 
 
+async def append_control_run_event(
+    session: AsyncSession,
+    context: TenantContext,
+    *,
+    run: AgentRunModel,
+    execution_attempt: int,
+    candidate: RuntimeEventCandidate,
+) -> RunEventModel:
+    """Append one trusted control-plane event in the caller's transaction."""
+
+    if candidate.event_type not in {"approval_required", "approval_resolved"}:
+        raise ValueError("Only Approval control events may use this append boundary")
+    existing = await session.scalar(
+        select(RunEventModel).where(
+            RunEventModel.tenant_id == run.tenant_id,
+            RunEventModel.run_id == run.id,
+            RunEventModel.execution_attempt == execution_attempt,
+            RunEventModel.source_event_id == candidate.source_event_id,
+        )
+    )
+    if existing is not None:
+        if not _same_idempotent_candidate(_from_row(existing), candidate):
+            raise RuntimeError("Approval control event source id was reused")
+        return existing
+
+    await session.execute(
+        insert(RunEventCounterModel)
+        .values(run_id=run.id, tenant_id=run.tenant_id, next_sequence_no=1)
+        .on_conflict_do_nothing(index_elements=[RunEventCounterModel.run_id])
+    )
+    counter = await session.scalar(
+        select(RunEventCounterModel)
+        .where(
+            RunEventCounterModel.tenant_id == run.tenant_id,
+            RunEventCounterModel.run_id == run.id,
+        )
+        .with_for_update()
+    )
+    if counter is None or counter.next_sequence_no != run.latest_sequence_no + 1:
+        raise RuntimeError("RunEvent counter and Run cursor are inconsistent")
+    sequence_no = counter.next_sequence_no
+    recorded_at = datetime.now(UTC)
+    event = RunEventModel(
+        id=_event_id(
+            run.tenant_id,
+            run.id,
+            execution_attempt,
+            candidate.source_event_id,
+        ),
+        tenant_id=run.tenant_id,
+        run_id=run.id,
+        session_id=run.session_id,
+        sequence_no=sequence_no,
+        source_event_id=candidate.source_event_id,
+        execution_attempt=execution_attempt,
+        schema_version="1.0",
+        event_type=candidate.event_type,
+        payload_version=candidate.payload_version,
+        payload_json=candidate.payload.model_dump(mode="json"),
+        occurred_at=candidate.occurred_at,
+        recorded_at=recorded_at,
+        trace_id=context.trace_id,
+    )
+    session.add(event)
+    counter.next_sequence_no = sequence_no + 1
+    run.latest_sequence_no = sequence_no
+    SqlAlchemyOutboxWriter(session, context).add(
+        OutboxEvent(
+            id=uuid5(
+                NAMESPACE_URL,
+                f"run-events-outbox/{run.tenant_id}/{run.id}/{sequence_no}/{sequence_no}",
+            ),
+            tenant_id=run.tenant_id,
+            aggregate_type="run_event",
+            aggregate_id=run.id,
+            event_type=RUN_EVENTS_APPENDED_EVENT,
+            payload={
+                "tenant_id": str(run.tenant_id),
+                "run_id": str(run.id),
+                "first_sequence_no": sequence_no,
+                "last_sequence_no": sequence_no,
+                "event_count": 1,
+            },
+            payload_schema_version=1,
+            status=OutboxStatus.PENDING,
+            attempts=0,
+            next_attempt_at=recorded_at,
+            created_at=recorded_at,
+        )
+    )
+    await session.flush()
+    return event
+
+
 class SqlAlchemyRunEventQueryStore:
     """Read one ownership-scoped, cursor-consistent RunEvent history page."""
 
@@ -419,6 +513,12 @@ class SqlAlchemyRunEventQueryStore:
                         events=(),
                         latest_sequence_no=latest_sequence_no,
                         has_more=False,
+                        is_terminal=await _last_event_is_terminal(
+                            unit_of_work.session,
+                            tenant_id=tenant_id,
+                            run_id=run_id,
+                            latest_sequence_no=latest_sequence_no,
+                        ),
                     )
                 rows = list(
                     (
@@ -441,10 +541,18 @@ class SqlAlchemyRunEventQueryStore:
                     limit=limit,
                     latest_sequence_no=latest_sequence_no,
                 )
+                page_rows = rows[:limit]
+                has_more = len(rows) > limit
                 return RunEventPageRecord(
-                    events=tuple(_event_record(row) for row in rows[:limit]),
+                    events=tuple(_event_record(row) for row in page_rows),
                     latest_sequence_no=latest_sequence_no,
-                    has_more=len(rows) > limit,
+                    has_more=has_more,
+                    is_terminal=(
+                        not has_more
+                        and bool(page_rows)
+                        and page_rows[-1].sequence_no == latest_sequence_no
+                        and page_rows[-1].event_type in TERMINAL_EVENT_STATUSES
+                    ),
                 )
         except PlatformError:
             raise
@@ -520,6 +628,25 @@ def _ensure_contiguous_rows(
             observed_sequence_no=None,
             latest_sequence_no=latest_sequence_no,
         )
+
+
+async def _last_event_is_terminal(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    run_id: UUID,
+    latest_sequence_no: int,
+) -> bool:
+    if latest_sequence_no < 1:
+        return False
+    event_type = await session.scalar(
+        select(RunEventModel.event_type).where(
+            RunEventModel.tenant_id == tenant_id,
+            RunEventModel.run_id == run_id,
+            RunEventModel.sequence_no == latest_sequence_no,
+        )
+    )
+    return event_type in TERMINAL_EVENT_STATUSES
 
 
 def _event_record(row: RunEventModel) -> RunEventRecord:

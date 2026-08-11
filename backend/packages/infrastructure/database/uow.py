@@ -90,6 +90,9 @@ class PlatformUnitOfWork:
         self._session = session
         try:
             await session.begin()
+            await session.execute(
+                text("SELECT set_config('app.platform_context', 'true', true)")
+            )
         except BaseException:
             await session.close()
             self._session = None

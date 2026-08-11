@@ -5,16 +5,34 @@ import hashlib
 import json
 import os
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 import pytest
+from agentscope.event import (
+    AgentEvent,
+    ExternalExecutionResultEvent,
+    ReplyEndEvent,
+    ReplyStartEvent,
+    RequireExternalExecutionEvent,
+    RequireUserConfirmEvent,
+    TextBlockDeltaEvent,
+    ToolCallStartEvent,
+    ToolResultEndEvent,
+    ToolResultStartEvent,
+    ToolResultTextDeltaEvent,
+    UserConfirmResultEvent,
+)
+from agentscope.message import Msg, ToolCallBlock, ToolResultState
+from agentscope.state import AgentState
+from agentscope.types import ReplyFinishedReason
 from alembic import command
 from alembic.config import Config
-from pydantic import SecretStr
+from pydantic import JsonValue, SecretStr
 from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
@@ -26,9 +44,14 @@ from temporalio.worker import Worker
 from apps.api.app import create_app
 from apps.event_worker.composition import build_temporal_outbox_dispatcher
 from packages.application.event_service import (
+    RUN_EVENTS_APPENDED_EVENT,
     EventWriteAccess,
     RunEventIngestionService,
+    RunEventNotification,
+    RunEventNotificationDispatcher,
+    RunEventNotificationPublisher,
     RunEventQueryService,
+    RunEventStreamService,
 )
 from packages.application.model_gateway import (
     ModelProviderConnectionTestHandler,
@@ -36,9 +59,26 @@ from packages.application.model_gateway import (
 )
 from packages.application.outbox import OutboxDispatcher, OutboxEventRouter
 from packages.application.public import (
+    AgUiEventBatch,
+    ApprovalCoordinator,
+    ApprovalRequestInput,
     RequestMetadata,
+    RunEventAgUiAdapter,
     RunManagementService,
     canonical_request_hash,
+    serialize_ag_ui_event,
+)
+from packages.application.sandbox import (
+    SANDBOX_MANAGE_PERMISSION,
+    ProviderProcessObservation,
+    ProviderProvisionSpec,
+    ProviderSandboxObservation,
+    SandboxLifecycleService,
+    SandboxPolicyResolver,
+    SandboxProvider,
+    SandboxProvisionTokenVerifier,
+    SandboxServiceAccess,
+    compile_sandbox_policy,
 )
 from packages.application.temporal import (
     RUN_ORCHESTRATOR_TASK_QUEUE,
@@ -47,14 +87,26 @@ from packages.application.temporal import (
     FencingTokenIssuer,
     RunExecutionRequest,
     RunRuntimeExecutor,
+    RunSandboxController,
+    RunSandboxProvisionRequest,
+    RunSandboxReleaseRequest,
     RunSpecCompilationSource,
     RuntimeEventCandidatePublisher,
     RuntimeTargetReleaseConfig,
     agent_run_workflow_id,
 )
+from packages.application.tool_gateway import (
+    ExecutionTicketIssue,
+    ToolExecutionDenied,
+    ToolExecutionRequest,
+    ToolExecutionResult,
+    ToolGatewayService,
+    canonical_tool_parameter_digest,
+)
 from packages.contracts.generated.core_models import (
     AgentCreateRequest,
     AgentUpdateRequest,
+    ApprovalDecisionRequest,
     CancelRunRequest,
     CopyAgentRequest,
     RetryRunRequest,
@@ -64,9 +116,13 @@ from packages.contracts.generated.core_models import (
     SessionUpdateRequest,
 )
 from packages.contracts.generated.resource_content import (
+    ResourceContentMcp,
     ResourceContentModelConfig,
     ResourceContentModelProvider,
     ResourceContentPrompt,
+    ResourceContentSkill,
+    ResourceContentSkillFile,
+    SkillManifest,
 )
 from packages.contracts.generated.resources_models import (
     ActionRequest,
@@ -87,10 +143,18 @@ from packages.contracts.public import (
     SubjectType,
     TenantContext,
 )
+from packages.contracts.sandbox_api import (
+    SandboxLeaseRequest,
+    SandboxProcessRequest,
+    SandboxProvisionRequest,
+    SandboxReleaseRequest,
+)
 from packages.contracts.temporal import (
     AssistantTextPart,
     FinalizeAgentRunCancellationInput,
     FinalizeAgentRunInput,
+    ReleaseRunSandboxResult,
+    RunSandboxHandle,
     RunSpecReference,
     RuntimeCancellationResult,
     RuntimeCompletion,
@@ -105,21 +169,39 @@ from packages.domain.model_gateway import (
     ProviderError,
 )
 from packages.domain.public import (
+    BUNDLE_COMPILER_NAME,
+    BUNDLE_COMPILER_VERSION,
     AgentBindingRecord,
+    ApprovalRequestRecord,
+    McpDiscoveredTool,
+    McpDiscoveryResult,
+    McpDiscoveryTarget,
     ReleaseRecord,
+    RunRecord,
     RuntimeBundleRecord,
+    SkillSupplyChainScanResult,
     TenantAccess,
+    canonical_content_hash,
 )
+from packages.domain.skills.model import SkillScanStatus
 from packages.infrastructure.auth.public import MockIdentityProvider
 from packages.infrastructure.config import AppSettings
 from packages.infrastructure.database.public import (
     AgentSnapshotModel,
     AgentVersionModel,
+    ApprovalDecisionModel,
+    ApprovalRequestModel,
     DeploymentModel,
+    ExecutionTicketModel,
+    McpCapabilityDiscoveryModel,
+    SkillSupplyChainScanModel,
     SqlAlchemyAgentRegistry,
     SqlAlchemyAgentResourceReferenceProvider,
+    SqlAlchemyApprovalStore,
     SqlAlchemyBundleInputReader,
     SqlAlchemyDeploymentStore,
+    SqlAlchemyExecutionTicketStore,
+    SqlAlchemyMcpDiscoveryStore,
     SqlAlchemyMessageHistoryStore,
     SqlAlchemyOutboxStore,
     SqlAlchemyReleaseStore,
@@ -127,8 +209,13 @@ from packages.infrastructure.database.public import (
     SqlAlchemyRunEventQueryStore,
     SqlAlchemyRunEventStore,
     SqlAlchemyRunStore,
+    SqlAlchemyRuntimeEventCandidatePublisher,
+    SqlAlchemySandboxLifecycleStore,
     SqlAlchemySessionStore,
+    SqlAlchemySkillScanStore,
     SqlAlchemySnapshotCompilationStore,
+    SqlAlchemyToolAuthorizationResolver,
+    SqlAlchemyWorkspaceStore,
     TenantUnitOfWork,
     create_session_factory,
 )
@@ -139,6 +226,13 @@ from packages.infrastructure.model_gateway import (
 )
 from packages.infrastructure.observability import PlatformMetrics
 from packages.infrastructure.temporal import HmacFencingTokenIssuer
+from packages.infrastructure.tool_gateway import HmacExecutionTicketIssuer
+from packages.runtimes.agentscope import (
+    AgentScopeApprovalBridge,
+    AgentScopeRuntimeBridge,
+    AgentScopeSessionStart,
+    RuntimeToolBinding,
+)
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 DATABASE_URL_ENV = "AP_TEST_DATABASE_URL"
@@ -152,6 +246,26 @@ PERMISSION_TENANT = UUID("44444444-4444-4444-8444-444444444444")
 METADATA = RequestMetadata(
     request_id="req-resource-integration", trace_id="trace-resource-integration"
 )
+SKILL_METADATA = RequestMetadata(
+    request_id="req-skill-integration", trace_id="trace-skill-integration"
+)
+
+
+def admitted_manifest(
+    *, sandbox_policy_hash: str = "sha256:" + "c" * 64
+) -> dict[str, JsonValue]:
+    return {
+        "schema_version": "1.0",
+        "compiler": {
+            "name": BUNDLE_COMPILER_NAME,
+            "version": BUNDLE_COMPILER_VERSION,
+        },
+        "security": {
+            "permission_policy_hash": "sha256:" + "d" * 64,
+            "sandbox_policy_hash": sandbox_policy_hash,
+            "secret_refs": [],
+        },
+    }
 
 
 class Epic3AccessResolver:
@@ -242,6 +356,8 @@ class Epic3RuntimeExecutor:
         request: RunExecutionRequest,
         event_publisher: RuntimeEventCandidatePublisher,
     ) -> RuntimeCompletion:
+        assert request.sandbox is not None
+        assert request.sandbox.sandbox_instance_id == "sandbox_epic3_vertical"
         occurred_at = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
         raw_candidates = (
             {
@@ -295,6 +411,33 @@ class Epic3RuntimeExecutor:
         )
 
 
+class Epic3SandboxController:
+    def __init__(self) -> None:
+        self.provisioned: list[RunSandboxProvisionRequest] = []
+        self.released: list[RunSandboxReleaseRequest] = []
+
+    async def provision(
+        self, context: TenantContext, *, request: RunSandboxProvisionRequest
+    ) -> RunSandboxHandle:
+        assert context.tenant_id == TENANT_A
+        self.provisioned.append(request)
+        return RunSandboxHandle(
+            sandbox_instance_id="sandbox_epic3_vertical",
+            lease_id="lease_epic3_vertical",
+            workspace_uri=f"workspace://tenant/{TENANT_A}/runs/{request.run_id}/",
+        )
+
+    async def release(
+        self, context: TenantContext, *, request: RunSandboxReleaseRequest
+    ) -> ReleaseRunSandboxResult:
+        assert context.tenant_id == TENANT_A
+        self.released.append(request)
+        return ReleaseRunSandboxResult(
+            sandbox_instance_id=request.sandbox.sandbox_instance_id,
+            status="TERMINATED",
+        )
+
+
 class IntegrationConnectionAdapter:
     async def generate(
         self,
@@ -342,11 +485,11 @@ def migrate(database_url: str, revision: str) -> None:
         command.upgrade(config, revision)
 
 
-def context(tenant_id: str) -> TenantContext:
+def context(tenant_id: str, actor_id: UUID = ACTOR) -> TenantContext:
     return TenantContext(
         tenant_id=tenant_id,
         subject_type=SubjectType.USER,
-        subject_id=str(ACTOR),
+        subject_id=str(actor_id),
         membership_version=1,
         auth_time=datetime(2026, 8, 6, tzinfo=UTC),
         request_id=METADATA.request_id,
@@ -383,6 +526,91 @@ def prompt_request(
             language="en",
             compiler_policy_version="1",
         ),
+    )
+
+
+def skill_request() -> ResourceCreateRequest:
+    manifest: dict[str, object] = {
+        "apiVersion": "agent-platform/v1",
+        "kind": "Skill",
+        "metadata": {
+            "name": "integration-skill",
+            "version": "1.0.0",
+            "displayName": "Integration Skill",
+            "description": "PostgreSQL scan evidence verification.",
+        },
+        "runtime": {
+            "compatible": ["agentscope"],
+            "minimumPlatformVersion": "1.0.0",
+        },
+        "entry": {"instructions": "SKILL.md", "command": None},
+        "permissions": {
+            "filesystem": {"read": [], "write": []},
+            "network": {"allowDomains": [], "allowPorts": []},
+            "tools": [],
+            "secrets": [],
+        },
+        "dependencies": {"python": [], "system": [], "lockFile": None},
+        "inputs": {"type": "object"},
+        "outputs": {"type": "object"},
+        "sandbox": {
+            "imageDigest": "registry.example.test/skill@sha256:" + "a" * 64,
+            "timeoutSeconds": 60,
+            "riskLevel": "LOW",
+            "requiresRunSandbox": False,
+        },
+        "tests": [],
+    }
+    return ResourceCreateRequest(
+        code="integration_skill",
+        name="Integration Skill",
+        description=None,
+        content_schema_version="1.0",
+        content=ResourceContentSkill(
+            resource_type="skill",
+            manifest=SkillManifest.model_validate(manifest),
+            files=[
+                ResourceContentSkillFile(
+                    path="SKILL.md",
+                    artifact_id=str(uuid5(NAMESPACE_URL, "skill-instructions")),
+                    content_hash="sha256:" + "1" * 64,
+                ),
+                ResourceContentSkillFile(
+                    path="manifest.yaml",
+                    artifact_id=str(uuid5(NAMESPACE_URL, "skill-manifest")),
+                    content_hash="sha256:" + "2" * 64,
+                ),
+            ],
+        ),
+    )
+
+
+def skill_scan_result(
+    status: SkillScanStatus = "PASSED",
+) -> SkillSupplyChainScanResult:
+    findings: tuple[dict[str, JsonValue], ...] = (
+        ()
+        if status == "PASSED"
+        else (
+            {
+                "code": "TEST_REJECTION",
+                "severity": "HIGH",
+                "path": "/SKILL.md",
+                "blocking": True,
+            },
+        )
+    )
+    return SkillSupplyChainScanResult(
+        status=status,
+        scanner_name="integration-scanner",
+        scanner_version="1.0.0",
+        policy_version="integration-v1",
+        findings=findings,
+        report_hash="sha256:" + ("3" if status == "PASSED" else "4") * 64,
+        sbom={"format": "integration-sbom-v1"},
+        sbom_hash="sha256:" + "5" * 64,
+        signature_status="NOT_PROVIDED",
+        provenance_status="NOT_PROVIDED",
     )
 
 
@@ -457,6 +685,75 @@ async def verify_prompt_permission_backfill(database_url: str) -> None:
                 "publish",
                 "rollback",
                 "disable",
+            }
+    finally:
+        await engine.dispose()
+
+
+async def verify_skill_permission_backfill(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(PERMISSION_TENANT)},
+            )
+            actions = set(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT action FROM role_permission "
+                            "WHERE tenant_id = :tenant_id "
+                            "AND resource_type = 'skill'"
+                        ),
+                        {"tenant_id": PERMISSION_TENANT},
+                    )
+                ).scalars()
+            )
+            assert actions == {
+                "create",
+                "read",
+                "list",
+                "update",
+                "delete",
+                "publish",
+                "rollback",
+                "disable",
+            }
+    finally:
+        await engine.dispose()
+
+
+async def verify_mcp_permission_backfill(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(PERMISSION_TENANT)},
+            )
+            actions = set(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT action FROM role_permission "
+                            "WHERE tenant_id = :tenant_id "
+                            "AND resource_type = 'mcp'"
+                        ),
+                        {"tenant_id": PERMISSION_TENANT},
+                    )
+                ).scalars()
+            )
+            assert actions == {
+                "create",
+                "read",
+                "list",
+                "update",
+                "delete",
+                "publish",
+                "rollback",
+                "disable",
+                "execute",
             }
     finally:
         await engine.dispose()
@@ -612,6 +909,31 @@ async def verify_run_permission_backfill(database_url: str) -> None:
                 ).scalars()
             )
             assert actions == {"cancel", "create", "read", "list", "retry"}
+    finally:
+        await engine.dispose()
+
+
+async def verify_approval_permission_backfill(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(PERMISSION_TENANT)},
+            )
+            actions = set(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT action FROM role_permission "
+                            "WHERE tenant_id = :tenant_id "
+                            "AND resource_type = 'approval'"
+                        ),
+                        {"tenant_id": PERMISSION_TENANT},
+                    )
+                ).scalars()
+            )
+            assert actions == {"approve", "list", "read"}
     finally:
         await engine.dispose()
 
@@ -1614,10 +1936,10 @@ async def verify_deployment_activation_history_and_fencing(database_url: str) ->
             tenant_id=UUID(TENANT_A),
             snapshot_id=snapshot_id,
             runtime_type="agentscope",
-            compiler_name="AgentScopeBundleCompiler",
-            compiler_version="1.0.0",
+            compiler_name=BUNDLE_COMPILER_NAME,
+            compiler_version=BUNDLE_COMPILER_VERSION,
             manifest_schema_version="1.0",
-            manifest={"schema_version": "1.0"},
+            manifest=admitted_manifest(),
             content_hash="sha256:" + "e" * 64,
             object_uri="s3://integration/bundles/agentscope.tar",
             size_bytes=1024,
@@ -2285,12 +2607,14 @@ async def verify_epic3_vertical_acceptance(database_url: str) -> None:
         )
         compiler = Epic3RunSpecCompiler()
         publisher = Epic3CandidatePublisher()
+        sandbox_controller = Epic3SandboxController()
         run_activities = AgentRunWorkflowActivities(
             runs,
             compiler,
             cast(FencingTokenIssuer, HmacFencingTokenIssuer(SecretStr("a" * 32))),
             cast(RunRuntimeExecutor, Epic3RuntimeExecutor()),
             cast(RuntimeEventCandidatePublisher, publisher),
+            sandbox_controller=cast(RunSandboxController, sandbox_controller),
         )
         download_dir = Path("/private/tmp/agent-platform-temporal-test")
         download_dir.mkdir(parents=True, exist_ok=True)
@@ -2306,12 +2630,14 @@ async def verify_epic3_vertical_acceptance(database_url: str) -> None:
                 workflows=[AgentRunWorkflow],
                 activities=[
                     run_activities.prepare_agent_run,
+                    run_activities.provision_run_sandbox,
                     run_activities.execute_agent_run,
                     run_activities.inspect_agent_runtime,
                     run_activities.cancel_agent_runtime,
                     run_activities.recover_agent_run,
                     run_activities.finalize_agent_run,
                     run_activities.finalize_agent_run_cancellation,
+                    run_activities.release_run_sandbox,
                 ],
             ),
             httpx.AsyncClient(
@@ -2377,6 +2703,8 @@ async def verify_epic3_vertical_acceptance(database_url: str) -> None:
             history_json = (await handle.fetch_history()).to_json()
 
         assert publisher.publish_calls == 5
+        assert len(sandbox_controller.provisioned) == 1
+        assert len(sandbox_controller.released) == 1
         assert [
             candidate.event_type for _, candidate in publisher.candidates.values()
         ] == ["run_started", "text_message_start", "text_delta", "text_message_end"]
@@ -3306,6 +3634,8 @@ async def verify_run_workflow_attempt_and_message_finalization(
             auth_time=occurred_at,
         )
         replayed_sequence_numbers: list[int] = []
+        replayed_ag_ui_batches: list[AgUiEventBatch] = []
+        ag_ui_adapter = RunEventAgUiAdapter()
         after = 0
         while True:
             page = await event_queries.list_events(
@@ -3316,11 +3646,32 @@ async def verify_run_workflow_attempt_and_message_finalization(
                 metadata=METADATA,
             )
             replayed_sequence_numbers.extend(item.sequence_no for item in page.items)
+            replayed_ag_ui_batches.extend(
+                ag_ui_adapter.map_event(item) for item in page.items
+            )
             assert page.latest_sequence_no == 102
             if not page.has_more:
                 break
             after = page.items[-1].sequence_no
         assert replayed_sequence_numbers == list(range(1, 103))
+        assert [batch.source_sequence_no for batch in replayed_ag_ui_batches] == list(
+            range(1, 103)
+        )
+        serialized_ag_ui_events = [
+            serialize_ag_ui_event(mapped_event)
+            for batch in replayed_ag_ui_batches
+            for mapped_event in batch.events
+        ]
+        terminal_ag_ui_events = [
+            mapped_event
+            for mapped_event in serialized_ag_ui_events
+            if mapped_event["type"] in {"RUN_FINISHED", "RUN_ERROR"}
+        ]
+        assert len(terminal_ag_ui_events) == 1
+        assert terminal_ag_ui_events[0]["type"] == "RUN_FINISHED"
+        assert serialize_ag_ui_event(replayed_ag_ui_batches[-1].events[-1])["type"] == (
+            "RUN_FINISHED"
+        )
         queried_run = await runs.get_run(
             context(TENANT_A), user_id=ACTOR, run_id=run.id
         )
@@ -3336,6 +3687,26 @@ async def verify_run_workflow_attempt_and_message_finalization(
         assert exhausted.items == []
         assert exhausted.latest_sequence_no == 102
         assert exhausted.has_more is False
+        terminal_page = await SqlAlchemyRunEventQueryStore(session_factory).list_events(
+            context(TENANT_A),
+            user_id=ACTOR,
+            run_id=run.id,
+            after=102,
+            limit=37,
+        )
+        assert terminal_page is not None
+        assert terminal_page.is_terminal is True
+        event_stream = await RunEventStreamService(
+            event_queries, page_size=37
+        ).open_stream(
+            query_principal,
+            run_id=str(run.id),
+            after=0,
+            metadata=METADATA,
+        )
+        stream_payload = b"".join([frame async for frame in event_stream])
+        assert stream_payload.count(b"event: run_event") == 102
+        assert b"id: 102\n" in stream_payload
         assert (
             await SqlAlchemyRunEventQueryStore(session_factory).list_events(
                 context(TENANT_A),
@@ -3417,6 +3788,48 @@ async def verify_run_workflow_attempt_and_message_finalization(
         assert event_facts.outbox_count == 12
         assert event_facts.fencing_audit_count == 1
         assert event_facts.terminal_audit_count == 2
+
+        class NotificationRecorder:
+            def __init__(self) -> None:
+                self.notifications: list[RunEventNotification] = []
+
+            async def publish(self, notification: RunEventNotification) -> None:
+                self.notifications.append(notification)
+
+        notification_recorder = NotificationRecorder()
+        notification_dispatcher = RunEventNotificationDispatcher(
+            SqlAlchemyOutboxStore(
+                session_factory,
+                event_types=frozenset({RUN_EVENTS_APPENDED_EVENT}),
+            ),
+            cast(RunEventNotificationPublisher, notification_recorder),
+        )
+        dispatch_now = datetime.now(UTC) + timedelta(seconds=1)
+        while True:
+            summary = await notification_dispatcher.dispatch_tenant_once(
+                event_access(TENANT_A).context,
+                now=dispatch_now,
+            )
+            if summary.claimed == 0:
+                break
+        run_notifications = sorted(
+            (
+                notification
+                for notification in notification_recorder.notifications
+                if notification.run_id == run.id
+            ),
+            key=lambda notification: notification.first_sequence_no,
+        )
+        assert len(run_notifications) == 12
+        notified_sequences = [
+            sequence_no
+            for notification in run_notifications
+            for sequence_no in range(
+                notification.first_sequence_no,
+                notification.last_sequence_no + 1,
+            )
+        ]
+        assert notified_sequences == list(range(1, 103))
 
         with pytest.raises(DBAPIError):
             async with admin_engine.begin() as connection:
@@ -3877,6 +4290,441 @@ async def verify_run_cancel_retry_and_recovery_fencing(database_url: str) -> Non
         await admin_engine.dispose()
 
 
+async def verify_sandbox_lifecycle_and_fencing(database_url: str) -> None:
+    """Exercise Sandbox persistence against the same immutable Run facts."""
+
+    policy = compile_sandbox_policy(
+        {
+            "schema_version": "1.0",
+            "scope": "run",
+            "image_digest": "registry.example/runtime@sha256:" + "a" * 64,
+            "cpu_limit": 1,
+            "memory_mb": 512,
+            "disk_mb": 1024,
+            "pids_limit": 64,
+            "timeout_seconds": 600,
+            "network": {
+                "mode": "none",
+                "allow_domains": [],
+                "allow_ports": [],
+                "deny_private_networks": True,
+            },
+            "filesystem": {
+                "read_patterns": ["work/**"],
+                "write_patterns": ["work/**"],
+                "max_files": 100,
+                "max_file_bytes": 1024,
+            },
+            "process": {
+                "allowed_executables": ["python"],
+                "shell_allowed": False,
+                "max_processes": 16,
+            },
+            "artifacts": {
+                "allow_export": False,
+                "max_artifacts": 0,
+                "max_total_bytes": 0,
+                "allowed_content_types": [],
+            },
+        }
+    )
+
+    class ProviderFake:
+        def __init__(self) -> None:
+            self.destroy_calls = 0
+
+        async def provision(self, spec: ProviderProvisionSpec):
+            assert spec.policy.policy_hash == policy.policy_hash
+            assert spec.bundle_hash.startswith("sha256:")
+            return ProviderSandboxObservation(
+                provider_ref=f"provider://sandbox/{spec.sandbox_id}",
+                state="READY",
+                observed_at=datetime.now(UTC),
+            )
+
+        async def inspect(self, provider_ref: str):
+            return ProviderSandboxObservation(
+                provider_ref=provider_ref,
+                state="RUNNING",
+                observed_at=datetime.now(UTC),
+            )
+
+        async def recover(self, sandbox_id: str) -> None:
+            del sandbox_id
+
+        async def start_process(self, provider_ref: str, **kwargs: object):
+            del provider_ref, kwargs
+            return ProviderProcessObservation(
+                process_id="proc_sandbox_integration", state="STARTING"
+            )
+
+        async def cancel_process(self, provider_ref: str, **kwargs: object):
+            del provider_ref, kwargs
+            return ProviderProcessObservation(
+                process_id="proc_sandbox_integration", state="CANCELLED"
+            )
+
+        async def terminate(self, provider_ref: str, **kwargs: object):
+            del kwargs
+            return ProviderSandboxObservation(
+                provider_ref=provider_ref,
+                state="TERMINATED",
+                observed_at=datetime.now(UTC),
+            )
+
+        async def destroy(self, provider_ref: str):
+            self.destroy_calls += 1
+            return ProviderSandboxObservation(
+                provider_ref=provider_ref,
+                state="TERMINATED",
+                observed_at=datetime.now(UTC),
+            )
+
+    class PolicyResolverFake:
+        async def resolve(self, *args: object, **kwargs: object):
+            del args, kwargs
+            return policy
+
+    class TokenVerifierFake:
+        async def verify(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        runs = SqlAlchemyRunStore(session_factory)
+        async with admin_engine.connect() as connection:
+            agent_id = await connection.scalar(
+                text(
+                    "SELECT id FROM agent_definition "
+                    "WHERE tenant_id = :tenant_id "
+                    "AND active_deployment_id IS NOT NULL "
+                    "ORDER BY created_at, id LIMIT 1"
+                ),
+                {"tenant_id": TENANT_A},
+            )
+        assert agent_id is not None
+        session_request = SessionCreateRequest.model_validate(
+            {"agent_id": str(agent_id), "title": "Sandbox lifecycle integration"}
+        )
+        created_session = await SqlAlchemySessionStore(session_factory).create_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=session_request,
+            metadata_value={},
+            idempotency_key="session-sandbox-lifecycle-integration",
+            request_hash=canonical_request_hash("session.create", session_request),
+            metadata=METADATA,
+        )
+        assert created_session.value is not None
+        async with admin_engine.begin() as connection:
+            source = (
+                await connection.execute(
+                    text(
+                        "SELECT s.id AS session_id, s.default_deployment_id, "
+                        "d.bundle_id, d.snapshot_id, b.runtime_type, b.content_hash "
+                        "FROM chat_session s JOIN deployment d "
+                        "ON d.id = s.default_deployment_id "
+                        "JOIN runtime_bundle b ON b.id = d.bundle_id "
+                        "WHERE s.tenant_id = :tenant_id AND s.id = :session_id"
+                    ),
+                    {
+                        "tenant_id": TENANT_A,
+                        "session_id": created_session.value.id,
+                    },
+                )
+            ).one()
+            await connection.execute(
+                text(
+                    "UPDATE runtime_bundle SET compiler_name = :column_compiler_name, "
+                    "compiler_version = :column_compiler_version, manifest_json = "
+                    "jsonb_set(jsonb_set(manifest_json, '{compiler}', "
+                    "jsonb_build_object('name', CAST(:manifest_compiler_name AS text), "
+                    "'version', CAST(:manifest_compiler_version AS text)), true), "
+                    "'{security}', jsonb_build_object("
+                    "'permission_policy_hash', CAST(:permission_hash AS text), "
+                    "'sandbox_policy_hash', CAST(:policy_hash AS text), "
+                    "'secret_refs', '[]'::jsonb), true) "
+                    "WHERE id = :bundle_id"
+                ),
+                {
+                    "column_compiler_name": BUNDLE_COMPILER_NAME,
+                    "column_compiler_version": BUNDLE_COMPILER_VERSION,
+                    "manifest_compiler_name": BUNDLE_COMPILER_NAME,
+                    "manifest_compiler_version": BUNDLE_COMPILER_VERSION,
+                    "permission_hash": "sha256:" + "d" * 64,
+                    "policy_hash": policy.policy_hash,
+                    "bundle_id": source.bundle_id,
+                },
+            )
+
+        create_request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(source.session_id),
+                "input": {"text": "sandbox lifecycle integration"},
+            }
+        )
+        created = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=create_request,
+            idempotency_key="run-sandbox-lifecycle-integration",
+            request_hash=canonical_request_hash("run.create", create_request),
+            metadata=METADATA,
+        )
+        assert created.value is not None
+        run = created.value
+        fencing_token = "sandbox-execution-fencing-token-001"
+        fencing_hash = "sha256:" + hashlib.sha256(fencing_token.encode()).hexdigest()
+        await runs.prepare_run(
+            context(TENANT_A),
+            run_id=run.id,
+            workflow_id=f"run/{TENANT_A}/{run.id}",
+            execution_attempt=1,
+            fencing_token_hash=fencing_hash,
+        )
+
+        provider = ProviderFake()
+        lifecycle = SandboxLifecycleService(
+            SqlAlchemySandboxLifecycleStore(session_factory),
+            cast(SandboxProvider, provider),
+            cast(SandboxPolicyResolver, PolicyResolverFake()),
+            cast(SandboxProvisionTokenVerifier, TokenVerifierFake()),
+            now=lambda: datetime.now(UTC),
+        )
+        service_access = SandboxServiceAccess(
+            context=TenantContext(
+                tenant_id=TENANT_A,
+                subject_type=SubjectType.SERVICE,
+                subject_id=str(ACTOR),
+                auth_time=datetime.now(UTC),
+                request_id="req-sandbox-integration",
+                trace_id="trace-sandbox-integration",
+            ),
+            permissions=frozenset({SANDBOX_MANAGE_PERMISSION}),
+        )
+        bundle_ref = (
+            f"bundle://tenant/{TENANT_A}/snapshot/{source.snapshot_id}/"
+            f"runtime/{source.runtime_type}/{source.content_hash}"
+        )
+        workspace_uri = (
+            f"workspace://tenant/{TENANT_A}/user/{ACTOR}/"
+            f"session/{source.session_id}/runs/{run.id}/"
+        )
+        provision_request = SandboxProvisionRequest(
+            tenant_id=TENANT_A,
+            user_id=str(ACTOR),
+            session_id=str(source.session_id),
+            run_id=str(run.id),
+            execution_attempt=1,
+            scope="run",
+            policy_ref="immutable://sandbox-policy/integration-policy",
+            policy_hash=policy.policy_hash,
+            bundle_ref=bundle_ref,
+            bundle_hash=source.content_hash,
+            workspace_uri=workspace_uri,
+            provision_token=SecretStr("sandbox-provision-token-integration"),
+            trace_id="trace-sandbox-integration",
+        )
+        idempotency_key = f"sandbox/{run.id}/1/{policy.policy_hash}"
+        with pytest.raises(PlatformError) as wrong_bundle:
+            await lifecycle.provision(
+                service_access,
+                request=provision_request.model_copy(
+                    update={
+                        "bundle_ref": (
+                            f"bundle://tenant/{TENANT_A}/snapshot/{source.snapshot_id}/"
+                            f"runtime/{source.runtime_type}/{'sha256:' + 'f' * 64}"
+                        )
+                    }
+                ),
+                idempotency_key=idempotency_key,
+            )
+        assert wrong_bundle.value.code == "SANDBOX_POLICY_DENIED"
+        accepted = await lifecycle.provision(
+            service_access,
+            request=provision_request,
+            idempotency_key=idempotency_key,
+        )
+        replay = await lifecycle.provision(
+            service_access,
+            request=provision_request,
+            idempotency_key=idempotency_key,
+        )
+        assert replay == accepted
+        detail = await lifecycle.get(service_access, sandbox_id=accepted.sandbox_id)
+        assert detail.status == "READY"
+        workspace_store = SqlAlchemyWorkspaceStore(session_factory)
+        workspace = await workspace_store.get(
+            service_access.context, workspace_uri=workspace_uri
+        )
+        assert workspace is not None
+        assert workspace.status == "ACTIVE"
+        updated_workspace = await workspace_store.record_usage(
+            service_access.context,
+            workspace_uri=workspace_uri,
+            used_bytes=512,
+            file_count=1,
+            now=datetime.now(UTC),
+        )
+        assert updated_workspace is not None
+        assert updated_workspace.used_bytes == 512
+        with pytest.raises(PlatformError) as quota_exceeded:
+            await workspace_store.record_usage(
+                service_access.context,
+                workspace_uri=workspace_uri,
+                used_bytes=1024 * 1024 * 1024 + 1,
+                file_count=1,
+                now=datetime.now(UTC),
+            )
+        assert quota_exceeded.value.code == "WORKSPACE_QUOTA_EXCEEDED"
+
+        stale_lease = SandboxLeaseRequest(
+            run_id=str(run.id),
+            execution_attempt=1,
+            execution_fencing_token=SecretStr("stale-execution-fencing-token"),
+            ttl_seconds=300,
+            trace_id="trace-sandbox-integration",
+        )
+        with pytest.raises(PlatformError) as fenced:
+            await lifecycle.acquire_lease(
+                service_access,
+                sandbox_id=accepted.sandbox_id,
+                request=stale_lease,
+            )
+        assert fenced.value.code == "SANDBOX_FENCING_REJECTED"
+
+        active_lease = await lifecycle.acquire_lease(
+            service_access,
+            sandbox_id=accepted.sandbox_id,
+            request=stale_lease.model_copy(
+                update={"execution_fencing_token": SecretStr(fencing_token)}
+            ),
+        )
+        stale_process = SandboxProcessRequest(
+            run_id=str(run.id),
+            execution_attempt=1,
+            execution_fencing_token=SecretStr("stale-execution-fencing-token"),
+            process_id="proc_stale",
+            argv=["python", "-m", "runtime_entry"],
+            working_directory=workspace_uri + "work/",
+            timeout_seconds=30,
+            trace_id="trace-sandbox-integration",
+        )
+        with pytest.raises(PlatformError) as stale_control:
+            await lifecycle.start_process(
+                service_access,
+                sandbox_id=accepted.sandbox_id,
+                request=stale_process,
+            )
+        assert stale_control.value.code == "SANDBOX_FENCING_REJECTED"
+        with pytest.raises(PlatformError) as stale_release:
+            await lifecycle.release(
+                service_access,
+                sandbox_id=accepted.sandbox_id,
+                request=SandboxReleaseRequest(
+                    run_id=str(run.id),
+                    execution_attempt=1,
+                    execution_fencing_token=SecretStr("stale-execution-fencing-token"),
+                    trace_id="trace-sandbox-integration",
+                ),
+            )
+        assert stale_release.value.code == "SANDBOX_FENCING_REJECTED"
+        process = await lifecycle.start_process(
+            service_access,
+            sandbox_id=accepted.sandbox_id,
+            request=SandboxProcessRequest(
+                run_id=str(run.id),
+                execution_attempt=1,
+                execution_fencing_token=SecretStr(fencing_token),
+                process_id="proc_sandbox_integration",
+                argv=["python", "-m", "runtime_entry"],
+                working_directory=workspace_uri + "work/",
+                timeout_seconds=30,
+                trace_id="trace-sandbox-integration",
+            ),
+        )
+        assert process.status == "STARTING"
+        released = await lifecycle.release(
+            service_access,
+            sandbox_id=accepted.sandbox_id,
+            request=SandboxReleaseRequest(
+                run_id=str(run.id),
+                execution_attempt=1,
+                execution_fencing_token=SecretStr(fencing_token),
+                trace_id="trace-sandbox-integration",
+            ),
+        )
+        assert released.status == "TERMINATING"
+        destroyed = await lifecycle.destroy(
+            service_access, sandbox_id=accepted.sandbox_id
+        )
+        assert destroyed.status == "TERMINATED"
+        assert provider.destroy_calls == 1
+
+        cross_tenant_access = SandboxServiceAccess(
+            context=service_access.context.model_copy(update={"tenant_id": TENANT_B}),
+            permissions=service_access.permissions,
+        )
+        with pytest.raises(PlatformError) as hidden:
+            await lifecycle.get(cross_tenant_access, sandbox_id=accepted.sandbox_id)
+        assert hidden.value.code == "RESOURCE_NOT_FOUND"
+
+        async with admin_engine.connect() as connection:
+            persisted = (
+                await connection.execute(
+                    text(
+                        "SELECT s.status, o.status AS operation_status, "
+                        "l.fencing_token_hash, l.released_at, "
+                        "w.status AS workspace_status, w.quota_bytes, "
+                        "w.max_files, w.max_file_bytes, "
+                        "(SELECT count(*) FROM audit_log a "
+                        "WHERE a.resource_id = s.id) AS audit_count "
+                        "FROM sandbox_instance s JOIN operation_record o "
+                        "ON o.id = s.provision_operation_id "
+                        "JOIN sandbox_lease l ON l.sandbox_id = s.id "
+                        "JOIN workspace w ON w.tenant_id = s.tenant_id "
+                        "AND w.uri = s.workspace_uri "
+                        "WHERE s.id = :sandbox_id"
+                    ),
+                    {"sandbox_id": UUID(accepted.sandbox_id)},
+                )
+            ).one()
+        assert persisted.status == "TERMINATED"
+        assert persisted.operation_status == "SUCCEEDED"
+        assert persisted.fencing_token_hash == active_lease.execution_fencing_token_hash
+        assert persisted.released_at is not None
+        assert persisted.workspace_status == "SEALED"
+        assert persisted.quota_bytes == 1024 * 1024 * 1024
+        assert persisted.max_files == 100
+        assert persisted.max_file_bytes == 1024
+        assert persisted.audit_count >= 5
+
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE sandbox_instance SET policy_hash = :policy_hash "
+                        "WHERE id = :sandbox_id"
+                    ),
+                    {
+                        "policy_hash": "sha256:" + "f" * 64,
+                        "sandbox_id": UUID(accepted.sandbox_id),
+                    },
+                )
+        with pytest.raises(DBAPIError):
+            async with admin_engine.begin() as connection:
+                await connection.execute(
+                    text("DELETE FROM sandbox_lease WHERE id = :lease_id"),
+                    {"lease_id": UUID(active_lease.lease_id)},
+                )
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
 async def verify_publication_queries_are_read_only(database_url: str) -> None:
     app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
     app_engine = create_async_engine(app_url)
@@ -4069,10 +4917,10 @@ async def verify_agent_rollback_creates_new_release_and_deployment(
             tenant_id=UUID(TENANT_A),
             snapshot_id=publication.snapshot.id,
             runtime_type="agentscope",
-            compiler_name="AgentScopeBundleCompiler",
-            compiler_version="1.0.0",
+            compiler_name=BUNDLE_COMPILER_NAME,
+            compiler_version=BUNDLE_COMPILER_VERSION,
             manifest_schema_version="1.0",
-            manifest={"schema_version": "1.0"},
+            manifest=admitted_manifest(),
             content_hash="sha256:" + "f" * 64,
             object_uri="s3://integration/bundles/agentscope-newer.tar",
             size_bytes=1024,
@@ -4662,6 +5510,1284 @@ async def verify_resource_registry(database_url: str) -> None:
         await admin_engine.dispose()
 
 
+async def verify_skill_supply_chain_publication(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        registry = SqlAlchemyResourceRegistry(session_factory)
+        scan_store = SqlAlchemySkillScanStore(session_factory)
+        request = skill_request()
+        created = await registry.create_definition(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            resource_type="skill",
+            request=request,
+            idempotency_key="skill-create-integration",
+            request_hash=canonical_request_hash("skill.create", request),
+            metadata=SKILL_METADATA,
+        )
+        assert created.value is not None
+        definition = created.value
+        content_hash = canonical_content_hash(definition.content)
+        publish_request = ResourcePublishRequest(
+            expected_resource_version=1, release_note="scanned release"
+        )
+
+        with pytest.raises(PlatformError) as missing:
+            await registry.publish_version(
+                context(TENANT_A),
+                actor_id=ACTOR,
+                resource_type="skill",
+                resource_id=definition.id,
+                request=publish_request,
+                idempotency_key="skill-publish-missing-scan",
+                request_hash=canonical_request_hash(
+                    "skill.publish.missing", publish_request
+                ),
+                metadata=SKILL_METADATA,
+            )
+        assert missing.value.code == "RESOURCE_STATE_CONFLICT"
+
+        mismatched = await scan_store.record_scan(
+            context(TENANT_A),
+            definition_id=definition.id,
+            draft_resource_version=1,
+            content_hash="sha256:" + "9" * 64,
+            result=skill_scan_result(),
+            scanned_by=ACTOR,
+            metadata=SKILL_METADATA,
+        )
+        with pytest.raises(PlatformError) as mismatch:
+            await registry.publish_version(
+                context(TENANT_A),
+                actor_id=ACTOR,
+                resource_type="skill",
+                resource_id=definition.id,
+                request=publish_request,
+                idempotency_key="skill-publish-mismatched-scan",
+                request_hash=canonical_request_hash(
+                    "skill.publish.mismatch", publish_request
+                ),
+                metadata=SKILL_METADATA,
+                scan_attestation_id=mismatched.id,
+            )
+        assert mismatch.value.code == "RESOURCE_STATE_CONFLICT"
+
+        rejected = await scan_store.record_scan(
+            context(TENANT_A),
+            definition_id=definition.id,
+            draft_resource_version=1,
+            content_hash=content_hash,
+            result=skill_scan_result("REJECTED"),
+            scanned_by=ACTOR,
+            metadata=SKILL_METADATA,
+        )
+        with pytest.raises(PlatformError) as rejected_publish:
+            await registry.publish_version(
+                context(TENANT_A),
+                actor_id=ACTOR,
+                resource_type="skill",
+                resource_id=definition.id,
+                request=publish_request,
+                idempotency_key="skill-publish-rejected-scan",
+                request_hash=canonical_request_hash(
+                    "skill.publish.rejected", publish_request
+                ),
+                metadata=SKILL_METADATA,
+                scan_attestation_id=rejected.id,
+            )
+        assert rejected_publish.value.code == "RESOURCE_STATE_CONFLICT"
+
+        passed = await scan_store.record_scan(
+            context(TENANT_A),
+            definition_id=definition.id,
+            draft_resource_version=1,
+            content_hash=content_hash,
+            result=skill_scan_result(),
+            scanned_by=ACTOR,
+            metadata=SKILL_METADATA,
+        )
+        publish_hash = canonical_request_hash("skill.publish", publish_request)
+        published = await registry.publish_version(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            resource_type="skill",
+            resource_id=definition.id,
+            request=publish_request,
+            idempotency_key="skill-publish-passed-scan",
+            request_hash=publish_hash,
+            metadata=SKILL_METADATA,
+            scan_attestation_id=passed.id,
+        )
+        assert published.value is not None
+        version_one = published.value
+        bundle_reader = SqlAlchemyBundleInputReader(session_factory)
+        assert (
+            await bundle_reader.get_resource_version(
+                context(TENANT_A),
+                resource_id=definition.id,
+                version_id=version_one.id,
+            )
+            is not None
+        )
+        replay = await registry.publish_version(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            resource_type="skill",
+            resource_id=definition.id,
+            request=publish_request,
+            idempotency_key="skill-publish-passed-scan",
+            request_hash=publish_hash,
+            metadata=SKILL_METADATA,
+            scan_attestation_id=passed.id,
+        )
+        assert replay.replay is not None
+        assert replay.replay.response_body["id"] == str(version_one.id)
+
+        rollback_scan = await scan_store.record_scan(
+            context(TENANT_A),
+            definition_id=definition.id,
+            draft_resource_version=2,
+            content_hash=version_one.content_hash,
+            result=skill_scan_result(),
+            scanned_by=ACTOR,
+            metadata=SKILL_METADATA,
+        )
+        rollback_request = ResourceRollbackRequest(
+            version_id=str(version_one.id),
+            expected_resource_version=2,
+            release_note="verified rollback",
+        )
+        rollback = await registry.rollback_version(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            resource_type="skill",
+            resource_id=definition.id,
+            source_version_id=version_one.id,
+            request=rollback_request,
+            idempotency_key="skill-rollback-passed-scan",
+            request_hash=canonical_request_hash("skill.rollback", rollback_request),
+            metadata=SKILL_METADATA,
+            scan_attestation_id=rollback_scan.id,
+        )
+        assert rollback is not None
+        assert rollback.value is not None
+        assert rollback.value.version_no == 2
+
+        async with TenantUnitOfWork(session_factory, context(TENANT_A)) as unit_of_work:
+            bound = await unit_of_work.session.scalar(
+                select(SkillSupplyChainScanModel).where(
+                    SkillSupplyChainScanModel.id == passed.id
+                )
+            )
+            assert bound is not None
+            assert bound.published_version_id == version_one.id
+        async with TenantUnitOfWork(session_factory, context(TENANT_B)) as unit_of_work:
+            assert (
+                await unit_of_work.session.scalar(
+                    select(SkillSupplyChainScanModel).where(
+                        SkillSupplyChainScanModel.id == passed.id
+                    )
+                )
+                is None
+            )
+        with pytest.raises(DBAPIError):
+            async with TenantUnitOfWork(
+                session_factory, context(TENANT_A)
+            ) as unit_of_work:
+                await unit_of_work.session.execute(
+                    text(
+                        "UPDATE skill_supply_chain_scan SET report_hash = :report_hash "
+                        "WHERE id = :scan_id"
+                    ),
+                    {"report_hash": "sha256:" + "8" * 64, "scan_id": passed.id},
+                )
+    finally:
+        await app_engine.dispose()
+
+
+async def verify_mcp_capability_publication(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        registry = SqlAlchemyResourceRegistry(session_factory)
+        discoveries = SqlAlchemyMcpDiscoveryStore(session_factory)
+        secret_ref = f"secret://tenant/{TENANT_A}/mcp/search"
+        content = ResourceContentMcp(
+            resource_type="mcp",
+            transport="streamable_http",
+            endpoint="https://mcp.example.test/v1",
+            header_templates={"Authorization": f"Bearer ${{{secret_ref}}}"},
+            secret_refs=[secret_ref],
+            timeout_seconds=30,
+            allowed_tools=["search.query"],
+        )
+        request = ResourceCreateRequest(
+            code="integration_mcp",
+            name="Integration MCP",
+            description=None,
+            visibility="tenant",
+            content_schema_version="1.0",
+            content=content,
+        )
+        created = await registry.create_definition(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            resource_type="mcp",
+            request=request,
+            idempotency_key="mcp-create-integration",
+            request_hash=canonical_request_hash("mcp.create", request),
+            metadata=METADATA,
+        )
+        assert created.value is not None
+        definition = created.value
+        content_hash = canonical_content_hash(content)
+        publish_request = ResourcePublishRequest(
+            expected_resource_version=1, release_note="discovered release"
+        )
+
+        with pytest.raises(PlatformError) as missing:
+            await registry.publish_version(
+                context(TENANT_A),
+                actor_id=ACTOR,
+                resource_type="mcp",
+                resource_id=definition.id,
+                request=publish_request,
+                idempotency_key="mcp-publish-missing-discovery",
+                request_hash=canonical_request_hash(
+                    "mcp.publish.missing", publish_request
+                ),
+                metadata=METADATA,
+            )
+        assert missing.value.code == "RESOURCE_STATE_CONFLICT"
+
+        requested = await registry.request_mcp_capability_discovery(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            resource_id=definition.id,
+            expected_resource_version=1,
+            content_hash=content_hash,
+            idempotency_key="mcp-discover-integration",
+            request_hash=canonical_request_hash(
+                "mcp.discover", extra={"resource_id": str(definition.id)}
+            ),
+            metadata=METADATA,
+        )
+        assert requested is not None and requested.value is not None
+        operation_id = requested.value.id
+        discovery_target = McpDiscoveryTarget(
+            definition_id=definition.id,
+            draft_resource_version=1,
+            content_hash=content_hash,
+            transport="streamable_http",
+            endpoint=content.endpoint,
+            header_templates=content.header_templates or {},
+            secret_refs=tuple(content.secret_refs),
+            timeout_seconds=content.timeout_seconds,
+            allowed_tools=tuple(content.allowed_tools or ()),
+        )
+        tool = McpDiscoveredTool(
+            name="search.query",
+            description="Search approved public sources.",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            output_schema=None,
+            schema_hash="sha256:" + "7" * 64,
+            risk_level="MEDIUM",
+        )
+        discovery_result = McpDiscoveryResult(
+            status="PASSED",
+            protocol_version="2025-06-18",
+            server_name="integration-mcp",
+            server_version="1.0.0",
+            tools=(tool,),
+            capability_hash="sha256:" + "8" * 64,
+            findings=(),
+        )
+        await discoveries.mark_running(context(TENANT_A), operation_id)
+        evidence = await discoveries.record_terminal(
+            context(TENANT_A),
+            operation_id=operation_id,
+            target=discovery_target,
+            result=discovery_result,
+            discovered_by=ACTOR,
+            error=None,
+        )
+        publishable = await discoveries.get_publishable_evidence(
+            context(TENANT_A),
+            definition_id=definition.id,
+            draft_resource_version=1,
+            content_hash=content_hash,
+            allowed_tools=("search.query",),
+        )
+        assert publishable is not None and publishable.id == evidence.id
+
+        published = await registry.publish_version(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            resource_type="mcp",
+            resource_id=definition.id,
+            request=publish_request,
+            idempotency_key="mcp-publish-passed-discovery",
+            request_hash=canonical_request_hash("mcp.publish", publish_request),
+            metadata=METADATA,
+            mcp_discovery_attestation_id=evidence.id,
+        )
+        assert published.value is not None
+        version_one = published.value
+        bundle_reader = SqlAlchemyBundleInputReader(session_factory)
+        assert (
+            await bundle_reader.get_resource_version(
+                context(TENANT_A),
+                resource_id=definition.id,
+                version_id=version_one.id,
+            )
+            is not None
+        )
+        capability = await bundle_reader.get_mcp_capability_snapshot(
+            context(TENANT_A), published_version_id=version_one.id
+        )
+        assert capability is not None
+        assert capability.capability_hash == discovery_result.capability_hash
+        assert capability.allowed_tools == ("search.query",)
+        assert capability.tools == (tool,)
+
+        source_evidence = await discoveries.get_published_evidence(
+            context(TENANT_A),
+            source_version_id=version_one.id,
+            definition_id=definition.id,
+            content_hash=version_one.content_hash,
+            allowed_tools=("search.query",),
+        )
+        assert source_evidence is not None
+        rollback_request = ResourceRollbackRequest(
+            version_id=str(version_one.id),
+            expected_resource_version=2,
+            release_note="capability-preserving rollback",
+        )
+        rollback = await registry.rollback_version(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            resource_type="mcp",
+            resource_id=definition.id,
+            source_version_id=version_one.id,
+            request=rollback_request,
+            idempotency_key="mcp-rollback-passed-discovery",
+            request_hash=canonical_request_hash("mcp.rollback", rollback_request),
+            metadata=METADATA,
+            mcp_discovery_attestation_id=source_evidence.id,
+        )
+        assert rollback is not None and rollback.value is not None
+        rollback_capability = await bundle_reader.get_mcp_capability_snapshot(
+            context(TENANT_A), published_version_id=rollback.value.id
+        )
+        assert rollback_capability is not None
+        assert rollback_capability.capability_hash == capability.capability_hash
+
+        async with TenantUnitOfWork(session_factory, context(TENANT_A)) as unit_of_work:
+            rows = list(
+                (
+                    await unit_of_work.session.scalars(
+                        select(McpCapabilityDiscoveryModel)
+                        .where(
+                            McpCapabilityDiscoveryModel.definition_id == definition.id
+                        )
+                        .order_by(McpCapabilityDiscoveryModel.source_discovery_id)
+                    )
+                ).all()
+            )
+            assert len(rows) == 2
+            clone = next(row for row in rows if row.source_discovery_id is not None)
+            assert clone.source_discovery_id == evidence.id
+            assert clone.published_version_id == rollback.value.id
+        async with TenantUnitOfWork(session_factory, context(TENANT_B)) as unit_of_work:
+            assert (
+                await unit_of_work.session.scalar(
+                    select(McpCapabilityDiscoveryModel).where(
+                        McpCapabilityDiscoveryModel.id == evidence.id
+                    )
+                )
+                is None
+            )
+        with pytest.raises(DBAPIError):
+            async with TenantUnitOfWork(
+                session_factory, context(TENANT_A)
+            ) as unit_of_work:
+                await unit_of_work.session.execute(
+                    text(
+                        "UPDATE mcp_capability_discovery "
+                        "SET capability_hash = :capability_hash WHERE id = :id"
+                    ),
+                    {"capability_hash": "sha256:" + "9" * 64, "id": evidence.id},
+                )
+    finally:
+        await app_engine.dispose()
+
+
+async def verify_approval_control_plane(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        agents = SqlAlchemyAgentRegistry(session_factory)
+        sessions = SqlAlchemySessionStore(session_factory)
+        runs = SqlAlchemyRunStore(session_factory)
+        approvals = SqlAlchemyApprovalStore(session_factory)
+        coordinator = ApprovalCoordinator(approvals)
+        agent_records, _ = await agents.list_agents(
+            context(TENANT_A), limit=50, cursor=None, status=None, keyword=None
+        )
+        agent = next(item for item in agent_records if item.active_deployment_id)
+        now = datetime.now(UTC)
+
+        async def create_pending(
+            suffix: str, *, expires_at: datetime
+        ) -> tuple[RunRecord, ApprovalRequestRecord, ApprovalRequestInput]:
+            session_request = SessionCreateRequest.model_validate(
+                {
+                    "agent_id": str(agent.id),
+                    "title": f"AP-E6-004 Approval {suffix}",
+                }
+            )
+            session_outcome = await sessions.create_session(
+                context(TENANT_A),
+                user_id=ACTOR,
+                request=session_request,
+                metadata_value={},
+                idempotency_key=f"approval-session-{suffix}",
+                request_hash=canonical_request_hash("session.create", session_request),
+                metadata=METADATA,
+            )
+            assert session_outcome.value is not None
+            run_request = RunCreateRequest.model_validate(
+                {
+                    "session_id": str(session_outcome.value.id),
+                    "input": {"text": f"approval integration {suffix}"},
+                }
+            )
+            run_outcome = await runs.create_run(
+                context(TENANT_A),
+                user_id=ACTOR,
+                request=run_request,
+                idempotency_key=f"approval-run-{suffix}",
+                request_hash=canonical_request_hash("run.create", run_request),
+                metadata=METADATA,
+            )
+            assert run_outcome.value is not None
+            run = run_outcome.value
+            fencing_token_hash = "sha256:" + "7" * 64
+            await runs.prepare_run(
+                context(TENANT_A),
+                run_id=run.id,
+                workflow_id=f"run/{TENANT_A}/{run.id}",
+                execution_attempt=1,
+                fencing_token_hash=fencing_token_hash,
+            )
+            await runs.mark_run_running(
+                context(TENANT_A),
+                run_id=run.id,
+                execution_attempt=1,
+                worker_id=f"approval-worker-{suffix}",
+                fencing_token_hash=fencing_token_hash,
+            )
+            request = ApprovalRequestInput(
+                run_id=run.id,
+                execution_attempt=1,
+                requester_id=ACTOR,
+                tool_call_id=f"tool-call-{suffix}",
+                tool_name="production.write",
+                tool_schema_hash="sha256:" + "8" * 64,
+                parameter_digest=canonical_tool_parameter_digest(
+                    {"resource": "redacted"}
+                ),
+                policy_version="sha256:" + "a" * 64,
+                deployment_id=run.deployment_id,
+                expires_at=expires_at,
+            )
+            approval = await coordinator.request_approval(
+                context(TENANT_A), request=request, metadata=METADATA, now=now
+            )
+            return run, approval, request
+
+        approved_run, pending, approval_request = await create_pending(
+            "approved", expires_at=now + timedelta(minutes=20)
+        )
+        assert pending.status == "PENDING"
+        assert pending.resource_version == 1
+        duplicate = await coordinator.request_approval(
+            context(TENANT_A),
+            request=approval_request,
+            metadata=METADATA,
+            now=now,
+        )
+        assert duplicate == pending
+        with pytest.raises(PlatformError) as changed_identity:
+            await coordinator.request_approval(
+                context(TENANT_A),
+                request=replace(approval_request, tool_name="production.delete"),
+                metadata=METADATA,
+                now=now,
+            )
+        assert changed_identity.value.code == "RESOURCE_STATE_CONFLICT"
+        assert (
+            await approvals.get_approval(
+                context(TENANT_B), approval_id=pending.id, now=now
+            )
+            is None
+        )
+
+        self_decision = ApprovalDecisionRequest(decision="APPROVED", comment=None)
+        with pytest.raises(PlatformError) as self_approval:
+            await approvals.decide(
+                context(TENANT_A),
+                approval_id=pending.id,
+                actor_id=ACTOR,
+                request=self_decision,
+                expected_version=1,
+                idempotency_key="approval-self-decision",
+                request_hash=canonical_request_hash("approval.decision", self_decision),
+                metadata=METADATA,
+                now=now + timedelta(seconds=1),
+            )
+        assert self_approval.value.code == "RESOURCE_STATE_CONFLICT"
+
+        approved_decision = ApprovalDecisionRequest(
+            decision="APPROVED", comment="reviewed"
+        )
+        ticket_issuer = HmacExecutionTicketIssuer(SecretStr("t" * 32))
+        ticket_credential = ticket_issuer.issue(
+            tenant_id=UUID(TENANT_A), approval_id=pending.id
+        )
+        approved_hash = canonical_request_hash("approval.decision", approved_decision)
+        with pytest.raises(PlatformError) as stale_version:
+            await approvals.decide(
+                context(TENANT_A, OTHER_ACTOR),
+                approval_id=pending.id,
+                actor_id=OTHER_ACTOR,
+                request=approved_decision,
+                expected_version=99,
+                idempotency_key="approval-stale-version",
+                request_hash=approved_hash,
+                metadata=METADATA,
+                now=now + timedelta(seconds=1),
+            )
+        assert stale_version.value.code == "RESOURCE_VERSION_CONFLICT"
+        approved = await approvals.decide(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=pending.id,
+            actor_id=OTHER_ACTOR,
+            request=approved_decision,
+            expected_version=1,
+            idempotency_key="approval-approved-decision",
+            request_hash=approved_hash,
+            metadata=METADATA,
+            now=now + timedelta(seconds=2),
+            ticket_issue=ExecutionTicketIssue(
+                credential=ticket_credential,
+                expires_at=now + timedelta(minutes=5),
+            ),
+        )
+        assert approved is not None and approved.value is not None
+        assert approved.value.status == "APPROVED"
+        assert approved.value.resource_version == 2
+        replay = await approvals.decide(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=pending.id,
+            actor_id=OTHER_ACTOR,
+            request=approved_decision,
+            expected_version=1,
+            idempotency_key="approval-approved-decision",
+            request_hash=approved_hash,
+            metadata=METADATA,
+            now=now + timedelta(seconds=3),
+        )
+        assert replay is not None and replay.replay is not None
+        decision = await approvals.get_decision(
+            context(TENANT_A, OTHER_ACTOR), approval_id=pending.id
+        )
+        assert decision is not None
+        assert decision.actor_id == OTHER_ACTOR
+        assert decision.comment == "reviewed"
+        ticket = await approvals.get_ticket_for_approval(
+            context(TENANT_A, OTHER_ACTOR), approval_id=pending.id
+        )
+        assert ticket is not None
+        assert ticket.id == ticket_credential.ticket_id
+        assert ticket.nonce_hash == ticket_credential.nonce_hash
+        assert ticket.consumed_at is None
+        assert ticket.expires_at == now + timedelta(minutes=5)
+
+        execution_role_id = uuid5(
+            NAMESPACE_URL, f"tool-execution-role/{TENANT_A}/{ACTOR}"
+        )
+        async with admin_engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": TENANT_A},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO role (id, tenant_id, code, name, built_in) "
+                    "VALUES (:id, :tenant_id, 'tool_executor', 'Tool Executor', false)"
+                ),
+                {"id": execution_role_id, "tenant_id": TENANT_A},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO role_permission "
+                    "(tenant_id, role_id, resource_type, action) "
+                    "VALUES (:tenant_id, :role_id, 'mcp', 'execute')"
+                ),
+                {"tenant_id": TENANT_A, "role_id": execution_role_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO role_binding "
+                    "(tenant_id, subject_type, subject_id, role_id) "
+                    "VALUES (:tenant_id, 'user', :subject_id, :role_id)"
+                ),
+                {
+                    "tenant_id": TENANT_A,
+                    "subject_id": ACTOR,
+                    "role_id": execution_role_id,
+                },
+            )
+
+        class ToolExecutor:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def execute(
+                self, context: TenantContext, *, request: ToolExecutionRequest
+            ) -> ToolExecutionResult:
+                self.calls += 1
+                return ToolExecutionResult(status="SUCCEEDED", output={"ok": True})
+
+        executor = ToolExecutor()
+        gateway = ToolGatewayService(
+            SqlAlchemyExecutionTicketStore(session_factory),
+            SqlAlchemyToolAuthorizationResolver(session_factory),
+            executor,
+        )
+        tool_request = ToolExecutionRequest(
+            tenant_id=UUID(TENANT_A),
+            run_id=approved_run.id,
+            execution_attempt=1,
+            approval_id=pending.id,
+            requester_id=ACTOR,
+            deployment_id=approved_run.deployment_id,
+            ticket_ref=ticket_credential.ticket_ref,
+            ticket_nonce=ticket_credential.nonce,
+            tool_name=approval_request.tool_name,
+            tool_schema_hash=approval_request.tool_schema_hash,
+            parameter_digest=approval_request.parameter_digest,
+            policy_version=approval_request.policy_version,
+            arguments={"resource": "redacted"},
+        )
+        result = await gateway.execute(
+            context(TENANT_A),
+            request=tool_request,
+            metadata=METADATA,
+            now=now + timedelta(seconds=4),
+        )
+        assert result.status == "SUCCEEDED"
+        assert executor.calls == 1
+        with pytest.raises(ToolExecutionDenied) as replayed:
+            await gateway.execute(
+                context(TENANT_A),
+                request=tool_request,
+                metadata=METADATA,
+                now=now + timedelta(seconds=5),
+            )
+        assert replayed.value.code == "EXECUTION_TICKET_REPLAY"
+        assert executor.calls == 1
+        async with admin_engine.connect() as connection:
+            ticket_audits = list(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT action FROM audit_log "
+                            "WHERE resource_id = :approval_id "
+                            "AND action IN ('ticket.consume','ticket.replay','tool.execute') "
+                            "ORDER BY created_at"
+                        ),
+                        {"approval_id": pending.id},
+                    )
+                ).scalars()
+            )
+        assert sorted(ticket_audits) == [
+            "ticket.consume",
+            "ticket.replay",
+            "tool.execute",
+        ]
+
+        ticket_expired_run, ticket_pending, ticket_request = await create_pending(
+            "ticket-expired", expires_at=now + timedelta(minutes=20)
+        )
+        expired_credential = ticket_issuer.issue(
+            tenant_id=UUID(TENANT_A), approval_id=ticket_pending.id
+        )
+        ticket_approval = await approvals.decide(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=ticket_pending.id,
+            actor_id=OTHER_ACTOR,
+            request=approved_decision,
+            expected_version=1,
+            idempotency_key="approval-ticket-expired-decision",
+            request_hash=approved_hash,
+            metadata=METADATA,
+            now=now + timedelta(seconds=6),
+            ticket_issue=ExecutionTicketIssue(
+                credential=expired_credential,
+                expires_at=now + timedelta(seconds=7),
+            ),
+        )
+        assert ticket_approval is not None
+        expired_tool_request = replace(
+            tool_request,
+            run_id=ticket_expired_run.id,
+            approval_id=ticket_pending.id,
+            deployment_id=ticket_expired_run.deployment_id,
+            ticket_ref=expired_credential.ticket_ref,
+            ticket_nonce=expired_credential.nonce,
+            tool_name=ticket_request.tool_name,
+            tool_schema_hash=ticket_request.tool_schema_hash,
+            parameter_digest=ticket_request.parameter_digest,
+            policy_version=ticket_request.policy_version,
+        )
+        with pytest.raises(ToolExecutionDenied) as expired_ticket:
+            await gateway.execute(
+                context(TENANT_A),
+                request=expired_tool_request,
+                metadata=METADATA,
+                now=now + timedelta(seconds=8),
+            )
+        assert expired_ticket.value.code == "EXECUTION_TICKET_EXPIRED"
+        expired_approval = await approvals.get_approval(
+            context(TENANT_A), approval_id=ticket_pending.id, now=now
+        )
+        assert expired_approval is not None
+        assert expired_approval.status == "EXPIRED"
+        async with admin_engine.connect() as connection:
+            ticket_expired_state = (
+                await connection.execute(
+                    text("SELECT status, error_code FROM agent_run WHERE id = :run_id"),
+                    {"run_id": ticket_expired_run.id},
+                )
+            ).one()
+        assert tuple(ticket_expired_state) == ("TIMEOUT", "EXECUTION_TICKET_EXPIRED")
+
+        with pytest.raises(DBAPIError):
+            async with TenantUnitOfWork(
+                session_factory, context(TENANT_A, OTHER_ACTOR)
+            ) as unit_of_work:
+                await unit_of_work.session.execute(
+                    text(
+                        "UPDATE approval_request SET tool_name = 'tampered' "
+                        "WHERE id = :approval_id"
+                    ),
+                    {"approval_id": pending.id},
+                )
+        with pytest.raises(DBAPIError):
+            async with TenantUnitOfWork(
+                session_factory, context(TENANT_A, OTHER_ACTOR)
+            ) as unit_of_work:
+                await unit_of_work.session.execute(
+                    text(
+                        "UPDATE approval_decision SET comment = 'tampered' "
+                        "WHERE approval_id = :approval_id"
+                    ),
+                    {"approval_id": pending.id},
+                )
+
+        rejected_run, rejected_pending, _ = await create_pending(
+            "rejected", expires_at=now + timedelta(minutes=20)
+        )
+        rejected_decision = ApprovalDecisionRequest(decision="REJECTED", comment=None)
+        rejected = await approvals.decide(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=rejected_pending.id,
+            actor_id=OTHER_ACTOR,
+            request=rejected_decision,
+            expected_version=1,
+            idempotency_key="approval-rejected-decision",
+            request_hash=canonical_request_hash("approval.decision", rejected_decision),
+            metadata=METADATA,
+            now=now + timedelta(seconds=4),
+        )
+        assert rejected is not None and rejected.value is not None
+        assert rejected.value.status == "REJECTED"
+
+        expired_run, expired_pending, _ = await create_pending(
+            "expired", expires_at=now + timedelta(minutes=1)
+        )
+        expired = await approvals.expire_due(
+            context(TENANT_A), now=now + timedelta(minutes=2), limit=100
+        )
+        assert [item.id for item in expired] == [expired_pending.id]
+        assert expired[0].status == "EXPIRED"
+
+        async with TenantUnitOfWork(
+            session_factory, context(TENANT_B), read_only=True
+        ) as unit_of_work:
+            assert (
+                await unit_of_work.session.scalar(
+                    select(ApprovalRequestModel).where(
+                        ApprovalRequestModel.id == pending.id
+                    )
+                )
+                is None
+            )
+            assert (
+                await unit_of_work.session.scalar(
+                    select(ExecutionTicketModel).where(
+                        ExecutionTicketModel.approval_id == pending.id
+                    )
+                )
+                is None
+            )
+            assert (
+                await unit_of_work.session.scalar(
+                    select(ApprovalDecisionModel).where(
+                        ApprovalDecisionModel.approval_id == pending.id
+                    )
+                )
+                is None
+            )
+
+        async with admin_engine.connect() as connection:
+            run_rows = (
+                await connection.execute(
+                    text(
+                        "SELECT id, status, error_code FROM agent_run "
+                        "WHERE id IN (:approved_run_id, :rejected_run_id, "
+                        ":expired_run_id)"
+                    ),
+                    {
+                        "approved_run_id": approved_run.id,
+                        "rejected_run_id": rejected_run.id,
+                        "expired_run_id": expired_run.id,
+                    },
+                )
+            ).all()
+            run_states = {row.id: (row.status, row.error_code) for row in run_rows}
+            assert run_states[approved_run.id] == ("RUNNING", None)
+            assert run_states[rejected_run.id] == ("CANCELLING", None)
+            assert run_states[expired_run.id] == (
+                "TIMEOUT",
+                "APPROVAL_EXPIRED",
+            )
+            event_rows = (
+                await connection.execute(
+                    text(
+                        "SELECT run_id, event_type, payload_json "
+                        "FROM run_event WHERE run_id IN "
+                        "(:approved_run_id, :rejected_run_id, :expired_run_id) "
+                        "AND event_type IN "
+                        "('approval_required', 'approval_resolved') "
+                        "ORDER BY run_id, sequence_no"
+                    ),
+                    {
+                        "approved_run_id": approved_run.id,
+                        "rejected_run_id": rejected_run.id,
+                        "expired_run_id": expired_run.id,
+                    },
+                )
+            ).all()
+        by_run: dict[UUID, list[Any]] = {}
+        for row in event_rows:
+            by_run.setdefault(row.run_id, []).append(row)
+        assert [row.event_type for row in by_run[approved_run.id]] == [
+            "approval_required",
+            "approval_resolved",
+        ]
+        assert by_run[approved_run.id][1].payload_json["decision"] == "APPROVED"
+        assert by_run[rejected_run.id][1].payload_json["decision"] == "REJECTED"
+        assert by_run[expired_run.id][1].payload_json["decision"] == "EXPIRED"
+        assert by_run[expired_run.id][1].payload_json["decided_by"] == str(UUID(int=0))
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
+async def verify_agentscope_approval_runtime_bridge(database_url: str) -> None:
+    """Exercise AgentScope control events through durable approval and audit facts."""
+
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        agents = SqlAlchemyAgentRegistry(session_factory)
+        sessions = SqlAlchemySessionStore(session_factory)
+        runs = SqlAlchemyRunStore(session_factory)
+        approval_store = SqlAlchemyApprovalStore(session_factory)
+        coordinator = ApprovalCoordinator(approval_store)
+        ticket_issuer = HmacExecutionTicketIssuer(SecretStr("b" * 32))
+        agent_records, _ = await agents.list_agents(
+            context(TENANT_A), limit=50, cursor=None, status=None, keyword=None
+        )
+        agent = next(item for item in agent_records if item.active_deployment_id)
+        session_request = SessionCreateRequest.model_validate(
+            {
+                "agent_id": str(agent.id),
+                "title": "AP-E6-007 AgentScope Runtime Bridge",
+            }
+        )
+        session_outcome = await sessions.create_session(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=session_request,
+            metadata_value={},
+            idempotency_key="agentscope-bridge-session",
+            request_hash=canonical_request_hash("session.create", session_request),
+            metadata=METADATA,
+        )
+        assert session_outcome.value is not None
+        run_request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(session_outcome.value.id),
+                "input": {"text": "execute the approved production write"},
+            }
+        )
+        run_outcome = await runs.create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=run_request,
+            idempotency_key="agentscope-bridge-run",
+            request_hash=canonical_request_hash("run.create", run_request),
+            metadata=METADATA,
+        )
+        assert run_outcome.value is not None
+        run = run_outcome.value
+        fencing_token = SecretStr("agentscope-bridge-fencing-token")
+        fencing_hash = (
+            "sha256:"
+            + hashlib.sha256(fencing_token.get_secret_value().encode()).hexdigest()
+        )
+        await runs.prepare_run(
+            context(TENANT_A),
+            run_id=run.id,
+            workflow_id=f"run/{TENANT_A}/{run.id}",
+            execution_attempt=1,
+            fencing_token_hash=fencing_hash,
+        )
+        await runs.mark_run_running(
+            context(TENANT_A),
+            run_id=run.id,
+            execution_attempt=1,
+            worker_id="agentscope-runtime-bridge-integration",
+            fencing_token_hash=fencing_hash,
+        )
+
+        role_id = uuid5(NAMESPACE_URL, f"agentscope-bridge-role/{TENANT_A}/{ACTOR}")
+        async with admin_engine.begin() as connection:
+            await connection.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+                {"tenant_id": TENANT_A},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO role (id, tenant_id, code, name, built_in) "
+                    "VALUES (:id, :tenant_id, 'agentscope_bridge_executor', "
+                    "'AgentScope Bridge Executor', false)"
+                ),
+                {"id": role_id, "tenant_id": TENANT_A},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO role_permission "
+                    "(tenant_id, role_id, resource_type, action) "
+                    "VALUES (:tenant_id, :role_id, 'mcp', 'execute')"
+                ),
+                {"tenant_id": TENANT_A, "role_id": role_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO role_binding "
+                    "(tenant_id, subject_type, subject_id, role_id) "
+                    "VALUES (:tenant_id, 'user', :subject_id, :role_id)"
+                ),
+                {
+                    "tenant_id": TENANT_A,
+                    "subject_id": ACTOR,
+                    "role_id": role_id,
+                },
+            )
+
+        class RuntimeSession:
+            def __init__(self) -> None:
+                self.state = AgentState(session_id="agentscope-e6-007")
+                self.calls = 0
+
+            async def reply_stream(
+                self,
+                inputs: (
+                    Msg
+                    | list[Msg]
+                    | UserConfirmResultEvent
+                    | ExternalExecutionResultEvent
+                    | None
+                ) = None,
+                *,
+                yield_final_msg: bool = False,
+            ) -> AsyncIterator[AgentEvent | Msg]:
+                assert yield_final_msg is False
+                self.calls += 1
+                tool_call = ToolCallBlock(
+                    id="tool-call-agentscope-bridge",
+                    name="production.write",
+                    input='{"resource":"redacted"}',
+                )
+                if self.calls == 1:
+                    yield ReplyStartEvent(
+                        id="bridge-reply-start",
+                        session_id=self.state.session_id,
+                        reply_id="bridge-reply",
+                        name="assistant",
+                    )
+                    yield ToolCallStartEvent(
+                        id="bridge-tool-start",
+                        reply_id="bridge-reply",
+                        tool_call_id=tool_call.id,
+                        tool_call_name=tool_call.name,
+                    )
+                    yield RequireUserConfirmEvent(
+                        reply_id="bridge-reply", tool_calls=[tool_call]
+                    )
+                    return
+                if isinstance(inputs, UserConfirmResultEvent):
+                    yield RequireExternalExecutionEvent(
+                        reply_id="bridge-reply", tool_calls=[tool_call]
+                    )
+                    return
+                assert isinstance(inputs, ExternalExecutionResultEvent)
+                yield ToolResultStartEvent(
+                    id="bridge-result-start",
+                    reply_id="bridge-reply",
+                    tool_call_id=tool_call.id,
+                    tool_call_name=tool_call.name,
+                )
+                yield ToolResultTextDeltaEvent(
+                    id="bridge-result-delta",
+                    reply_id="bridge-reply",
+                    tool_call_id=tool_call.id,
+                    delta='{"ok":true}',
+                )
+                yield ToolResultEndEvent(
+                    id="bridge-result-end",
+                    reply_id="bridge-reply",
+                    tool_call_id=tool_call.id,
+                    state=ToolResultState.SUCCESS,
+                )
+                yield TextBlockDeltaEvent(
+                    id="bridge-text-delta",
+                    reply_id="bridge-reply",
+                    block_id="bridge-text",
+                    delta="approved tool completed",
+                )
+                yield ReplyEndEvent(
+                    id="bridge-reply-end",
+                    session_id=self.state.session_id,
+                    reply_id="bridge-reply",
+                    finished_reason=ReplyFinishedReason.COMPLETED,
+                )
+
+        runtime_session = RuntimeSession()
+        checkpoints: list[bytes] = []
+        tool_calls: list[ToolExecutionRequest] = []
+        bridge_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+
+        class BridgePorts:
+            async def create(
+                self, context: TenantContext, *, request: RunExecutionRequest
+            ) -> AgentScopeSessionStart:
+                return AgentScopeSessionStart(
+                    session=runtime_session,
+                    initial_input=None,
+                )
+
+            async def save(self, context: TenantContext, **kwargs: object) -> str:
+                checkpoints.append(cast(bytes, kwargs["state_json"]))
+                return f"state://{TENANT_A}/{run.id}/1/checkpoint-1"
+
+            async def resolve(
+                self, context: TenantContext, **kwargs: object
+            ) -> RuntimeToolBinding:
+                return RuntimeToolBinding(
+                    tool_call_id="tool-call-agentscope-bridge",
+                    requester_id=ACTOR,
+                    deployment_id=run.deployment_id,
+                    tool_name="production.write",
+                    tool_schema_hash="sha256:" + "6" * 64,
+                    policy_version="effective-policy/v1",
+                    arguments={"resource": "redacted"},
+                    risk_level="HIGH",
+                    approval_expires_at=bridge_expires_at,
+                )
+
+        class ToolExecutor:
+            async def execute(
+                self, context: TenantContext, *, request: ToolExecutionRequest
+            ) -> ToolExecutionResult:
+                tool_calls.append(request)
+                return ToolExecutionResult(status="SUCCEEDED", output={"ok": True})
+
+        ports = BridgePorts()
+        bridge = AgentScopeRuntimeBridge(
+            ports,
+            ports,
+            ports,
+            AgentScopeApprovalBridge(coordinator, approval_store),
+            ticket_issuer,
+            ToolGatewayService(
+                SqlAlchemyExecutionTicketStore(session_factory),
+                SqlAlchemyToolAuthorizationResolver(session_factory),
+                ToolExecutor(),
+            ),
+            approval_poll_seconds=0.01,
+        )
+        approval_id = uuid5(
+            NAMESPACE_URL,
+            f"approval/{TENANT_A}/{run.id}/1/tool-call-agentscope-bridge",
+        )
+
+        async def approve() -> None:
+            pending = None
+            for _ in range(200):
+                pending = await approval_store.get_approval(
+                    context(TENANT_A, OTHER_ACTOR),
+                    approval_id=approval_id,
+                    now=datetime.now(UTC),
+                )
+                if pending is not None:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending is not None
+            decision = ApprovalDecisionRequest(
+                decision="APPROVED", comment="AP-E6-007 integration approval"
+            )
+            credential = ticket_issuer.issue(
+                tenant_id=UUID(TENANT_A), approval_id=approval_id
+            )
+            outcome = await approval_store.decide(
+                context(TENANT_A, OTHER_ACTOR),
+                approval_id=approval_id,
+                actor_id=OTHER_ACTOR,
+                request=decision,
+                expected_version=pending.resource_version,
+                idempotency_key="agentscope-bridge-approval",
+                request_hash=canonical_request_hash("approval.decision", decision),
+                metadata=METADATA,
+                now=datetime.now(UTC),
+                ticket_issue=ExecutionTicketIssue(
+                    credential=credential,
+                    expires_at=pending.expires_at,
+                ),
+            )
+            assert outcome is not None and outcome.value is not None
+
+        heartbeats: list[str] = []
+        runtime_request = RunExecutionRequest(
+            tenant_id=UUID(TENANT_A),
+            run_id=run.id,
+            execution_attempt=1,
+            run_spec=RunSpecReference(
+                uri=f"immutable://run-spec/{run.id}/1",
+                content_hash="sha256:" + "5" * 64,
+                size_bytes=1024,
+            ),
+            timeout_seconds=600,
+            runtime_type="agentscope",
+            fencing_token=fencing_token,
+            heartbeat=heartbeats.append,
+        )
+        approval_task = asyncio.create_task(approve())
+        completion = await bridge.execute(
+            TenantContext(
+                tenant_id=TENANT_A,
+                subject_type=SubjectType.SERVICE,
+                subject_id=str(run.id),
+                auth_time=datetime.now(UTC),
+                request_id="agentscope-bridge-request",
+                trace_id="agentscope-bridge-trace",
+            ),
+            request=runtime_request,
+            event_publisher=SqlAlchemyRuntimeEventCandidatePublisher(
+                RunEventIngestionService(SqlAlchemyRunEventStore(session_factory))
+            ),
+        )
+        await approval_task
+
+        assert completion.status == "SUCCEEDED"
+        assistant_part = completion.assistant_content_parts[0]
+        assert isinstance(assistant_part, AssistantTextPart)
+        assert assistant_part.text == "approved tool completed"
+        assert len(checkpoints) == 1
+        assert b"agentscope-e6-007" in checkpoints[0]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].requester_id == ACTOR
+        assert heartbeats[0] == "waiting_approval"
+        assert heartbeats[-1] == "external_execution_completed"
+
+        stored_approval = await approval_store.get_approval(
+            context(TENANT_A), approval_id=approval_id, now=datetime.now(UTC)
+        )
+        stored_ticket = await approval_store.get_ticket_for_approval(
+            context(TENANT_A), approval_id=approval_id
+        )
+        assert stored_approval is not None and stored_approval.status == "CONSUMED"
+        assert stored_ticket is not None and stored_ticket.consumed_at is not None
+        async with admin_engine.connect() as connection:
+            event_types = list(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT event_type FROM run_event WHERE run_id = :run_id "
+                            "ORDER BY sequence_no"
+                        ),
+                        {"run_id": run.id},
+                    )
+                ).scalars()
+            )
+            audit_actions = list(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT action FROM audit_log "
+                            "WHERE resource_id = :approval_id ORDER BY created_at"
+                        ),
+                        {"approval_id": approval_id},
+                    )
+                ).scalars()
+            )
+        assert event_types == [
+            "text_message_start",
+            "tool_call_start",
+            "approval_required",
+            "approval_resolved",
+            "tool_call_result",
+            "text_delta",
+            "text_message_end",
+        ]
+        assert set(audit_actions) >= {
+            "approval.request",
+            "approval.approve",
+            "ticket.consume",
+            "tool.execute",
+        }
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
 def test_resource_registry_postgresql_integration() -> None:
     database_url = require_database_url()
     asyncio.run(drop_test_role(database_url))
@@ -4671,12 +6797,17 @@ def test_resource_registry_postgresql_integration() -> None:
     migrate(database_url, "head")
     try:
         asyncio.run(verify_prompt_permission_backfill(database_url))
+        asyncio.run(verify_skill_permission_backfill(database_url))
+        asyncio.run(verify_mcp_permission_backfill(database_url))
         asyncio.run(verify_model_permission_backfill(database_url))
         asyncio.run(verify_agent_permission_backfill(database_url))
         asyncio.run(verify_session_permission_backfill(database_url))
         asyncio.run(verify_message_permission_backfill(database_url))
         asyncio.run(verify_run_permission_backfill(database_url))
+        asyncio.run(verify_approval_permission_backfill(database_url))
         asyncio.run(verify_resource_registry(database_url))
+        asyncio.run(verify_skill_supply_chain_publication(database_url))
+        asyncio.run(verify_mcp_capability_publication(database_url))
         asyncio.run(verify_model_resources(database_url))
         asyncio.run(verify_agent_draft(database_url))
         asyncio.run(verify_release_request_and_failure_protection(database_url))
@@ -4687,6 +6818,8 @@ def test_resource_registry_postgresql_integration() -> None:
         asyncio.run(verify_run_event_store_constraints(database_url))
         asyncio.run(verify_run_workflow_attempt_and_message_finalization(database_url))
         asyncio.run(verify_run_cancel_retry_and_recovery_fencing(database_url))
+        asyncio.run(verify_approval_control_plane(database_url))
+        asyncio.run(verify_agentscope_approval_runtime_bridge(database_url))
         asyncio.run(verify_publication_queries_are_read_only(database_url))
         asyncio.run(
             verify_agent_rollback_creates_new_release_and_deployment(database_url)
@@ -4694,6 +6827,7 @@ def test_resource_registry_postgresql_integration() -> None:
         asyncio.run(verify_session_remains_pinned_after_rollback(database_url))
         asyncio.run(verify_run_uses_retired_session_deployment(database_url))
         asyncio.run(verify_epic3_vertical_acceptance(database_url))
+        asyncio.run(verify_sandbox_lifecycle_and_fencing(database_url))
     finally:
         asyncio.run(drop_test_role(database_url))
         migrate(database_url, "base")

@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 
-from packages.application.outbox import OutboxDispatcher
+from packages.application.outbox import OutboxDispatchSummary
 from packages.contracts.public import TenantContext
 from packages.infrastructure.observability import PlatformMetrics
 
@@ -16,8 +16,14 @@ class TenantContextSource(Protocol):
     async def list_service_contexts(self, *, limit: int) -> Sequence[TenantContext]: ...
 
 
+class TenantOutboxDispatcher(Protocol):
+    async def dispatch_tenant_once(
+        self, context: TenantContext, *, now: datetime
+    ) -> OutboxDispatchSummary: ...
+
+
 async def dispatch_cycle(
-    dispatcher: OutboxDispatcher,
+    dispatcher: TenantOutboxDispatcher,
     context_source: TenantContextSource,
     metrics: PlatformMetrics,
     *,
@@ -44,7 +50,7 @@ async def dispatch_cycle(
 
 
 async def run_event_worker_loop(
-    dispatcher: OutboxDispatcher,
+    dispatcher: TenantOutboxDispatcher,
     context_source: TenantContextSource,
     metrics: PlatformMetrics,
     stop_event: asyncio.Event,

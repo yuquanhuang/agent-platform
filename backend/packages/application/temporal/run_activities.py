@@ -1,6 +1,7 @@
 """Agent Run Activities over explicit persistence and Runtime ports."""
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -22,8 +23,12 @@ from packages.contracts.temporal import (
     FinalizeAgentRunInput,
     FinalizeAgentRunResult,
     InspectAgentRuntimeInput,
+    ProvisionRunSandboxInput,
     RecoverAgentRunInput,
+    ReleaseRunSandboxInput,
+    ReleaseRunSandboxResult,
     RunPreparationResult,
+    RunSandboxHandle,
     RunSpecReference,
     RuntimeCancellationResult,
     RuntimeCompletion,
@@ -73,6 +78,27 @@ class RunExecutionRequest:
     run_spec: RunSpecReference
     timeout_seconds: int
     runtime_type: Literal["agentscope", "codex"]
+    fencing_token: SecretStr
+    sandbox: RunSandboxHandle | None = None
+    heartbeat: Callable[[str], None] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunSandboxProvisionRequest:
+    tenant_id: UUID
+    run_id: UUID
+    execution_attempt: int
+    run_spec: RunSpecReference
+    runtime_type: Literal["agentscope", "codex"]
+    fencing_token: SecretStr
+
+
+@dataclass(frozen=True, slots=True)
+class RunSandboxReleaseRequest:
+    tenant_id: UUID
+    run_id: UUID
+    execution_attempt: int
+    sandbox: RunSandboxHandle
     fencing_token: SecretStr
 
 
@@ -203,7 +229,29 @@ class RunRuntimeController(Protocol):
     ) -> RuntimeCancellationResult: ...
 
 
+class RunSandboxController(Protocol):
+    """Provision a fenced Sandbox/Lease and release it after Run finalization."""
+
+    async def provision(
+        self, context: TenantContext, *, request: RunSandboxProvisionRequest
+    ) -> RunSandboxHandle: ...
+
+    async def release(
+        self, context: TenantContext, *, request: RunSandboxReleaseRequest
+    ) -> ReleaseRunSandboxResult: ...
+
+
 class RunStageError(RuntimeError):
+    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+        super().__init__(message)
+
+
+class RunRuntimeError(RuntimeError):
+    """Stable error contract implemented by isolated Runtime adapters."""
+
     def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
         self.code = code
         self.message = message
@@ -222,6 +270,7 @@ class AgentRunWorkflowActivities:
         runtime_executor: RunRuntimeExecutor,
         runtime_event_publisher: RuntimeEventCandidatePublisher,
         runtime_controller: RunRuntimeController | None = None,
+        sandbox_controller: RunSandboxController | None = None,
     ) -> None:
         self._store = store
         self._run_spec_compiler = run_spec_compiler
@@ -229,6 +278,7 @@ class AgentRunWorkflowActivities:
         self._runtime_executor = runtime_executor
         self._runtime_event_publisher = runtime_event_publisher
         self._runtime_controller = runtime_controller
+        self._sandbox_controller = sandbox_controller
 
     @activity.defn(name="prepare_agent_run_v1")
     async def prepare_agent_run(
@@ -303,18 +353,98 @@ class AgentRunWorkflowActivities:
                     timeout_seconds=input.timeout_seconds,
                     runtime_type=input.runtime_type,
                     fencing_token=fencing_token,
+                    sandbox=input.sandbox,
+                    heartbeat=lambda stage: _heartbeat(
+                        input.run_id, input.execution_attempt, stage
+                    ),
                 ),
                 event_publisher=self._runtime_event_publisher,
             )
             _heartbeat(input.run_id, input.execution_attempt, "completed")
             return completion
-        except (ApplicationError, PlatformError, RunStageError) as error:
+        except (
+            ApplicationError,
+            PlatformError,
+            RunRuntimeError,
+            RunStageError,
+        ) as error:
             _raise_activity_error(error)
         except Exception as error:
             raise ApplicationError(
                 "The Runtime execution failed.",
                 type="RUNTIME_EXECUTION_FAILED",
                 non_retryable=True,
+            ) from error
+
+    @activity.defn(name="provision_run_sandbox_v1")
+    async def provision_run_sandbox(
+        self, input: ProvisionRunSandboxInput
+    ) -> RunSandboxHandle:
+        try:
+            fencing_token = self._fencing_token_issuer.issue(
+                tenant_id=input.tenant_id,
+                run_id=input.run_id,
+                execution_attempt=input.execution_attempt,
+            )
+            result = await self._required_sandbox_controller().provision(
+                _context(input),
+                request=RunSandboxProvisionRequest(
+                    tenant_id=input.tenant_id,
+                    run_id=input.run_id,
+                    execution_attempt=input.execution_attempt,
+                    run_spec=input.run_spec,
+                    runtime_type=input.runtime_type,
+                    fencing_token=fencing_token,
+                ),
+            )
+            if not result.sandbox_instance_id or not result.lease_id:
+                raise RunStageError(
+                    "SANDBOX_PROVISION_MISMATCH",
+                    "The Sandbox provision result is incomplete.",
+                )
+            return result
+        except (ApplicationError, PlatformError, RunStageError) as error:
+            _raise_activity_error(error)
+        except Exception as error:
+            raise ApplicationError(
+                "The Run Sandbox could not be provisioned.",
+                type="SANDBOX_PROVISION_FAILED",
+                non_retryable=False,
+            ) from error
+
+    @activity.defn(name="release_run_sandbox_v1")
+    async def release_run_sandbox(
+        self, input: ReleaseRunSandboxInput
+    ) -> ReleaseRunSandboxResult:
+        try:
+            fencing_token = self._fencing_token_issuer.issue(
+                tenant_id=input.tenant_id,
+                run_id=input.run_id,
+                execution_attempt=input.execution_attempt,
+            )
+            result = await self._required_sandbox_controller().release(
+                _context(input),
+                request=RunSandboxReleaseRequest(
+                    tenant_id=input.tenant_id,
+                    run_id=input.run_id,
+                    execution_attempt=input.execution_attempt,
+                    sandbox=input.sandbox,
+                    fencing_token=fencing_token,
+                ),
+            )
+            if result.sandbox_instance_id != input.sandbox.sandbox_instance_id:
+                raise RunStageError(
+                    "SANDBOX_RELEASE_MISMATCH",
+                    "The Sandbox release result identity is invalid.",
+                )
+            return result
+        except (ApplicationError, PlatformError, RunStageError) as error:
+            _raise_activity_error(error)
+        except Exception as error:
+            raise ApplicationError(
+                "The Run Sandbox release could not be confirmed.",
+                type="SANDBOX_CLEANUP_FAILED",
+                non_retryable=False,
             ) from error
 
     @activity.defn(name="finalize_agent_run_v1")
@@ -531,6 +661,14 @@ class AgentRunWorkflowActivities:
             )
         return self._runtime_controller
 
+    def _required_sandbox_controller(self) -> RunSandboxController:
+        if self._sandbox_controller is None:
+            raise RunStageError(
+                "SANDBOX_CONTROL_UNAVAILABLE",
+                "Sandbox provisioning and cleanup are not configured.",
+            )
+        return self._sandbox_controller
+
 
 def _execution_attempt(
     source: RunSpecCompilationSource, input: AgentRunWorkflowInput
@@ -558,7 +696,9 @@ def _context(
         | FinalizeAgentRunCancellationInput
         | FinalizeAgentRunInput
         | InspectAgentRuntimeInput
+        | ProvisionRunSandboxInput
         | RecoverAgentRunInput
+        | ReleaseRunSandboxInput
     ),
 ) -> TenantContext:
     return TenantContext(
@@ -629,7 +769,7 @@ def _fencing_token_hash(
 def _raise_activity_error(error: Exception) -> NoReturn:
     if isinstance(error, ApplicationError):
         raise error
-    if isinstance(error, RunStageError):
+    if isinstance(error, (RunRuntimeError, RunStageError)):
         raise ApplicationError(
             error.message,
             type=error.code,

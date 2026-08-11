@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import JsonValue
 
+from packages.domain.mcp.model import McpCapabilitySnapshotInput
 from packages.domain.resources.model import ResourceContentValue
 
 BundleResourceType = Literal["prompt", "skill", "mcp", "model", "sandbox"]
@@ -29,6 +30,7 @@ class BundleResourceInput:
     binding_role: str | None = None
     model_binding_snapshot_id: UUID | None = None
     model_binding_snapshot_hash: str | None = None
+    mcp_capability_snapshot: McpCapabilitySnapshotInput | None = None
 
 
 @dataclass(frozen=True, slots=True)

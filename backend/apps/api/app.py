@@ -4,27 +4,37 @@ from fastapi import FastAPI
 
 from apps.api.http import RequestContextMiddleware, install_exception_handlers
 from apps.api.routes.agents import create_agent_router
+from apps.api.routes.approvals import create_approval_router
+from apps.api.routes.artifacts import create_artifact_router
+from apps.api.routes.audit import create_audit_router
 from apps.api.routes.auth import create_auth_router
 from apps.api.routes.events import InternalServiceIdentityProvider, create_event_router
 from apps.api.routes.health import create_health_router
 from apps.api.routes.iam import create_iam_router
+from apps.api.routes.mcp import create_mcp_router
 from apps.api.routes.metrics import create_metrics_router
 from apps.api.routes.models import create_model_router
 from apps.api.routes.prompts import create_prompt_router
 from apps.api.routes.releases import create_release_router
 from apps.api.routes.runs import create_run_router
 from apps.api.routes.sessions import create_session_router
+from apps.api.routes.skills import create_skill_router
 from packages.application.event_service import (
     RunEventIngestionService,
     RunEventQueryService,
+    RunEventStreamService,
 )
 from packages.application.public import (
     AgentManagementService,
+    ApprovalManagementService,
+    ArtifactManagementService,
+    AuditManagementService,
     CurrentIdentityService,
     DeploymentManagementService,
     HealthService,
     IamManagementService,
     IdentityReader,
+    McpManagementService,
     MessageHistoryService,
     ModelManagementService,
     PromptManagementService,
@@ -32,6 +42,7 @@ from packages.application.public import (
     ReleaseManagementService,
     RunManagementService,
     SessionManagementService,
+    SkillManagementService,
 )
 from packages.contracts.public import IdentityProvider
 from packages.infrastructure.auth.public import MockIdentityProvider
@@ -48,6 +59,8 @@ def create_app(
     agent_service: AgentManagementService | None = None,
     model_service: ModelManagementService | None = None,
     prompt_service: PromptManagementService | None = None,
+    skill_service: SkillManagementService | None = None,
+    mcp_service: McpManagementService | None = None,
     release_service: ReleaseManagementService | None = None,
     deployment_service: DeploymentManagementService | None = None,
     publication_query_service: PublicationQueryService | None = None,
@@ -55,6 +68,10 @@ def create_app(
     message_history_service: MessageHistoryService | None = None,
     run_service: RunManagementService | None = None,
     run_event_query_service: RunEventQueryService | None = None,
+    run_event_stream_service: RunEventStreamService | None = None,
+    artifact_service: ArtifactManagementService | None = None,
+    approval_service: ApprovalManagementService | None = None,
+    audit_service: AuditManagementService | None = None,
     internal_service_identity_provider: InternalServiceIdentityProvider | None = None,
     event_ingestion_service: RunEventIngestionService | None = None,
     metrics: PlatformMetrics | None = None,
@@ -94,6 +111,12 @@ def create_app(
         create_prompt_router(resolved_identity_provider, prompt_service)
     )
     application.include_router(
+        create_skill_router(resolved_identity_provider, skill_service)
+    )
+    application.include_router(
+        create_mcp_router(resolved_identity_provider, mcp_service)
+    )
+    application.include_router(
         create_model_router(resolved_identity_provider, model_service)
     )
     application.include_router(
@@ -114,7 +137,18 @@ def create_app(
             resolved_identity_provider,
             run_service,
             run_event_query_service,
+            run_event_stream_service,
+            resolved_settings.sse_send_timeout_seconds,
         )
+    )
+    application.include_router(
+        create_artifact_router(resolved_identity_provider, artifact_service)
+    )
+    application.include_router(
+        create_approval_router(resolved_identity_provider, approval_service)
+    )
+    application.include_router(
+        create_audit_router(resolved_identity_provider, audit_service)
     )
     application.include_router(
         create_event_router(

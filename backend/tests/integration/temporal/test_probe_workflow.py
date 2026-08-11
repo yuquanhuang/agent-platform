@@ -27,6 +27,7 @@ from packages.application.temporal import (
 )
 from packages.contracts.temporal import (
     AgentRunWorkflowInput,
+    ApprovalDecidedSignal,
     AssistantTextPart,
     CancelAgentRuntimeInput,
     CancelRunSignal,
@@ -35,10 +36,14 @@ from packages.contracts.temporal import (
     FinalizeAgentRunInput,
     FinalizeAgentRunResult,
     InspectAgentRuntimeInput,
+    ProvisionRunSandboxInput,
     PublishAgentWorkflowInput,
     PublishReleaseFailureInput,
     RecoverAgentRunInput,
+    ReleaseRunSandboxInput,
+    ReleaseRunSandboxResult,
     RunPreparationResult,
+    RunSandboxHandle,
     RunSpecReference,
     RuntimeCancellationResult,
     RuntimeCompletion,
@@ -117,8 +122,33 @@ async def fake_prepare_agent_run(
     )
 
 
+@activity.defn(name="provision_run_sandbox_v1")
+async def fake_provision_run_sandbox(
+    input: ProvisionRunSandboxInput,
+) -> RunSandboxHandle:
+    return RunSandboxHandle(
+        sandbox_instance_id=f"sandbox_{input.run_id}_{input.execution_attempt}",
+        lease_id=f"lease_{input.run_id}_{input.execution_attempt}",
+        workspace_uri=(
+            f"workspace://tenant/{input.tenant_id}/runs/{input.run_id}/"
+            f"attempts/{input.execution_attempt}/"
+        ),
+    )
+
+
+@activity.defn(name="release_run_sandbox_v1")
+async def fake_release_run_sandbox(
+    input: ReleaseRunSandboxInput,
+) -> ReleaseRunSandboxResult:
+    return ReleaseRunSandboxResult(
+        sandbox_instance_id=input.sandbox.sandbox_instance_id,
+        status="TERMINATED",
+    )
+
+
 @activity.defn(name="execute_agent_run_v1")
 async def fake_execute_agent_run(input: ExecuteAgentRunInput) -> RuntimeCompletion:
+    assert input.sandbox is not None
     RUN_EXECUTION_ATTEMPTS.setdefault(input.run_id, []).append(input.execution_attempt)
     if (
         input.run_id in {RECOVERY_AGENT_RUN_ID, UNKNOWN_AGENT_RUN_ID}
@@ -437,12 +467,14 @@ async def test_agent_run_workflow_query_and_duplicate_cancel_signal() -> None:
             workflows=[AgentRunWorkflow],
             activities=[
                 fake_prepare_agent_run,
+                fake_provision_run_sandbox,
                 fake_execute_agent_run,
                 fake_inspect_agent_runtime,
                 fake_cancel_agent_runtime,
                 fake_recover_agent_run,
                 fake_finalize_agent_run,
                 fake_finalize_agent_run_cancellation,
+                fake_release_run_sandbox,
             ],
         ),
     ):
@@ -487,6 +519,105 @@ async def test_agent_run_workflow_query_and_duplicate_cancel_signal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_run_workflow_keeps_first_approval_resolution_and_replays() -> None:
+    if os.getenv("AP_TEST_TEMPORAL") != "1":
+        pytest.skip("AP_TEST_TEMPORAL=1 is required for Temporal integration test")
+    global _run_execution_gate
+    _run_execution_gate = asyncio.Event()
+    tenant_id = UUID("11111111-1111-4111-8111-111111111111")
+    approval_id = UUID("12121212-1212-4212-8212-121212121212")
+    rejecting_approval_id = UUID("13131313-1313-4313-8313-131313131313")
+    input = AgentRunWorkflowInput(
+        tenant_id=tenant_id,
+        run_id=AGENT_RUN_ID,
+        request_id="req-agent-run-approval-integration",
+        trace_id="trace-agent-run-approval-integration",
+    )
+    download_dir = Path(tempfile.gettempdir()) / "agent-platform-temporal-test"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    async with (
+        await WorkflowEnvironment.start_time_skipping(
+            data_converter=pydantic_data_converter,
+            download_dest_dir=str(download_dir),
+        ) as environment,
+        Worker(
+            environment.client,
+            task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+            workflows=[AgentRunWorkflow],
+            activities=[
+                fake_prepare_agent_run,
+                fake_provision_run_sandbox,
+                fake_execute_agent_run,
+                fake_inspect_agent_runtime,
+                fake_cancel_agent_runtime,
+                fake_recover_agent_run,
+                fake_finalize_agent_run,
+                fake_finalize_agent_run_cancellation,
+                fake_release_run_sandbox,
+            ],
+        ),
+    ):
+        handle = await environment.client.start_workflow(
+            AgentRunWorkflow.run,
+            input,
+            id=agent_run_workflow_id(tenant_id, AGENT_RUN_ID),
+            task_queue=RUN_ORCHESTRATOR_TASK_QUEUE,
+        )
+        state = None
+        for _ in range(100):
+            state = await handle.query(AgentRunWorkflow.run_state)
+            if state.status == "RUNNING":
+                break
+            await asyncio.sleep(0.01)
+        assert state is not None and state.status == "RUNNING"
+
+        approved = ApprovalDecidedSignal(
+            signal_id="approval-approved-1",
+            approval_id=approval_id,
+            decision_id=UUID("14141414-1414-4414-8414-141414141414"),
+            decision="APPROVED",
+            ticket_ref=None,
+            decided_at=datetime(2026, 8, 10, tzinfo=UTC),
+        )
+        conflicting_rejection = ApprovalDecidedSignal(
+            signal_id="approval-rejected-conflict-1",
+            approval_id=approval_id,
+            decision_id=UUID("15151515-1515-4515-8515-151515151515"),
+            decision="REJECTED",
+            ticket_ref=None,
+            decided_at=datetime(2026, 8, 10, 0, 0, 1, tzinfo=UTC),
+        )
+        await handle.signal(AgentRunWorkflow.approval_decided, approved)
+        await handle.signal(AgentRunWorkflow.approval_decided, approved)
+        await handle.signal(AgentRunWorkflow.approval_decided, conflicting_rejection)
+        approved_state = await handle.query(AgentRunWorkflow.run_state)
+        assert approved_state.cancel_requested is False
+
+        rejected = ApprovalDecidedSignal(
+            signal_id="approval-rejected-2",
+            approval_id=rejecting_approval_id,
+            decision_id=UUID("16161616-1616-4616-8616-161616161616"),
+            decision="REJECTED",
+            ticket_ref=None,
+            decided_at=datetime(2026, 8, 10, 0, 0, 2, tzinfo=UTC),
+        )
+        await handle.signal(AgentRunWorkflow.approval_decided, rejected)
+        await handle.signal(AgentRunWorkflow.approval_decided, rejected)
+        result = await handle.result()
+        terminal_state = await handle.query(AgentRunWorkflow.run_state)
+        history = await handle.fetch_history()
+
+    _run_execution_gate = None
+    replay = await Replayer(
+        workflows=[AgentRunWorkflow], data_converter=pydantic_data_converter
+    ).replay_workflow(history)
+    assert result.status == "CANCELLED"
+    assert terminal_state.status == "CANCELLED"
+    assert terminal_state.cancel_requested is True
+    assert replay.replay_failure is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("run_id", "expected_status", "expected_attempts"),
     [
@@ -520,12 +651,14 @@ async def test_agent_run_workflow_inspects_before_safe_recovery(
             workflows=[AgentRunWorkflow],
             activities=[
                 fake_prepare_agent_run,
+                fake_provision_run_sandbox,
                 fake_execute_agent_run,
                 fake_inspect_agent_runtime,
                 fake_cancel_agent_runtime,
                 fake_recover_agent_run,
                 fake_finalize_agent_run,
                 fake_finalize_agent_run_cancellation,
+                fake_release_run_sandbox,
             ],
         ),
     ):
@@ -571,12 +704,14 @@ async def test_agent_run_workflow_terminalizes_prepare_failure() -> None:
             workflows=[AgentRunWorkflow],
             activities=[
                 fake_prepare_agent_run,
+                fake_provision_run_sandbox,
                 fake_execute_agent_run,
                 fake_inspect_agent_runtime,
                 fake_cancel_agent_runtime,
                 fake_recover_agent_run,
                 fake_finalize_agent_run,
                 fake_finalize_agent_run_cancellation,
+                fake_release_run_sandbox,
             ],
         ),
     ):

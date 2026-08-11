@@ -17,17 +17,35 @@ from packages.runtimes.agentscope.model_bridge import (
     ModelGatewayBridgeError,
     ModelGatewayStreamPort,
 )
+from packages.runtimes.agentscope.runtime_bridge import (
+    AgentScopeApprovalBridge,
+    AgentScopeRuntimeBridge,
+    AgentScopeRuntimeBridgeError,
+    AgentScopeSessionFactory,
+    AgentScopeSessionStart,
+    AgentScopeStateStore,
+    RuntimeToolBinding,
+    RuntimeToolBindingResolver,
+)
 
 __all__ = [
     "AGENTSCOPE_LOCKED_VERSION",
     "AGENTSCOPE_WHEEL_SHA256",
+    "AgentScopeApprovalBridge",
     "AgentScopeBoundaryError",
     "AgentScopeBundleCompiler",
     "AgentScopeCompatibilityReport",
     "AgentScopeEventTranslator",
     "AgentScopeGatewayChatModel",
     "AgentScopeInvocationWriter",
+    "AgentScopeRuntimeBridge",
+    "AgentScopeRuntimeBridgeError",
+    "AgentScopeSessionFactory",
+    "AgentScopeSessionStart",
+    "AgentScopeStateStore",
     "ModelGatewayBridgeError",
     "ModelGatewayStreamPort",
+    "RuntimeToolBinding",
+    "RuntimeToolBindingResolver",
     "probe_agentscope_compatibility",
 ]

@@ -1,0 +1,52 @@
+task_id: AP-E5-005
+title: Artifact 下载、权限、过期和删除闭环
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - 冻结 createArtifactDownload/deleteArtifact 的后端实现
+    - AVAILABLE、来源 Run/Session 权限求交和单资源短期下载授权
+    - EXPIRED 惰性与周期性状态推进、审计和竞态失败关闭
+    - DELETING/DELETED、Operation、Outbox、下载撤销和对象清理
+    - tenant_admin Artifact download/delete 权限及 0024 迁移
+  excludes:
+    - Sandbox artifacts:export 内部 DTO、fencing 和响应契约
+    - Run Attachment 到不可变 RunSpec/Runtime 输入的冻结扩展
+    - 生产 S3/MinIO Adapter、TenantContextSource 和 Event Worker main 激活
+    - ZIP/TAR、Zip Slip、压缩炸弹与完整隔离 E2E
+decisions:
+  - 下载 URL 最长五分钟并绑定单 Artifact，返回前再次锁行确认状态、来源权限和保留期
+  - 删除事务先写 DELETING 以停止新授权，后台必须先撤销既有下载能力再清理对象
+  - 清理失败不伪造 DELETED；有界重试耗尽后 Operation FAILED、Outbox DEAD，Artifact 保留 DELETING 供重新发起或对账
+  - FAILED/REJECTED 只持有隔离区对象，0024 允许其以 object_uri 为空进入删除墓碑
+compatibility:
+  - 不修改 R10 OpenAPI、Artifact DTO 或生成 Client
+  - 通用 getOperation 增加 Artifact 资源读取授权，并在数据库 API composition 装配既有 IAM Service
+  - 不新增 Python/Node 依赖
+verification:
+  commands:
+    - targeted Artifact/domain/API/migration/composition tests
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test?host=/tmp AP_TEST_TEMPORAL=1 backend pytest
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 非 AVAILABLE、过期、跨租户、非 Owner 或失去来源 Run/Session 权限时不签发下载 URL
+  - 下载授权短期、单资源、UTC 且不超过 Artifact 保留期，删除竞态失败关闭
+  - 删除请求幂等写入 DELETING、Operation、审计和独立 Outbox
+  - 下载撤销先于对象删除，成功后 DELETED；故障有界重试并可查询失败 Operation
+  - FAILED/REJECTED 隔离区对象与 AVAILABLE trusted 对象均可完成删除墓碑
+results:
+  - 五条冻结 Artifact API 已全部接通，R10 契约和生成文件零漂移
+  - 定向 94 passed；真实 PostgreSQL Artifact 生命周期 1 passed
+  - 真实 PostgreSQL/Temporal 后端 549 passed、1 skipped；前端 76 passed
+follow_up:
+  - AP-E5-006 完成真实对象存储、跨 tenant/user/run、特殊文件和归档攻击 E2E
+  - 部署注入 Download Grant/Revocation/Delete Adapter、TenantContextSource 并激活 Event Worker main
+  - 冻结 Sandbox artifacts:export 内部契约后接通 Workspace/Run/Owner/required_output
+  - Run attachments 继续失败关闭，直到进入不可变 RunSpec 和 Runtime 输入
+  - 可用 Redis 端点后执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成 RunEvent 全局唯一登记表与 recorded_at 月分区事件表
+  - 现有 CI 回填 AP-E1-009 registry digest，并在前端扩展前评估 AJV standalone codegen

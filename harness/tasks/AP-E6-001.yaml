@@ -1,0 +1,57 @@
+task_id: AP-E6-001
+title: Skill Manifest、导入、版本与供应链扫描
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - 复用冻结 Artifact 上传与 Skill Resource API 导入 SKILL.md、manifest.yaml 和文件清单
+    - Skill 路径、Artifact Owner/租户/状态/有效期/大小与 SHA-256 校验
+    - 安全 YAML、Manifest 语义、JSON Schema、依赖锁、权限、网络和 Sandbox 风险校验
+    - 确定性 SBOM、扫描报告 Hash、签名与 provenance 状态和不可变扫描证据
+    - Skill 发布/回滚与精确 draft resource_version、content_hash 扫描证据事务绑定
+    - Bundle Reader 对未绑定 PASSED 证据的 Skill Version 失败关闭
+    - 冻结 13 个 Skill operationId、权限、RLS、审计和真实 PostgreSQL 验证
+  excludes:
+    - ZIP、Git 和本地目录专用导入公共 API
+    - 生产 CVE、许可证、恶意代码、签名、provenance 和 Sandbox Smoke Scanner
+    - 生产 S3/MinIO Trusted Artifact Content Reader
+    - 独立扫描结果查询响应和前端 Skill 管理页面
+decisions:
+  - 不扩展 R10 OpenAPI；导入沿用 Artifact 上传后 createSkill(content.files)
+  - 发布和回滚必须重新扫描当前精确草稿，扫描证据只能一次性绑定一个发布版本
+  - Bundle 只消费不可变 Resource Version 中已扫描的 artifact_id 与 content_hash
+  - Baseline Scanner 仅提供确定性静态策略，不伪造生产漏洞、签名或来源验证
+  - Skill Copy 暂只允许当前用户拥有源 Skill Artifact，避免复制后引用其他用户私有对象
+compatibility:
+  - 不修改冻结 OpenAPI、Skill Manifest Schema、Resource Content Schema 或前端生成 Client
+  - 新增 Alembic 0025_skill_supply_chain_scan；升级前需保留 Artifact、Resource Definition/Version
+  - 新增 Python 直接依赖 jsonschema 与 pyyaml，并同步 uv.lock
+verification:
+  commands:
+    - targeted Skill/API/IAM/migration/model tests
+    - PostgreSQL resource registry and RLS integration tests
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 非 canonical 路径、Manifest 漂移、Artifact 篡改、跨 Owner 和过期 Artifact 被拒绝
+  - 未锁依赖、危险网络或命令、风险低报和无 Run Sandbox 声明被阻断
+  - PASSED、REJECTED、FAILED 扫描证据均持久化，只有精确匹配的 PASSED 可发布
+  - 扫描证据跨租户不可见且不可删除、不可改写，只允许一次性绑定发布版本
+  - 未扫描 Skill Version 不进入 Runtime Bundle
+results:
+  - 定向 Skill/API/IAM/迁移/模型测试 83 passed
+  - 真实 PostgreSQL Resource Registry 与 RLS 集成测试分别通过
+  - make backend-check 为 582 passed、13 skipped
+  - 真实 PostgreSQL/Temporal make check-all 为后端 594 passed、1 skipped，前端 76 passed
+  - 契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+  - Black、Ruff、Pyright、Prettier、ESLint、Vue TypeScript、生产构建、uv lock 和 diff 检查通过
+follow_up:
+  - 部署生产 Trusted Artifact Content Reader 和 S3/MinIO Adapter
+  - 接入生产 CVE 数据库、许可证策略、恶意代码引擎、签名、provenance 和 Sandbox Smoke Scanner
+  - 冻结 ZIP/Git/本地目录导入及独立扫描结果查询契约后再扩展公共 API
+  - AP-E6-002 实现 MCP Discover、工具 Schema Hash、能力冻结、Secret Reference 与 Sandbox 约束
+  - 继续保留生产 Event Worker、真实 Redis、RunEvent 月分区、Registry digest、AJV codegen 和孤儿对账待办

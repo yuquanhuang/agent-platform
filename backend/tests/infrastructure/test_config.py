@@ -15,6 +15,12 @@ def test_local_defaults_are_safe_and_match_frozen_baseline() -> None:
     assert settings.env is DeploymentEnvironment.LOCAL
     assert settings.auth_mode is AuthMode.MOCK
     assert settings.contract_baseline_id == EXPECTED_CONTRACT_BASELINE_ID
+    assert settings.sse_page_size == 200
+    assert settings.sse_heartbeat_seconds == 15.0
+    assert settings.sse_poll_interval_seconds == 1.0
+    assert settings.sse_send_timeout_seconds == 15.0
+    assert settings.sandbox_provider_timeout_seconds == 60.0
+    assert settings.artifact_public_origins == ()
 
 
 def test_settings_load_ap_prefixed_environment_variables(
@@ -55,3 +61,11 @@ def test_metrics_networks_must_be_valid_and_non_empty() -> None:
         AppSettings.model_validate({"metrics_allowed_networks": ["not-a-cidr"]})
     with pytest.raises(ValidationError, match="must not be empty"):
         AppSettings.model_validate({"metrics_allowed_networks": []})
+
+
+def test_artifact_public_origins_load_as_explicit_tuple() -> None:
+    settings = AppSettings.model_validate(
+        {"artifact_public_origins": ["https://artifacts.example.test"]}
+    )
+
+    assert settings.artifact_public_origins == ("https://artifacts.example.test",)

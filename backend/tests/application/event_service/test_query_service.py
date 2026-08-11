@@ -7,6 +7,7 @@ from uuid import UUID
 import pytest
 from pydantic import JsonValue
 
+from packages.application.ag_ui import RunEventAgUiAdapter, serialize_ag_ui_event
 from packages.application.event_service import (
     RunEventPageRecord,
     RunEventQueryService,
@@ -159,6 +160,14 @@ async def test_query_redacts_thinking_without_sensitive_permission() -> None:
 
     assert page.items[0].event_type == "thinking_delta"
     assert page.items[0].payload.delta == "Sensitive thinking content was redacted."
+    mapped = RunEventAgUiAdapter().map_event(page.items[0])
+    serialized = serialize_ag_ui_event(mapped.events[0])
+    source = serialized["value"]
+    assert isinstance(source, dict)
+    payload = source["payload"]
+    assert isinstance(payload, dict)
+    assert payload["delta"] == "Sensitive thinking content was redacted."
+    assert payload["delta"] != "private reasoning"
 
 
 @pytest.mark.asyncio

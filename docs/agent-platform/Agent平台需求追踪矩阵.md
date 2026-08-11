@@ -1,6 +1,6 @@
 # Agent 平台需求追踪矩阵
 
-> 文档版本：V1.7
+> 文档版本：V1.8
 > 文档状态：开发输入基线
 
 ## 1. 使用方式
@@ -18,7 +18,7 @@
 | Runtime | FR-RT-001～006 | RuntimeAdapter、Capabilities | RuntimeTarget、RuntimeSession | Contract Test、Codex V1 |
 | Session 与 Run | FR-RUN-001～006 | `/sessions`、`/runs`、cancel、retry | Session、Message、Run、RunAttempt | AC-002、AC-003 |
 | Event 与 SSE | FR-RUN-003～004、FR-CON-005 | RunEvent、batch ingest、SSE | RunEvent、Outbox | AC-002、Event Store 验收 |
-| Sandbox | FR-SBX-001～007 | Sandbox Policy/API | SandboxInstance、Lease、Workspace | AC-002、AC-005、安全测试 |
+| Sandbox | FR-SBX-001～007 | Sandbox Policy/API、Process/Release fencing | SandboxInstance、Lease、Workspace | AC-002、AC-005、安全测试 |
 | Temporal | FR-TMP-001～007 | Workflow、Signal、Query | Run/Release Workflow Mapping | AC-003、AC-006、Replay Test |
 | 模型 | FR-MDL-001～007 | Model Gateway、OpenAI/Qwen/DeepSeek Adapter | ModelConfig、ModelUsage、Budget | AC-001、容量、费用与三供应商契约测试 |
 | Prompt/Skill/MCP | FR-RES-001～007 | Resource API、Manifest | Resource Definition/Version | AC-001、供应链测试 |
@@ -73,7 +73,7 @@
 | Epic 2 发布 | FR-AGT-002～006、FR-RES-006～007 | previewAgentPublish/publishAgent/getRelease/rollbackAgent/listAgentVersions/getAgentVersion/diffAgentSnapshots/getDeployment | agent_version、snapshot、bundle、release、deployment | AC-001、AC-007、预览无副作用、Diff 脱敏和 Draft 漂移保护 |
 | Epic 3 Session/Run | FR-RUN-001～006、FR-CON-001～006 | listSessions/createSession/getSession/updateSession/archiveSession/deleteSession/listSessionMessages/listSessionRuns/createRun/getRun/cancelRun/retryRun | chat_session、chat_message、agent_run、run_attempt、outbox | AC-002、AC-003、Session 历史/分支/归档 |
 | Epic 4 Event Store | FR-RUN-003～004、FR-CON-005 | appendRunEventCandidates/listRunEvents/streamRunEvents | run_event、run_event_counter | 并发序号、重连、终态冲突 |
-| Epic 5 Sandbox | FR-SBX-001～007 | Sandbox 内部 API、SandboxPolicy | sandbox_instance、lease、workspace | 隔离、资源耗尽、对账 |
+| Epic 5 Sandbox | FR-SBX-001～007、FR-CON-005 | Sandbox 内部 API、SandboxPolicy、Process/Release fencing、Workspace URI | sandbox_instance、lease、workspace | 旧 Attempt/token 拒绝、路径隔离、容量限制、生命周期、资源耗尽、对账 |
 | Epic 5 Artifact | FR-DAT-001～006 | createArtifactUpload/completeArtifactUpload/getArtifact/createArtifactDownload/deleteArtifact | artifact、workspace | 扫描、越权、过期 |
 | Epic 6 Skill/MCP | FR-RES-003～005 | Resource API、Skill Manifest、MCP Discover | resource_definition/version | 路径、供应链、Schema Hash |
 | Epic 6 Approval | FR-APR-001～006 | listApprovals/getApproval/decideApproval | approval_request/decision、execution_ticket | AC-004、重放、自审批 |

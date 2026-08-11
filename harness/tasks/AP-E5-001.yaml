@@ -1,0 +1,47 @@
+task_id: AP-E5-001
+title: SandboxPolicy、内部 API 与 Provider Port
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - SandboxPolicy 安全默认值、跨字段约束、规范化 JSON、不可变快照和 SHA-256
+    - 独立 Sandbox Manager 内部 API 的严格 Pydantic 请求响应与 Golden
+    - Workload Identity、internal:sandbox_manage 权限和 Provision 幂等键绑定
+    - 不暴露宿主路径、Docker Socket、Secret 或租约事实的 Sandbox Provider Port
+  excludes:
+    - SandboxInstance/SandboxLease 表、迁移和真实 provision/destroy 生命周期
+    - Docker、Kubernetes、gVisor、Kata 或本地进程 Provider 实现
+    - Workspace 路径解析、Artifact 导出和生产 Sandbox Manager 入口激活
+decisions:
+  - SandboxPolicy 缺省值由编译器显式补齐，规范化 JSON 是 Hash 和 Provider 输入的唯一快照
+  - network none 禁止 allowlist；allowlist 必须同时包含 domain 和 port，并拒绝规范化后的重复项
+  - Provider 只观察隔离环境，不拥有 Lease、fencing token 或一次性 provision token
+  - Sandbox Manager 保持独立 FastAPI 边界；真实 Service 未装配时失败关闭，main 入口暂不激活
+  - 取消进程使用 ProcessStatus，terminate/release/destroy 使用 SandboxStatus，避免状态契约混用
+compatibility:
+  - 未修改 R9 冻结 OpenAPI、SandboxPolicy JSON Schema、数据库、前端或生成契约
+  - 内部请求响应由 backend/packages/contracts/sandbox_api 单一来源生成 Schema Hash
+  - 未新增 Python/Node 依赖，锁文件无本阶段变化
+verification:
+  commands:
+    - targeted Sandbox policy, provider, contract and API tests
+    - make contract-check
+    - make backend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - 安全默认值和跨字段限制无法被请求放宽，相同有效策略产生相同 Hash
+  - 内部模型拒绝额外字段，Secret repr/JSON/422 错误不回显原值
+  - 所有内部操作在 Service 调用前验证服务身份和权限，缺少装配时返回 DEPENDENCY_UNAVAILABLE
+  - Provision 幂等键严格绑定 run_id、execution_attempt 和 policy_hash
+  - Provider Port 不含宿主物理路径、Docker Socket、长期凭据或 Lease 权威字段
+results:
+  - 新增 29 项定向测试；全量后端 470 passed、1 skipped；前端 76 passed
+  - 契约 31 个完整性文件、168 operationId、17 个生成文件零漂移
+  - Black、Ruff、Pyright strict、Prettier、ESLint、Vue TypeScript 和生产构建通过
+follow_up:
+  - AP-E5-002 实现 SandboxInstance、Lease、持久化幂等和 Provider 生命周期编排
+  - AP-E5-002 装配 Service 后再激活 Sandbox Manager 生产入口和健康检查
+  - 可用 Redis 端点后执行 AP_TEST_REDIS_URL 控制的真实 Redis 集成测试
+  - 生产容量阈值前完成 RunEvent 全局唯一登记表与 recorded_at 月分区迁移

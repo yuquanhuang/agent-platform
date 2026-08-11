@@ -1,0 +1,52 @@
+task_id: AP-E4-004
+title: Event Outbox、Redis 唤醒、SSE Cursor、重连和背压
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r9
+scope:
+  includes:
+    - 独立消费 run.events_appended.v1 的 Notification Dispatcher，发布成功后才确认 Outbox
+    - tenant_id + run_id 隔离的 Redis Pub/Sub 唤醒，PostgreSQL RunEvent 保持唯一事实源
+    - 冻结 /api/v1/runs/{run_id}/stream、Last-Event-ID 优先、历史分页回放和 sequence_no 去重
+    - Redis 不可用或通知丢失时的 PostgreSQL polling、心跳、终态关闭和慢消费者发送超时
+    - Outbox、Redis、SSE、RunEvent 查询与真实 PostgreSQL 102 条事件协同验证
+  excludes:
+    - RunEvent 到 AG-UI 的映射和 Vue Reducer（AP-E4-005～006）
+    - 生产 Secret Backend、Redis DSN 解析和 Event Worker 部署入口（Epic 7）
+    - 全局唯一登记表与 recorded_at 月分区事件表容量迁移
+decisions:
+  - Redis 消息只包含唤醒范围，不作为事件 Payload 或 Cursor 事实来源
+  - SSE 建立 Redis subscription 后回放历史，对外仍只发送 PostgreSQL 历史事实，避免历史/实时切换竞态
+  - Last-Event-ID 覆盖 query after；SSE id 固定使用 sequence_no
+  - 不建立应用层无界队列，每页最多 200 条并逐帧等待发送；单帧超时后关闭并要求客户端重连
+  - 只有持久化终态 RunEvent 已发送且无缺失时关闭，不能仅依据 AgentRun 终态
+compatibility:
+  - R9 冻结 OpenAPI、RunEvent Schema 和生成类型未修改
+  - /api/v1/runs/{run_id}/stream 是 canonical route；保留不进入 OpenAPI 的 /events/stream 兼容别名
+  - 未新增数据库迁移或 Python/Node 依赖；redis>=8.1.0 已存在于项目基线
+verification:
+  commands:
+    - targeted application, API, Redis adapter and composition tests
+    - make backend-check
+    - make contract-check
+    - make frontend-check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test pytest tests/integration/resources/test_resource_registry.py -q
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - Notification Dispatcher 与 Temporal Dispatcher 使用互斥 event type claim 范围
+  - Redis 重复、丢失或不可用不改变 PostgreSQL 序号事实和恢复结果
+  - Last-Event-ID 重连不重复发送已确认事件，非法 Cursor 返回稳定校验错误
+  - 慢消费者超时关闭生成器，不阻塞 Writer；心跳不持久化
+  - 102 条真实 PostgreSQL 事件按序回放，终态发送后关闭，跨用户不可读取
+results:
+  - 新增独立 RunEvent Notification Dispatcher、Redis Publisher/Source 和 tenant/run 隔离 Channel
+  - 新增历史优先 SSE Service、BoundedSseResponse、canonical/兼容路由与四项 SSE 配置
+  - 真实 PostgreSQL 验证实际 Outbox claim/publish、1～102 唤醒范围、SSE 回放和终态关闭
+  - 最终 check-all 后端 416 passed、1 skipped；前端 38 passed；契约 31 个完整性文件、168 operationId、16 个生成文件零漂移
+  - 真实 Redis 集成测试已加入并由 AP_TEST_REDIS_URL 控制；Docker Hub 拉取超时，本轮未宣称该项通过
+follow_up:
+  - AP-E4-005 实现 RunEvent 到 AG-UI 的出口映射，继续复用本阶段 Cursor、脱敏和终态语义
+  - 可用 Redis 测试端点后执行 AP_TEST_REDIS_URL=redis://localhost:6379 对应集成测试
+  - Epic 7 完成生产 Event Worker、Secret/DSN 解析、部署健康和告警装配
+  - 生产容量阈值前完成全局唯一登记表与 recorded_at 月分区事件表迁移

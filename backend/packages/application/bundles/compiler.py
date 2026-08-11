@@ -17,6 +17,7 @@ from packages.domain.public import (
     BundleModelBindingSnapshotInput,
     BundleResourceInput,
     CompiledRuntimeBundle,
+    McpCapabilitySnapshotInput,
     ResourceVersionRecord,
     compile_agentscope_bundle,
 )
@@ -49,6 +50,13 @@ class BundleInputReader(Protocol):
         *,
         snapshot_id: UUID,
     ) -> BundleModelBindingSnapshotInput | None: ...
+
+    async def get_mcp_capability_snapshot(
+        self,
+        context: TenantContext,
+        *,
+        published_version_id: UUID,
+    ) -> McpCapabilitySnapshotInput | None: ...
 
 
 class BundleArtifactReader(Protocol):
@@ -192,6 +200,7 @@ class AgentScopeBundleCompilationService:
                 )
             model_snapshot_id: UUID | None = None
             model_snapshot_hash: str | None = None
+            mcp_snapshot: McpCapabilitySnapshotInput | None = None
             if binding_type == "model":
                 model_snapshot = binding.get("model_binding_snapshot")
                 if not isinstance(model_snapshot, dict):
@@ -214,6 +223,21 @@ class AgentScopeBundleCompilationService:
                         "MODEL_BINDING_SNAPSHOT_MISMATCH",
                         "The Model binding snapshot does not match the Agent Snapshot.",
                     )
+            if binding_type == "mcp":
+                mcp_snapshot = await self._inputs.get_mcp_capability_snapshot(
+                    context, published_version_id=version_id
+                )
+                if (
+                    mcp_snapshot is None
+                    or mcp_snapshot.tenant_id != tenant_id
+                    or mcp_snapshot.definition_id != resource_id
+                    or mcp_snapshot.published_version_id != version_id
+                    or mcp_snapshot.content_hash != content_hash
+                ):
+                    raise BundleCompilationError(
+                        "MCP_CAPABILITY_SNAPSHOT_REQUIRED",
+                        "An MCP resource requires passed immutable capability evidence.",
+                    )
             resources.append(
                 BundleResourceInput(
                     resource_type=cast(BundleResourceType, binding_type),
@@ -228,6 +252,7 @@ class AgentScopeBundleCompilationService:
                     ),
                     model_binding_snapshot_id=model_snapshot_id,
                     model_binding_snapshot_hash=model_snapshot_hash,
+                    mcp_capability_snapshot=mcp_snapshot,
                 )
             )
             if isinstance(record.content, ResourceContentSkill):

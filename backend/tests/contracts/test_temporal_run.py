@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from packages.contracts.temporal import (
     AgentRunWorkflowInput,
+    ApprovalDecidedSignal,
     AssistantTextPart,
     CancelAgentRuntimeInput,
     CancelRunSignal,
@@ -18,6 +19,8 @@ from packages.contracts.temporal import (
 
 TENANT_ID = UUID("11111111-1111-4111-8111-111111111111")
 RUN_ID = UUID("22222222-2222-4222-8222-222222222222")
+APPROVAL_ID = UUID("33333333-3333-4333-8333-333333333333")
+DECISION_ID = UUID("44444444-4444-4444-8444-444444444444")
 
 
 def test_run_workflow_input_is_versioned_and_rejects_unknown_fields() -> None:
@@ -67,6 +70,31 @@ def test_cancel_signal_is_small_and_strict() -> None:
     with pytest.raises(ValidationError):
         CancelRunSignal.model_validate(
             {**signal.model_dump(mode="json"), "tool_arguments": {"unsafe": True}}
+        )
+
+
+def test_approval_decided_signal_is_small_strict_and_version_safe() -> None:
+    signal = ApprovalDecidedSignal(
+        signal_id="approval-decision-1",
+        approval_id=APPROVAL_ID,
+        decision_id=DECISION_ID,
+        decision="APPROVED",
+        ticket_ref=None,
+        decided_at=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+    assert signal.decision == "APPROVED"
+    assert signal.ticket_ref is None
+    with pytest.raises(ValidationError):
+        ApprovalDecidedSignal.model_validate(
+            {
+                **signal.model_dump(mode="json"),
+                "tool_arguments": {"must_not_enter_history": True},
+            }
+        )
+    with pytest.raises(ValidationError):
+        ApprovalDecidedSignal.model_validate(
+            {**signal.model_dump(mode="json"), "decision": "CONSUMED"}
         )
 
 

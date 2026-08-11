@@ -2,7 +2,7 @@
 
 > 本文件是非冻结运行记录，不属于需求、API、事件或数据 Schema 契约。
 
-更新时间：2026-08-08
+更新时间：2026-08-11
 
 ## 开发节奏
 
@@ -48,7 +48,24 @@
 | 31 | `AP-E4-001` RunEvent 表、计数器、约束和迁移 | ✅ 已完成 | 非分区 RunEvent、独立 Counter、双全局唯一、Payload 上限、RLS、不可变性和容量迁移待办已完成 |
 | 32 | `AP-E4-002` Candidate 校验、批量写入、幂等序号和终态保护 | ✅ 已完成 | serviceAuth 边界、fencing、并发连续序号、逐项幂等、Event Outbox、终态保护和全链路回归完成 |
 | 33 | `AP-E4-003` 事件查询、分页、回放和序号缺口语义 | ✅ 已完成 | 所有权隔离、稳定序号游标、缺口失败关闭、Thinking 脱敏和 102 条真实事件分页回放完成 |
-| 下一步 | `AP-E4-004` Event Outbox、Redis 唤醒与 SSE | ⏳ 待开始 | 历史优先、Last-Event-ID、去重、背压和终态关闭；Redis 只作唤醒，事实仍读 PostgreSQL |
+| 34 | `AP-E4-004` Event Outbox、Redis 唤醒与 SSE | ✅ 已完成 | 独立 Notification Dispatcher、PostgreSQL 事实回放、Last-Event-ID、Polling 回退、背压和终态关闭完成 |
+| 35 | `AP-E4-005` RunEvent 到 AG-UI 出口映射 | ✅ 已完成 | 官方 AG-UI 0.1.19 无状态 Adapter、原子一对多批次、Golden 和 102 条真实事件协同验证完成 |
+| 36 | `AP-E4-006` Vue 独立 Reducer | ✅ 已完成 | 20 类 RunEvent 纯函数投影、复合键 Pinia Registry、缺口/终态保护和历史/SSE Service 边界完成 |
+| 37 | `AP-E4-007` 断线恢复与回放 E2E | ✅ 已完成 | 冻结 Schema 运行时校验、SSE 解析、历史补洞、重连退避、终态追平和独立 Run 页面完成 |
+| 38 | `AP-E5-001` SandboxPolicy 与 Provider Port | ✅ 已完成 | 安全默认值、不可变 Hash、严格内部 API、Workload Identity、Provider Port 和 Golden 已完成 |
+| 39 | `AP-E5-002` SandboxInstance 与 Lease 生命周期 | ✅ 已完成 | 持久化幂等、Lease/fencing、Provider 编排、失败隔离和 Temporal 清理闭环完成 |
+| 40 | `AP-E5-003` Workspace URI、路径隔离与容量限制 | ✅ 已完成 | R10 fencing、canonical URI、fd 路径防护、配额、RLS 和 Sandbox 生命周期协同完成 |
+| 41 | `AP-E5-004` Artifact 上传、完成与扫描 | ✅ 已完成 | 三条冻结 API、隔离上传、服务端完成校验、扫描 Outbox、RLS/幂等和可信发布完成 |
+| 42 | `AP-E5-005` Artifact 下载、权限、过期和删除 | ✅ 已完成 | 短期单资源授权、来源权限求交、延迟过期、撤销优先的异步删除和 Operation 闭环完成 |
+| 43 | `AP-E5-006` 隔离、安全清理与 Artifact E2E | ✅ 已完成 | ZIP/TAR 安全检查、签名 Origin 防护、受控对象存储隔离、撤销和故障清理纵向 E2E 完成 |
+| 44 | `AP-E6-001` Skill Manifest、导入、版本和供应链扫描 | ✅ 已完成 | Artifact 文件清单导入、静态供应链基线、不可变扫描证据和发布/Bundle 门禁完成 |
+| 45 | `AP-E6-002` MCP 配置、Discover、能力冻结和安全校验 | ✅ 已完成 | streamable_http 安全配置、隔离 Discover、不可变能力证据、发布/回滚和 Bundle 门禁完成 |
+| 46 | `AP-E6-003` Policy 有效策略求交集和 Admission Controller | ✅ 已完成 | Sandbox/Skill/MCP 最严格求交、不可变有效策略快照和 Run/Retry/RunSpec/Sandbox Admission 完成 |
+| 47 | `AP-E6-004` ApprovalRequest/Decision、过期和自审批阻断 | ✅ 已完成 | 不可变审批事实、RLS/CAS/幂等、自审批/过期阻断、RunEvent/Temporal Signal 和 Vue 审批中心完成 |
+| 48 | `AP-E6-005` 一次性 Execution Ticket 和 Tool Gateway 消费 | ✅ 已完成 | 不可变短时 Ticket、nonce Hash、逐次重校验、单次消费、Run 恢复和安全审计闭环完成 |
+| 49 | `AP-E6-006` Audit 写入、查询、保留和敏感字段脱敏 | ✅ 已完成 | 冻结查询 API、统一写入脱敏、run_id/RLS/不可变保留、Vue 页面和 PostgreSQL 纵向验证完成 |
+| 50 | `AP-E6-007` AgentScope Runtime Bridge 与高风险工具纵向 E2E | ✅ 已完成 | AgentScope 暂停/审批、Ticket 取回、Tool Gateway 受控执行、ExternalExecutionResult 恢复和 PostgreSQL/Temporal 纵向验证完成 |
+| 下一步 | `AP-E7-001` Reconciliation 规则和状态修复 | ⏳ 待开始 | 装配生产 Runtime Worker，并补 Worker 恢复、Approval/Ticket/Run/Signal 对账和状态修复 |
 
 ## 执行记录
 
@@ -506,3 +523,244 @@
 - 契约、依赖与迁移：未修改冻结 OpenAPI/RunEvent Schema/生成类型，未新增 Python/Node 依赖或数据库迁移；继续复用 `0020_run_event_store` 和非分区事实表。
 - 历史问题与风险：本轮没有发现需要扩大范围修改的历史遗留问题；`.npmrc` 读取权限和 Rollup 上游 PURE 注释仅产生既有非阻断告警。Thinking 脱敏保持 Schema 兼容，后续 AG-UI/Vue Reducer 必须按权限忽略脱敏正文。
 - 下一任务建议：`AP-E4-004` 实现 Event Outbox Dispatcher、Redis 唤醒和 SSE；必须先补历史再订阅实时，按 sequence_no 去重，支持 Last-Event-ID、背压与终态关闭，Redis 不作为事实源。
+
+### 2026-08-09 — AP-E4-004 Event Outbox、Redis 唤醒与 SSE
+
+- [x] 新增独立 `RunEventNotificationDispatcher`，只领取 `run.events_appended.v1`；严格校验 tenant/run、aggregate、Schema 版本和连续序号范围，Redis 发布成功后才确认 Outbox，瞬时失败按既有退避重试，坏消息或重试耗尽进入 DEAD。Temporal Dispatcher 继续排除该事件类型。
+- [x] 新增 Redis Publisher/Source，Channel 固定为 tenant_id + run_id 隔离；Redis Payload 仅传通知范围，收到通知后仍从 PostgreSQL 拉取事实。Redis 订阅或等待失败时自动退化为周期性 PostgreSQL polling，关闭失败不破坏已发送事实。
+- [x] 新增历史回放 SSE Service：先建立 subscription 防止切换竞态，再按 PostgreSQL sequence_no 分页发送历史；`Last-Event-ID` 优先于 query `after`，重复通知不会重复事件，心跳为非持久化注释帧，持久化终态发送后关闭。
+- [x] 新增 `BoundedSseResponse`，不建立应用层无界队列，每页最多 200 条并逐帧等待 ASGI send；单帧超过配置超时即关闭生成器，客户端使用最后 sequence_no 重连。四项 SSE 配置已加入强类型配置和 `.env.example`。
+- [x] 冻结 `/api/v1/runs/{run_id}/stream` 作为 canonical route；历史 `RunAccepted.stream_url` 使用的 `/events/stream` 作为不进入 OpenAPI 的兼容别名保留，未修改 R9 基线或生成代码。
+- [x] 单元/接口测试覆盖 Outbox 成功、重试、死信、Redis tenant/run 隔离、订阅失败、通知唤醒后重查 PostgreSQL、通知丢失 polling、非法 Last-Event-ID、兼容路由、背压和终态关闭。真实 PostgreSQL 进一步验证实际 Outbox claim/publish 覆盖 1～102、完整 SSE 回放和跨用户隔离。
+- [x] 最终验证通过：带真实 PostgreSQL/Temporal 的 `make check-all` 后端 `416 passed, 1 skipped`，前端 `38 passed`；Black、Ruff、Pyright、Prettier、ESLint、Vue TypeScript、Vite Build、`uv lock --check` 和 `git diff --check` 通过；R9 的 31 个完整性文件、168 个 operationId、16 个生成文件零漂移。
+- 依赖、迁移与部署：未新增 Python/Node 依赖或数据库迁移；项目已有 `redis>=8.1.0`。生产 Event Worker、Secret Backend/Redis DSN 解析和健康告警装配继续属于 Epic 7，不在本阶段伪造可部署入口。
+- 验证限制：已新增由 `AP_TEST_REDIS_URL` 控制的真实 Redis 集成测试；本轮 Docker Hub 拉取 `redis:7-alpine` 超时，因此该 1 项按环境条件跳过，未宣称真实 Redis 服务验证通过。适配器、失败回退和租户隔离均已由离线测试覆盖。
+- 历史问题评估：仅修正 `.env.example` 仍引用 R5 的过期基线为当前 R9；公共契约和运行语义未改变。非分区 `run_event` 继续保留，“全局唯一登记表 + recorded_at 月分区事件表”仍是生产容量阈值前硬性待办。
+- 下一任务建议：`AP-E4-005` 实现 RunEvent 到 AG-UI 的无状态出口映射，必须复用本阶段 Cursor、Thinking 脱敏、错误和终态语义，不提前实现 Vue Reducer。
+
+### 2026-08-09 — AP-E4-005 RunEvent 到 AG-UI 出口映射
+
+- [x] 引入官方 `ag-ui-protocol==0.1.19`，新增无状态 `RunEventAgUiAdapter`；标准事件使用官方 Pydantic Event，所有输出再次通过官方联合类型校验并统一 camelCase 序列化。
+- [x] 完成冻结映射和终态语义：成功/失败/超时分别输出 `RUN_FINISHED`、`RUN_ERROR`、`RUN_ERROR(code=RUN_TIMEOUT)`；取消作为同一 source sequence 的原子批次输出 `CUSTOM run_cancelled + RUN_FINISHED`。
+- [x] 保真处理未列入架构映射表但属于冻结 RunEvent 的 `run_created`、`run_queued`、`thinking_delta`、`approval_resolved`、`task_progress`，统一输出稳定 `CUSTOM`；`role=tool` 的文本开始事件不伪装成 assistant。
+- [x] Adapter 只接收已授权/已脱敏的查询事实，不旁路读取数据库或敏感正文；协同测试确认普通用户 Thinking 原文在 Query → AG-UI 链路中保持脱敏。
+- [x] 新增 20 类事件覆盖、确定性、时间戳、角色兼容、终态和 Golden 快照测试；真实 PostgreSQL 102 条事件映射保持 source sequence 1～102，终态唯一且最后输出 `RUN_FINISHED`。
+- [x] 最终验证通过：定向测试 `31 passed`，真实 PostgreSQL 协同测试 `1 passed`；`make backend-check` 为 `429 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `441 passed, 1 skipped`、前端 `38 passed`。契约 31 个完整性文件、168 个 operationId、16 个生成文件零漂移，`uv lock --check` 与 `git diff --check` 通过。
+- 依赖、契约与迁移：新增运行时依赖仅直接复用现有 Pydantic；未修改 R9 OpenAPI、RunEvent Schema、SSE Payload、数据库迁移或配置。`/runs/{run_id}/stream` 继续发送 RunEvent JSON，AG-UI Adapter 作为独立应用出口，不改变 PostgreSQL Cursor 事实。
+- 验证限制与历史问题：唯一跳过仍是需要 `AP_TEST_REDIS_URL` 的真实 Redis 条件测试；`.npmrc` 权限和 Rollup PURE 注释为既有非阻断告警。本阶段未发现需要扩大范围修改的历史遗留问题；非分区 `run_event` 的“全局唯一登记表 + recorded_at 月分区事件表”待办保持不变。
+- 下一任务建议：`AP-E4-006` 实现 Vue 独立 RunEvent Reducer，按 `(tenant_id, session_id, run_id)` 隔离状态，并覆盖重复、乱序、缺口补历史、脱敏 Thinking 和终态冲突；不把 AG-UI 或组件内存变成运行事实源。
+
+### 2026-08-09 — AP-E4-006 Vue 独立 RunEvent Reducer
+
+- [x] 新增纯函数 RunEvent Reducer，直接消费冻结生成的 20 类判别联合；按 sequence_no 单调推进，小于等于当前序号的重复/旧事件保持引用不变，未来序号形成显式缺口并暂停应用。
+- [x] 完成文本、Thinking、计划、工具、审批、任务、Artifact、Warning 和四类终态投影；`approval_required` 映射 `WAITING_APPROVAL`，终态后出现新事实记录冲突且不覆盖首个终态。
+- [x] 历史页 `latest_sequence_no` 作为高水位；只有无缺口、无终态冲突、终态已存在且已追平高水位时才允许关闭流。空页尾仍缺事实时生成 `observedSequenceNo=null` 的补洞请求状态。
+- [x] 新增 Pinia Registry，以 `(tenant_id, session_id, run_id)` 复合键隔离投影，并提供单 Run、单租户和全量清理入口；切换租户不会复用另一租户的实时状态。
+- [x] 保持 `SessionMessageView` 为只读持久化 Message 历史，不把临时流式内容写入 Vue Query 缓存。新增 Run Service 复用生成 Client 的事件分页和 SSE，Last-Event-ID 由最后已应用序号生成并拒绝非法值。
+- [x] 为避免长 Run 无界内存和敏感 Payload 滞留，Reducer 不保存完整原始事件数组，只保留结构化 UI 投影、首个终态和有界计数；事件时间线继续通过 PostgreSQL 历史接口按需回放。
+- [x] 前端测试覆盖重复、旧事件、乱序缺口、补洞恢复、Thinking 权限、全部 20 类事件、计划/工具/审批更新、审批状态机、复合键隔离、高水位关闭和终态冲突，共 `57 passed`。
+- [x] 最终验证通过：`make frontend-check` 为 18 个测试文件、`57 passed`；真实 PostgreSQL/Temporal `make check-all` 为后端 `441 passed, 1 skipped`、前端 `57 passed`。契约 31 个完整性文件、168 个 operationId、16 个生成文件零漂移，`git diff --check` 通过。
+- 契约、依赖与迁移：未修改 R9 OpenAPI、RunEvent Schema、生成 DTO、后端 SSE、数据库或锁文件；未新增 Node/Python 依赖。AP-E4-005 AG-UI Adapter 与本阶段 Vue Reducer 分别服务外部协议出口和内部 RunEvent UI 投影，不互相替代事实源。
+- 历史问题评估：`ask` 未找到 `SessionMessageView` 的 AI 对话记录；依据代码确认其只读历史边界并予以保留。本阶段未发现需要改变冻结公共语义的遗留问题；`.npmrc` 权限和 Rollup PURE 注释仍为既有非阻断告警。
+- 下一任务建议：`AP-E4-007` 在 Run 页面接通 SSE 帧解析、历史优先补洞、Last-Event-ID 重连、指数退避和终态关闭 E2E；SSE JSON 的运行时 Schema 校验应放在传输边界，不能在 Reducer 内手写第二套 DTO。
+
+### 2026-08-09 — AP-E4-007 断线恢复、回放与 Run 详情纵向验收
+
+- [x] 契约生成器新增确定性的 `run-event.schema.json` 前端产物，生成文件门禁由 16 个增至 17 个；冻结 R9 Schema/OpenAPI 本身未修改。AJV 2020-12 与 `ajv-formats` 在传输边界校验完整 RunEvent，错误文案不回显敏感 Payload。
+- [x] 新增安全 SSE Parser，覆盖 chunk 拆分、CRLF/LF、comment heartbeat、多行 data、`event=run_event`、正整数 id、id/sequence_no 一致性、320 KiB 客户端帧上限、AbortSignal 和 reader 释放。
+- [x] 新增可注入 RunEvent Coordinator：每次连接先分页补历史，以最后已应用 sequence_no 生成 Last-Event-ID；实时缺口立即关闭流并回查 PostgreSQL；网络断开按 500 ms～8 s 指数退避，协议/Schema/身份/终态冲突失败关闭。
+- [x] 终态事件不会直接关闭：协调器再次查询历史高水位，只有现有 Reducer 的 `canCloseRunProjection()` 成立才结束；组件卸载只 Abort 浏览器订阅，不触发 `cancelRun`。
+- [x] 新增独立 `/runs/:id` 懒加载页面，展示 Run/连接状态、序号/高水位、流式消息、Thinking、Runtime、计划、工具、审批、任务、Artifact、Warning 和冲突提示；Session Message 页保持不可变历史，仅新增最近 Run 导航。
+- [x] 测试覆盖合法/非法 Schema、额外字段、日期/序号、SSE 拆帧/heartbeat/id mismatch/过大帧/Abort、历史优先、缺口补洞、Last-Event-ID、指数退避、终态追平/冲突、页面 loading/error/安全文本/卸载取消和 Session 导航，共新增 19 项，本阶段前端全量为 22 个文件、76 passed。
+- [x] 最终验证通过：`make contract-check` 为 31 个完整性文件、168 个 operationId、17 个生成文件零漂移；`make frontend-check` 76 passed；`make backend-check` 429 passed/13 skipped；真实 PostgreSQL/Temporal `make check-all` 后端 441 passed/1 skipped、前端 76 passed；`uv lock --check`、`git diff --check` 和 `pnpm audit --prod` 通过。
+- 依赖与构建影响：新增 `ajv@8.20.0`、`ajv-formats@3.0.1` 并同步 pnpm 锁文件，无已知生产漏洞；Run 详情保持路由懒加载，当前 chunk 181.07 kB、gzip 53.02 kB，后续页面继续扩展前评估 AJV standalone codegen。
+- 浏览器验收：实际 Run 路由在 1280×720 和 390×844 下无横向溢出，窄屏侧栏收敛为 72px。Codex 内置浏览器沙箱不提供页面 `fetch`/XHR，不能在该表面访问本地 SSE；功能纵向验收由真实 `Response/ReadableStream → Schema → Parser → Coordinator → Pinia → Vue` 组件集成测试完成，未将浏览器错误态误报为成功。
+- 历史问题评估：未修改冻结后端公共行为或既有未提交阶段成果；唯一条件 skip 仍是需要 `AP_TEST_REDIS_URL` 的真实 Redis 集成测试。非分区 `run_event` 的“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 registry digest 回填继续保留为明确待办。
+- 下一任务建议：`AP-E5-001` 先确认 SandboxPolicy、内部 API、Provider Port、租户/Run 隔离和失败清理语义，再开始 Sandbox 生命周期实现。
+
+### 2026-08-09 — AP-E5-001 SandboxPolicy、内部 API 与 Provider Port
+
+- [x] 新增 SandboxPolicy 编译器，显式补齐 non-root、只读根文件系统、禁止软链接/设备文件、重定向和终止宽限等安全默认值；校验网络模式、domain/port、进程/PID、单文件/磁盘和 Run idle TTL 约束。
+- [x] 使用规范化 JSON 生成不可变 `FrozenSandboxPolicy` 和 `sha256:` Hash；domain、port、文件模式、可执行文件和内容类型按语义稳定排序，加载模型不会反向修改快照。
+- [x] 冻结 9 个 Sandbox Manager 内部操作的严格 Pydantic 契约和 Golden Schema Hash；进程取消与 Sandbox 动作使用独立状态类型，Secret 不进入 repr、JSON 或安全 422 响应。
+- [x] 新增 `SandboxProvider` Port、受控观察模型和安全错误模型；Provider 不接收 provision/fencing token、不拥有 Lease 权威，也不暴露宿主路径、Docker Socket 或原始 Provider 响应。
+- [x] 新增独立 Sandbox Manager FastAPI 工厂和 Workload Identity 路由边界；所有操作在调用 Service 前要求 service subject 与 `internal:sandbox_manage`，Provision 幂等键绑定 `run_id + attempt + policy_hash`。
+- [x] 保持 `sandbox_manager/main.py` 失败关闭；`SandboxInstance`/`SandboxLease`、真实 Provider、Workspace/Artifact 和生产入口装配分别留给 AP-E5-002～004，未伪造可部署能力。
+- [x] 最终验证通过：29 项定向测试；`make backend-check` 458 passed/13 skipped；真实 PostgreSQL/Temporal `make check-all` 后端 470 passed/1 skipped、前端 76 passed；契约 31 个完整性文件、168 个 operationId、17 个生成文件零漂移。
+- 依赖、迁移与兼容：未新增依赖、迁移或前端改动，未修改 R9 冻结 OpenAPI、SandboxPolicy Schema 和数据库。唯一 skip 仍是需要 `AP_TEST_REDIS_URL` 的真实 Redis 条件测试。
+- 历史问题评估：全量测试首次发现新增测试文件与既有 `test_policy.py` 同名导致 pytest collection 冲突，已仅重命名本阶段测试文件并复验；未修改历史业务代码。现有 RunEvent 分区、AP-E1-009 registry digest 和 AJV chunk 待办保持不变。
+- 下一任务建议：`AP-E5-002` 复用本阶段契约与 Provider Port，实现 SandboxInstance/Lease、持久化幂等、fencing、状态机、失败清理与对账，并在实现可用后再激活独立进程入口。
+
+### 2026-08-09 — AP-E5-002 SandboxInstance、Lease 与生命周期编排
+
+- [x] 新增 `SandboxInstance`、`SandboxLease` 领域模型、SQLAlchemy Store 和 `0021_sandbox_lifecycle`；两表启用 FORCE RLS，活动 Lease 唯一，身份/Policy/Bundle/Lease 不可变，数据库触发器拒绝非法 Sandbox 状态转换。
+- [x] Provision 以请求 Hash 和幂等记录持久化；校验当前 Run/Attempt、Deployment 指定 Bundle、Bundle logical URI、不可变 SandboxPolicy Hash 以及 `tenant/user/session/run` Workspace 身份，不接受同 Snapshot 的其他 Bundle 或跨 Run Workspace。
+- [x] Lease 保存 fencing token SHA-256；Service 完成 Provision、Inspect、Lease、Process、Release、Terminate、Destroy 和崩溃窗口 `recover`，Provider 调用统一受超时与安全错误边界约束，清理/销毁无法确认时持久化 `QUARANTINED`。
+- [x] Operation、Audit、Lease 和终止状态在数据库事务内原子写入；Provider 不接收 provision/fencing token，Token Verifier 使用幂等键与排除 Secret 的 request hash，Secret 不进入 Workflow History 或日志。
+- [x] Temporal 通过 `ap-e5-002-run-sandbox-v1` patch 接入 `provision_run_sandbox_v1` 和 `release_run_sandbox_v1`；Sandbox Handle 传入 Runtime，Workflow 成功、失败、取消及安全恢复均在 `finally` 执行清理，并记录 `runtime_session_id`、`sandbox_instance_id` 查询状态。
+- [x] 新增数据库装配 `apps/sandbox_manager/composition.py` 与 `AP_SANDBOX_PROVIDER_TIMEOUT_SECONDS=60`；生产 main 继续失败关闭，只有部署显式注入真实 Provider、Policy Resolver、Token Verifier 和 Workload Identity 后才能激活，未伪造可部署能力。
+- [x] 最终验证通过：`make backend-check` 为 `485 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `497 passed, 1 skipped`、前端 `76 passed`；R9 契约 31 个完整性文件、168 个 operationId、17 个生成文件零漂移，Black、Ruff、Pyright、前端门禁、`uv lock --check` 和 `git diff --check` 通过。
+- 历史问题评估：全量测试发现 Sandbox 与 Run 状态机测试同名导致 pytest collection 冲突，已仅重命名新增测试；真实 PostgreSQL 测试的精确 RLS 清单遗漏本阶段两表，已补齐并复验。两处均为测试协同修正，未改变冻结公共行为。
+- 未闭环与临时边界：真实隔离 Provider、生产 Provision Token Verifier、不可变 Policy Resolver、`RunSandboxController` HTTP Adapter 和 Sandbox Manager main 激活仍待后续部署任务；Release/Process API 未携带 fencing token，是否扩展冻结契约需要人工确认，当前未擅自变更。
+- 后续记录：Workspace 完整路径、软链接、TOCTOU、配额与生命周期归 `AP-E5-003`；Artifact 归 `AP-E5-004/005`；Provider/数据库对账归 `AP-E7-001`。真实 Redis、RunEvent 全局登记表与月分区、AP-E1-009 registry digest、AJV standalone codegen 待办继续保留。
+- 下一任务建议：`AP-E5-003` 先以 Workspace URI 为单一逻辑标识，完成安全解析、受控根映射、文件句柄级根包含/软链接/TOCTOU 防护、容量限制和 Run 生命周期协同，再开放 Artifact 导出入口。
+
+### 2026-08-09 — AP-E5-003 Workspace URI、路径隔离、容量限制与生命周期
+
+- [x] 经人工批准扩展冻结 Release/Process API，并形成 R10：Start Process、Cancel Process、Release 必须携带 `run_id`、`execution_attempt`、`execution_fencing_token` 和 `trace_id`；旧 Attempt、过期 Lease 或旧 token 失败关闭。Run 终态后允许同一 Attempt 最后一次有效 Lease token 幂等 Release；Terminate/Destroy 保留独立管理与对账强制权限。
+- [x] 新增 canonical `WorkspaceUri`，结构化绑定 tenant/user/session/run，拒绝百分号转义、反斜杠、控制字符、query/fragment、空段、`.`/`..` 和非 NFC Unicode；根和子路径使用结构化身份比较，不以字符串前缀判断隔离边界。
+- [x] 新增 `WorkspacePathGuard`，只消费可信 Provider 已打开的 Workspace root fd，逐级使用 `dir_fd + O_DIRECTORY + O_NOFOLLOW + O_CLOEXEC`；文件以 `O_NONBLOCK` 打开后通过 `fstat` 只接受单链接普通文件，阻断软链接、硬链接、FIFO、特殊文件、超限文件和验证后路径替换，不暴露宿主物理路径。
+- [x] 新增 `workspace` ORM 与 `0022_workspace_isolation`：FORCE RLS、tenant/user/session/run 外键、唯一 URI/Run、不可变身份/配额/保留期、用量 Check、状态机 Trigger，并从既有 Sandbox Policy 回填 Workspace；SandboxInstance 增加 tenant+Workspace 复合外键。
+- [x] Provision 在同一事务创建或确认 Workspace，配额冻结自 SandboxPolicy；Release/Terminate/Destroy 和 Provision 失败封存 Workspace，清理无法确认时进入 QUARANTINED。数据库用量超限返回 `WORKSPACE_QUOTA_EXCEEDED`，Provider 磁盘限制继续负责写入时物理执行边界。
+- [x] R10 同步提升 Sandbox 契约、AI Coding 总纲、执行计划、测试任务包、需求追踪矩阵和文档索引版本，更新基线 ID、日期、变更摘要及 SHA-256；公共 OpenAPI、SandboxPolicy、RunEvent 和前端生成契约未改变。
+- [x] 验证通过：Workspace URI/路径定向 `14 passed`；真实 PostgreSQL 16 迁移/RLS 与完整资源链路 `2 passed`；带真实 PostgreSQL/Temporal 的 `make check-all` 后端 `514 passed, 1 skipped`、前端 22 个测试文件 `76 passed` 并完成生产构建。R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移，Black、Ruff、Pyright、Prettier、ESLint 和 Vue TypeScript 通过。
+- 历史问题评估：全链路首次发现 FIFO 在文件类型校验前因阻塞式只读打开导致测试和真实导出风险挂起，已在候选文件打开时增加 `O_NONBLOCK` 并复验；普通文件语义不变。测试环境禁止创建 UNIX Socket，因此未增加真实 Socket 节点用例，代码仍以打开失败或 `fstat` 非普通文件失败关闭，完整特殊文件隔离 E2E 记录到 AP-E5-006。
+- 依赖与迁移：未新增 Python/Node 依赖；部署前执行 Alembic `0022_workspace_isolation`。R10 的 Start/Cancel/Release 请求新增必填 fencing proof，内部调用方与 Sandbox Manager 必须协同发布，不能滚动混用 R9 请求模型。
+- 未闭环与临时边界：Artifact 上传/扫描归 AP-E5-004，下载/过期/删除归 AP-E5-005，真实 Provider、生产 Token Verifier、不可变 Policy Resolver、Workspace root mapper、RunSandboxController HTTP Adapter 和 Sandbox Manager main 激活仍未实现；Provider/数据库/Workspace 对账归 AP-E7-001。
+- 持续待办：唯一 skip 仍是缺少 `AP_TEST_REDIS_URL` 的真实 Redis 条件测试；RunEvent “全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 registry digest 回填、AJV standalone codegen 继续保留，不因本阶段验证而视为完成。
+- 下一任务建议：`AP-E5-004` 复用本阶段 Workspace URI、root fd 和配额事实，实现 Artifact 上传、完成、Hash、隔离区对象存储及扫描状态机；不得允许客户端提供宿主路径，也不得在扫描通过前开放下载。
+
+### 2026-08-09 — AP-E5-004 Artifact 上传、完成与安全扫描流程
+
+- [x] 保持 R10 OpenAPI 不变，完成 `createArtifactUpload/getArtifact/completeArtifactUpload` 三条冻结路由；创建和完成要求当前活动成员、`artifact:create/read`、Owner 隔离与共享 Idempotency-Key，不实现 AP-E5-005 的下载和删除路由。
+- [x] 新增 Artifact 领域状态机、ORM、`0023_artifact_upload_scan`、FORCE RLS、tenant/member/workspace/run 复合约束、不可变元数据和状态触发器；公共直传允许 Workspace/Run 为空，Workspace 导出绑定留待内部 DTO 冻结后接线。
+- [x] 上传授权只返回受控隔离区 URL 和安全 Header；拒绝路径型文件名、非法 MIME、凭据/Header 注入和过期授权。Complete 只信任对象存储服务端观察的 size、SHA-256 和 Content-Type，观察值不一致时失败关闭为 FAILED。
+- [x] `UPLOADING → SCANNING` 与 `artifact.scan_requested.v1` Outbox 同事务提交；扫描通过后先幂等提升对象并只接受 canonical `artifact://tenant/.../artifact/...`，随后 AVAILABLE；恶意内容进入 REJECTED，依赖失败有界退避并在耗尽后 FAILED/Dead Letter。
+- [x] API 数据库 composition 和独立 Artifact Scan Dispatcher 已接入；生产 S3/MinIO、Scanner、Trusted Publisher、TenantContextSource 与 Event Worker main 仍由部署显式注入，缺失时 API/进程失败关闭，不复用 Release Bundle 的签名/SBOM 协议。
+- [x] 验证通过：定向 `65 passed`；真实 PostgreSQL 迁移、RLS、Owner Store、幂等冲突、Outbox 和 AVAILABLE 链路 `1 passed`；`make backend-check` 为 `522 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `534 passed, 1 skipped`、前端 `76 passed`。R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移。
+- 历史问题评估：真实 PostgreSQL 首次发现 Artifact JSONB 的 Python `None` 被写成 JSON `null`，已沿用仓库模式改为 `none_as_null=True`；随后发现 API 与 Store 的微秒级时间差可能触发 `updated_at` 回退保护，已使用 `max(请求时间, 当前 updated_at)` 保持单调。两项均为本阶段新表的失败关闭修正，未放宽数据库不可变性或修改历史公共语义。
+- 依赖与迁移：未新增 Python/Node 依赖，Pyright 直接复用本机现有 Node 22；部署前执行 Alembic `0023_artifact_upload_scan`。降级会删除 Artifact 元数据和 Workspace 复合唯一约束，只能在确认无需保留产物事实时执行。
+- 未闭环与临时边界：AP-E5-005 负责下载、权限求交、过期和删除；Sandbox `artifacts:export` 仍缺冻结请求 DTO/fencing/响应模型，需人工确认后接通 Workspace/Run/Owner/required_output。Run attachments 继续失败关闭，直到 AVAILABLE Artifact 校验进入不可变 RunSpec 与 Runtime 输入契约；不得仅因 Artifact 表已存在就接受但不传递附件。
+- 持续待办：生产 Object Store/Scanner/Publisher、TenantContextSource、Event Worker main、AP-E5-006 完整隔离 E2E、真实 Redis、RunEvent“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 registry digest 和 AJV standalone codegen 均保持明确记录。
+- 下一任务建议：`AP-E5-005` 实现只对 AVAILABLE 且未过期、权限求交通过的 Artifact 生成短期下载 URL，并完成 EXPIRED/DELETING/DELETED、对象撤销/清理、幂等和审计；不要提前接受尚未进入不可变 RunSpec 的附件输入。
+
+### 2026-08-10 — AP-E5-005 Artifact 下载、权限、过期和删除闭环
+
+- [x] 保持 R10 OpenAPI 和生成 Client 不变，接通冻结 `createArtifactDownload/deleteArtifact`；下载要求 `artifact:download`，Run 绑定产物额外要求当前 `run:read` 和未删除来源 Session，跨 tenant/Owner 按不存在处理。
+- [x] 只对 canonical trusted URI、`AVAILABLE` 且未超过 Artifact 保留期的对象签发最多 5 分钟、绑定单 Artifact 的下载授权；授权返回前再次锁行确认状态、来源权限和有效期并写审计，删除竞态获胜时失败关闭，不返回已生成但未确认的 URL。
+- [x] 增加周期性到期扫描和下载时惰性到期，均以数据库状态机原子执行 `AVAILABLE → EXPIRED`；过期对象不再签发 URL，审计记录固定原因 `RETENTION_EXPIRED`。
+- [x] 删除请求要求 `artifact:delete` 和 Idempotency-Key，在同一事务写 `DELETING`、Operation、审计和 `artifact.delete_requested.v1` Outbox；Dispatcher 明确先幂等撤销下载能力，再删除隔离区/可信对象，成功后写 `DELETED` 墓碑和 Operation `SUCCEEDED`，依赖错误有界重试，耗尽后 Operation `FAILED` 与 Dead Letter，允许新幂等请求重新发起清理。
+- [x] 新增 `0024_artifact_download_delete`，为既有 tenant_admin 回填 `artifact:download/delete`，并修正历史 `trusted_object_status` 约束，使 REJECTED/FAILED 的隔离区对象可进入 DELETING/DELETED；降级为此类墓碑补写历史 canonical locator 后恢复旧约束。通用 Operation 查询已加入 Artifact 并在数据库 API composition 正式装配，删除返回的 status_url 不再在真实组合中 503。
+- [x] 验证通过：定向 `94 passed`，Artifact 子域最终 `21 passed`；真实 PostgreSQL 16 迁移/RLS/下载审计/到期/幂等 Outbox/AVAILABLE 与 FAILED 删除链路 `1 passed`；普通后端全量 `537 passed, 13 skipped`，真实 PostgreSQL/Temporal 后端全量 `549 passed, 1 skipped`；前端 22 个测试文件 `76 passed` 并完成生产构建。R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移。
+- 历史问题评估：真实 PostgreSQL 首轮发现 Alembic 命名约定与迁移手工完整约束名叠加，已按仓库逻辑名规范修正；隔离区删除验证又发现旧约束不允许 `object_uri=NULL` 的 FAILED/REJECTED 进入 DELETING，已通过独立迁移修正且未放宽 AVAILABLE 的 trusted URI 要求；数据库组合缺少 IAM/Operation Service 导致异步 status_url 不可用，已最小补齐并增加协同测试。
+- 依赖与迁移：未新增 Python/Node 依赖；部署前执行 Alembic `0024_artifact_download_delete`。生产对象存储适配器必须实现单资源短期授权、下载能力幂等撤销和隔离区/可信对象幂等删除，不能把内部 object_uri 返回客户端。
+- 未闭环与临时边界：生产 S3/MinIO Download Grant/Revocation/Delete Adapter、TenantContextSource 和 Event Worker main 仍需部署注入；当前唯一条件 skip 为缺少 `AP_TEST_REDIS_URL` 的真实 Redis 测试。Sandbox `artifacts:export` 内部 DTO/fencing/响应、Run Attachment 进入不可变 RunSpec/Runtime 输入仍待单独冻结，当前继续失败关闭。
+- 持续待办：AP-E5-006 完整多租户/多用户隔离、特殊文件、ZIP/TAR、Zip Slip、压缩炸弹和真实对象清理故障 E2E；RunEvent“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 registry digest、AJV standalone codegen 保持记录。
+- 下一任务建议：`AP-E5-006` 使用真实或受控对象存储测试适配器完成 Artifact 全链路隔离和清理 E2E，重点验证已签发 URL 撤销、跨 tenant/user/run、特殊文件/归档攻击、扫描/删除故障与对账；不得提前接收尚未进入不可变 RunSpec 的附件输入。
+
+### 2026-08-10 — AP-E5-006 隔离、安全清理与 Artifact E2E
+
+- [x] 新增无宿主解包的 ZIP/TAR Inspector：拒绝绝对路径、点段、反斜杠/Windows drive、重复规范化路径、ZIP symlink、TAR symlink/hardlink/device/FIFO/Socket 类特殊条目、加密 ZIP、超文件数、单成员/展开总量、压缩比和嵌套归档；压缩格式即使伪装扩展名或 MIME 仍按 Magic 检查。
+- [x] 扫描组合必须注入隔离区 Content Reader，在冻结 100 MiB 输入边界内复制到内存阈值 8 MiB 的受控 Spooled File，并再次核对对象字节数；恶意归档进入 REJECTED，依赖不可用继续走既有有界重试，不在宿主目录产生解包文件。
+- [x] Artifact Management 构造改为显式 URL Policy；数据库 API 组合启用对象存储时必须配置 `AP_ARTIFACT_PUBLIC_ORIGINS`。上传/下载 URL 只允许精确 Origin，默认 HTTPS；私有 MinIO 的 HTTP DNS Origin 必须显式配置，localhost 和所有 IP literal（含云元数据、loopback、IPv6）失败关闭。
+- [x] 新增受控对象存储纵向 E2E，覆盖 API 创建/完成、隔离区上传、扫描、可信提升、短期下载、删除：两租户同名不冲突，同租户跨 Owner 不可见，Run 缺权限返回拒绝，来源失效按不存在处理，跨租户 Token 不可用。
+- [x] 清理 E2E 验证先撤销后删除：对象存储首次失败时 Artifact 保持 DELETING 且旧 URL 已失效；重试后隔离区/可信区均清空并写 DELETED。审计测试数据不记录 URL、Token 或对象内容。
+- [x] Workspace 增加已打开 Socket descriptor 的 `fstat` 回归，和既有软链接、硬链接、FIFO、路径替换共同证明只接受单链接普通文件；受限执行沙箱禁止创建文件系统 AF_UNIX 节点，因此生产 Provider 认证仍需补真实 Socket 路径、设备节点、并发 rename/link 与 hostile mount 用例。
+- [x] 最终验证通过：定向 `63 passed`；`make backend-check` 为 `561 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `573 passed, 1 skipped`、前端 `76 passed` 并完成生产构建。R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移，`uv lock --check` 与 `git diff --check` 通过。
+- 依赖、迁移与部署：未新增 Python/Node 依赖、迁移或冻结契约。启用生产 Artifact Object Store 前必须配置 `AP_ARTIFACT_PUBLIC_ORIGINS`，并提供 Object Store/Scanner/Publisher/Reader/Revocation/Delete Adapter、TenantContextSource 和 Event Worker main；缺失时继续失败关闭。
+- 历史问题评估：定向测试首次受 macOS AF_UNIX 路径长度和执行沙箱 bind 权限影响，已改为不依赖文件系统 bind 的真实 Socket FD 类型验证，未放宽 Workspace 规则或增加条件 skip。未发现需要修改历史冻结公共语义的问题。
+- 未闭环与临时边界：应用 Origin 校验不能替代生产 egress proxy/NetworkPolicy 的逐次 DNS IP 与重定向校验；Provider/数据库/Workspace/Object Storage 孤儿对账归 `AP-E7-001`。Sandbox `artifacts:export`、Run Attachment 不可变 RunSpec、生产隔离 Provider/main 仍待独立冻结或部署实现。
+- 持续待办：唯一条件 skip 仍是缺少 `AP_TEST_REDIS_URL` 的真实 Redis 测试；RunEvent“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 registry digest、AJV standalone codegen 保持记录。
+- 下一任务建议：进入 `AP-E6-001`，先冻结 Skill Manifest 导入、不可变版本、Artifact 来源/Hash、供应链扫描、签名、权限和审计，再实现 API/Store；不得复用运行时临时文件或把未扫描 Skill 直接装入 Bundle。
+
+### 2026-08-10 — AP-E6-001 Skill Manifest、导入、版本与供应链扫描
+
+- [x] 保持 R10 冻结 OpenAPI/Schema 不变，注册 13 个 Skill operationId；导入采用 `Artifact 上传 → createSkill(content.files)`，未新增未冻结的 ZIP/Git/本地目录端点。API 未配置 Trusted Artifact Reader 时稳定返回 503。
+- [x] 完成 Skill 包失败关闭校验：canonical POSIX/NFC 路径、大小写折叠重复、根 `SKILL.md/manifest.yaml`、Artifact UUID/租户/Owner/AVAILABLE/有效期/大小/Hash、安全 YAML、Manifest 一致性、测试/锁文件/入口引用和 JSON Schema。
+- [x] 新增确定性静态供应链 Scanner：精确 Python/System 依赖与 requirements.lock/uv.lock、危险来源/网络/命令、权限与 Sandbox 风险一致性、SBOM、许可证、漏洞/恶意代码静态状态、报告 Hash、签名和 provenance 状态；生产 Scanner 通过 Port 注入。
+- [x] 新增 `0025_skill_supply_chain_scan`、FORCE RLS 和不可变触发器；PASSED/REJECTED/FAILED 均先落证据，只有与 `definition_id + draft_resource_version + content_hash` 精确匹配的 PASSED 证据可在同事务一次性绑定发布/回滚版本。Bundle Reader 对无有效证据的 Skill Version 按不存在处理。
+- [x] tenant_admin 回填 Skill CRUD/publish/rollback/disable 权限；审计只保存扫描摘要、Hash 和 finding code，不保存 Artifact 字节、URL 或 Secret。发布幂等重放在重新读取历史 Artifact 前预检，避免对象过期或删除破坏已完成结果。
+- [x] 最终验证通过：定向 Skill/API/IAM/迁移/模型 `83 passed`；真实 PostgreSQL Resource Registry 与 RLS 测试通过；`make backend-check` 为 `582 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `594 passed, 1 skipped`、前端 `76 passed` 并完成生产构建。R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移。
+- 依赖与迁移：新增直接依赖 `jsonschema>=4.26.0`、`pyyaml>=6.0.3` 并同步 `uv.lock`，同时补齐历史已使用但未锁定的 `ag-ui-protocol==0.1.19`。部署前执行 Alembic `0025_skill_supply_chain_scan`；降级会删除扫描证据，必须先确认没有依赖其发布证明的 Skill Version。
+- 历史问题评估：全链路首次发现 PostgreSQL RLS 精确清单未登记新证据表，已仅补充 `skill_supply_chain_scan` 并复验；未改动冻结公共行为。扫描器 FAILED 回归验证确认先记录证据、再返回 `DEPENDENCY_UNAVAILABLE`，不进入 Registry 发布。
+- 未闭环与临时边界：内置 Scanner 仅为 `STATIC_BASELINE`；生产 CVE、许可证策略、恶意代码引擎、签名/provenance 验证和 Sandbox Smoke，以及生产 S3/MinIO Trusted Artifact Reader 仍需 Adapter 注入。独立扫描结果查询、ZIP/Git/本地目录导入尚无冻结契约；当前不伪造这些能力。
+- 持续待办：生产 Event Worker main、真实 Redis、Sandbox `artifacts:export`/Run Attachment、RunEvent“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Provider/数据库/对象存储孤儿对账继续保留。
+- 下一任务建议：进入 `AP-E6-002`，实现 MCP 配置、Discover、工具 Schema Hash 和授权能力冻结；远程返回视为不可信，STDIO 只能在 Sandbox 内运行，API 进程不得直接执行命令或解析 Secret 明文。
+
+### 2026-08-10 — AP-E6-002 MCP 配置、Discover、能力冻结和安全校验
+
+- [x] 保持 R10 冻结 OpenAPI、Resource Content Schema 和生成 Client 不变，注册 13 个 MCP operationId；公共能力继续只支持 `streamable_http`。配置拒绝 HTTP、IP literal、localhost/内部域、URL 凭据/query/fragment、非法 Header、跨租户或未使用 Secret Reference，以及未显式冻结的 `allowed_tools`。
+- [x] Discover 采用 `API → Operation/Outbox → 独立 Event Worker → 显式注入 MCP Gateway`；API 进程不连接 MCP、不解析 Secret、不执行 STDIO。Gateway 返回按不可信数据处理，校验协议、Server Identity、工具名、Draft 2020-12 Schema、注解类型、数量和 2 MiB 上限，生成确定性 tool Schema Hash、风险等级与 capability hash；重投遇到已终态 Operation 时不再次调用 Gateway。
+- [x] 新增 `0026_mcp_capability_discovery`、FORCE RLS、复合外键和不可变触发器；证据只保存规范化能力与 finding code，不保存 Secret 明文或远程原始响应。发布必须精确匹配 `definition_id + draft_resource_version + content_hash + allowed_tools` 的未绑定 PASSED 证据，并在发布事务内一次性绑定版本。
+- [x] MCP 回滚不在应用层预先制造孤立证据：应用层只读取源版本已绑定 PASSED 证据，Registry 在同一发布事务锁定源证据、复制不可变能力事实并绑定新版本。Bundle Reader 对无 PASSED 证据的 MCP Version 按不存在处理；AgentScope Bundle MCP 文件与权限清单携带 capability hash、授权工具、工具 Schema Hash 和风险等级，仍只携带 `secret://` 引用。
+- [x] API 数据库组合始终提供 MCP Management Service，独立 MCP Discover Dispatcher 只有显式注入 Gateway 才可构建；tenant_admin 回填 MCP create/read/list/update/delete/publish/rollback/disable/execute 权限。真实 PostgreSQL 验证覆盖权限、Operation 终态、RLS、证据防篡改、精确发布、回滚复制和 Bundle capability snapshot。
+- [x] 最终验证通过：定向 MCP/API/Bundle/IAM/迁移/模型 `84 passed`；真实 PostgreSQL Resource Registry 与 RLS 测试通过；`make backend-check` 为 `601 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `613 passed, 1 skipped`、前端 `76 passed` 并完成生产构建。R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移，`uv lock --check` 与 `git diff --check` 通过。
+- 依赖、迁移与部署：未新增 Python/Node 依赖，锁文件无本阶段变更。部署前执行 Alembic `0026_mcp_capability_discovery`；降级会删除 MCP 能力证明及新增权限，必须先确认没有依赖这些证明的已发布 MCP Version。生产部署需提供 MCP Gateway、Secret Broker、逐次 DNS/Redirect/egress 校验和独立 Worker main，缺失时 Discover 不启动，API 仍失败关闭。
+- 历史问题评估：阶段联调发现 self-referencing 复合外键目标缺少表名前缀，SQLAlchemy 在导入期即失败，已按 PostgreSQL/ORM 正确形式修正；导出 MCP 符号到资源包曾触发 Publishing/Outbox/Temporal/Bundle 循环导入，已改为稳定 public 层直接导出而不扩大底层包依赖；Bundle 新校验首次误把 Model binding 的冻结校验缩进 MCP 分支，领域回归测试已锁定并恢复原边界。以上均为本阶段局部修复，未改变冻结公共契约。
+- 未闭环与临时边界：生产 MCP Gateway、Secret Broker、DNS rebinding/Redirect/egress Proxy、证书与连接池策略尚未实现；当前不声称具备生产 MCP 网络访问。STDIO 和旧 SSE transport 未进入 R10，继续禁止；前端 MCP 管理页面和独立能力证据查询 API 尚未实现，需在相应 UI/契约任务中补齐。
+- 持续待办：生产 Event Worker/TenantContextSource、真实 Redis、RunEvent“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment 和 Provider/数据库/对象存储孤儿对账继续保留。
+- 下一任务建议：进入 `AP-E6-003`，先定义 Tenant/Agent/Skill/MCP/Sandbox/Tool 风险策略的求交顺序、默认拒绝、冲突原因码、不可变策略快照和 Admission 调用点，再实现 Policy Evaluator；不得让 Runtime 或前端绕过服务端 Admission。
+
+### 2026-08-10 — AP-E6-003 Policy 有效策略求交集和 Admission Controller
+
+- [x] 保持 R10 OpenAPI、JSON Schema、生成 Client 和数据库 Schema 不变；复用 Bundle Manifest 已冻结的 `permission_policy_hash`、`sandbox_policy_hash` 和 `security/permissions.json`，未创建含义重复的公共 Policy DTO 或可变快照表。
+- [x] 新增确定性有效策略求交：多 Agent Sandbox 不再要求字节一致，而是对 scope、CPU/内存/磁盘/PID/超时、Network allowlist、Filesystem pattern、Process executable、Artifact 类型和生命周期取最严格交集；镜像、网络可用交集和跨字段限制冲突返回稳定原因码。
+- [x] Skill 权限不能扩大有效 Sandbox：文件读写、域名/端口、入口命令、工具、镜像和超时均校验；MCP 只携带已冻结授权工具，同名工具来源/Schema/风险不一致失败关闭。Skill/MCP 风险取最高值，LOW/MEDIUM 为 ALLOW，HIGH 为 REQUIRE_APPROVAL，CRITICAL 默认 DENY。
+- [x] Bundle `security/permissions.json` 提升为 `bundle-permission-policy/v2`，内嵌 canonical `effective-policy/v1`、来源版本、有效约束、风险、Decision、Reason Code 和自身 SHA-256；Bundle verifier 重新计算 Hash 并只接受 ALLOW 快照，Sandbox 文件改为求交后的单一有效策略。
+- [x] AgentScope Bundle compiler 提升到 `1.1.0`。Admission Controller 在 Run 创建、Retry Deployment 解析、RunSpec 准备和 Sandbox Provision 四个入口校验安全扫描、编译器身份/版本、Policy Hash 和 Secret Reference；旧 `1.0.0` Bundle 失败关闭，必须重新发布后才能创建新 Run。
+- [x] AP-E6-004 尚未实现 ApprovalRequest/Decision，因此 HIGH 风险虽然被准确计算为 REQUIRE_APPROVAL，当前仍以 `POLICY_APPROVAL_REQUIRED` 阻止发布，避免高风险 Agent 被 Run/Sandbox 链路直接执行；下一阶段接入审批后再放开为 WAITING_APPROVAL。
+- [x] 验证通过：定向 Policy/Bundle/Run/Sandbox/Temporal `80 passed`；真实 PostgreSQL Resource Registry/Sandbox 链路 `1 passed`；`make backend-check` 为 `607 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `619 passed, 1 skipped`、前端 `76 passed`；R10 的 31 个完整性文件、168 个 operationId、17 个生成文件零漂移。
+- 依赖、迁移与部署：未新增 Python/Node 依赖、数据库迁移或冻结公共契约。上线本阶段代码前必须重新发布仍指向 compiler `1.0.0` 的 Deployment Bundle；这是安全迁移要求，不应通过放宽 Admission 兼容旧产物。
+- 历史问题评估：`ask` 未找到旧 Bundle 单一 SandboxPolicy 检查的 AI 会话历史；代码分析确认其用于在无求交算法时保护全图单一确定边界，本阶段以显式求交替代但保留该不变量。首轮后端门禁仅发现 facade 测试仍断言 `1.0.0`，已同步为安全版本 `1.1.0`，未修改无关生产逻辑。
+- 未闭环与临时边界：Tenant/User/Agent 可变 Policy 尚无 R10 管理与持久化契约，当前有效策略来源为平台风险基线和不可变 Sandbox/Skill/MCP Snapshot；待契约冻结后应注入同一求交器，不另建旁路。并发/配额/预算/队列/存储容量 Admission 属于 `AP-E7-003`。
+- 持续待办：唯一条件 skip 仍是缺少 `AP_TEST_REDIS_URL` 的真实 Redis 测试；RunEvent“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment、生产 MCP Gateway/Secret Broker 和 Provider/数据库/对象存储孤儿对账继续保留。
+- 下一任务建议：进入 `AP-E6-004`，复用本阶段 REQUIRE_APPROVAL、Reason Code、不可变 Policy Hash 和服务端 Admission，完成 ApprovalRequest/Decision、过期、拒绝、自审批阻断和 Run WAITING_APPROVAL；不得在前端直接把审批状态当作执行授权。
+
+### 2026-08-10 — AP-E6-004 ApprovalRequest/Decision、过期和自审批阻断
+
+- [x] 保持 R10 冻结 OpenAPI、RunEvent Schema 和生成 Client 不变，接通 `list/get/decide Approval`、强 ETag、Idempotency-Key、权限和统一错误映射；批准只形成不可变审批事实，不直接视为工具执行授权。
+- [x] 新增 `0027_approval_control_plane`、`approval_request/approval_decision`、FORCE RLS、tenant_admin 权限和数据库 Guard；请求绑定字段、Decision 均不可改写/删除，状态机只允许 `PENDING → APPROVED/REJECTED/EXPIRED/CANCELLED` 和 `APPROVED → CONSUMED/EXPIRED`。
+- [x] `ApprovalCoordinator` 创建请求时锁定当前 Run/Attempt，原子执行 `RUNNING → WAITING_APPROVAL`、写 `approval_required` 和审计；拒绝执行 `WAITING_APPROVAL → CANCELLING`，过期执行 `WAITING_APPROVAL → TIMEOUT` 并写 `APPROVAL_EXPIRED`、`approval_resolved` 和审计。
+- [x] 决策支持 If-Match、自审批应用层 403 与数据库兜底、不可变 Decision、幂等重放；修正真实 PostgreSQL 下必须先 flush Request 状态再插入 Decision 的触发器事务顺序，并为并发重复创建增加确定性事实回读。
+- [x] 新增兼容的 Temporal `approval_decided` Signal，不改变 `execute_agent_run_v1 → RuntimeCompletion` 历史契约；重复 Signal 幂等，同一 Approval 首个决议不可覆盖，REJECTED/EXPIRED/CANCELLED 取消当前 Activity，APPROVED 在 AP-E6-005 前只记录且 `ticket_ref=None`。
+- [x] Vue/Element Plus 审批中心完成状态/Run 过滤、分页、查看 Run、批准/拒绝、稳定重试 Idempotency Key、本地过期禁用和 403/409/412 可理解提示；页面明确说明批准后仍需一次性 Ticket。
+- [x] 验证通过：审批定向 `77 passed`，Signal 失败幂等补发回归 `5 passed`；真实 PostgreSQL 迁移/RLS/不可变/Run/RunEvent `1 passed`；真实 Temporal Signal/取消/History Replay `1 passed`；`make backend-check` 为 `629 passed, 14 skipped`，真实 PostgreSQL/Temporal `make check-all` 为后端 `642 passed, 1 skipped`；前端 24 个测试文件 `81 passed` 并完成生产构建；R10 的 31 个完整性文件、168 个 operationId、17 个生成文件零漂移。
+- 历史问题评估：全量 pytest 首轮发现新增审批测试文件与历史 `test_service.py/test_model.py` 顶层模块重名，已仅重命名为唯一测试模块，未修改生产行为；真实数据库验证确认 Decision Guard 需要显式刷新 Request 状态，已最小修正并由不可变触发器回归锁定；`check-all` 首轮发现全库 RLS 精确清单未登记两张审批表，已同步安全清单并复验，未放宽任何策略。
+- 安全边界：继续保留 AP-E6-003 对 HIGH Bundle 的 `POLICY_APPROVAL_REQUIRED` 发布阻断。AgentScope `RequireUserConfirmEvent → ApprovalCoordinator` 生产桥、一次性 Execution Ticket、Tool Gateway 逐次校验和 APPROVED 恢复执行必须在 AP-E6-005 一次闭环后才能解锁，不能声称高风险工具审批 E2E 已完成。
+- 未闭环与临时边界：决策持久化后 Temporal 失败依赖相同 Idempotency-Key 重试补发；周期过期 sweep 尚未接入生产 Event Worker main。`AP-E7-001` 必须补 Approval Signal 对账/补发，`AP-E6-007` 完成生产 Runtime Bridge 和审批/执行/审计 E2E。自动过期 `decided_by` 暂用全零 UUID service actor sentinel，后续扩展 actor type 时按兼容流程升级契约。
+- 依赖与迁移：未新增 Python/Node 依赖；部署前执行 Alembic `0027_approval_control_plane`。降级会删除审批事实和权限，必须先确认没有待审批、已批准未消费或审计依赖。
+- 持续待办：生产 Event Worker/TenantContextSource、真实 Redis、RunEvent“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment 和 Provider/数据库/对象存储孤儿对账继续保留。
+- 下一任务建议：进入 `AP-E6-005`，实现不可变短时 Execution Ticket、Tool Gateway 单次消费、审批/策略/Schema/参数摘要逐次重校验和 APPROVED 安全恢复；不得由前端或 Runtime 直接把 Approval 状态解释为执行权限。
+
+### 2026-08-10 — AP-E6-005 一次性 Execution Ticket 和 Tool Gateway 消费
+
+- [x] 新增不可变 `ExecutionTicketRecord`、`execution_ticket` 表和 Alembic `0028_execution_ticket_gateway`；Ticket 绑定 Tenant/Run/Attempt/Approval/Requester/Deployment、Tool/Schema、canonical 参数摘要和 Policy Version，nonce 只保存 `sha256:` Hash，且数据库 Guard 只允许一次写入 `consumed_at`。
+- [x] Approval APPROVED 决策与 Ticket 在同一 PostgreSQL 事务创建；HMAC Issuer 通过部署密钥确定性派生 nonce，支持 Signal 失败后的幂等重建。Temporal `approval_decided.ticket_ref` 只携带 `execution-ticket:<UUID>` 安全引用，不携带 nonce 或 Hash；未注入 Issuer 时保持原失败关闭边界。
+- [x] Tool Gateway 在执行前重新校验 Tenant/Requester/Attempt、当前 Tenant Member、`mcp:execute` 权限、Deployment ACTIVE/DEGRADED、Approval APPROVED，以及 Ticket 的全部不可变绑定；调用方参数会重新 canonicalize 并计算摘要，跨 Run、旧 Attempt、参数、Schema、Policy 或 Deployment 变化均拒绝。
+- [x] Ticket、Approval `APPROVED → CONSUMED` 和 Run `WAITING_APPROVAL → RUNNING` 在同一事务原子提交后才调用受控 Executor，形成 at-most-once 边界；重放不会二次调用。Ticket 过期会收敛 Approval 为 EXPIRED、Run 为 TIMEOUT，并写 `EXECUTION_TICKET_EXPIRED`。
+- [x] 审计覆盖 `ticket.consume`、`ticket.replay`、`tool.execute` 和 `tool.denied`。联调发现拒绝审计最初随异常事务回滚，已改为提交审计后再抛稳定拒绝；Executor 异常记录 `TOOL_EXECUTION_FAILED`，Ticket 不恢复，未伪造成功。
+- [x] 验证通过：定向测试 `63 passed`，真实 PostgreSQL Resource Registry 集成测试 `1 passed`；`make backend-check` 为 `638 passed, 14 skipped`；`make check` 通过；真实 PostgreSQL/Temporal `make check-all` 为后端 `651 passed, 1 skipped`，前端 24 个测试文件 `81 passed` 并完成生产构建；R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移。
+- 安全边界：HIGH Bundle 继续以 `POLICY_APPROVAL_REQUIRED` 阻止发布。当前完成的是内部 Ticket/Gateway 安全闭环；生产 AgentScope `RequireUserConfirmEvent/RequireExternalExecutionEvent` 暂停、审批、Ticket 取回、`ExternalExecutionResult` 恢复及高风险工具 E2E 归 `AP-E6-007`，完成前不能声称生产纵向链路可用。
+- 依赖、迁移与部署：未新增 Python/Node 依赖。部署前执行 `0028_execution_ticket_gateway`；生产必须由 Secret 管理注入至少 32 字节的 Execution Ticket HMAC 密钥。降级会删除未消费和已消费 Ticket 事实，必须先确认无待执行审批和审计依赖。
+- 历史问题评估：真实 PostgreSQL 迁移发现 Alembic `version_num VARCHAR(32)` 无法容纳原 revision，已缩短实际 revision 为 `0028_execution_ticket_gateway` 并复验；拒绝审计事务回滚属于本阶段安全缺陷，已最小修正并由重放/拒绝集成测试锁定。未修改冻结公共契约或为验证放宽 HIGH 策略。
+- 未闭环与临时边界：生产 MCP Gateway、Secret Broker、工具网络 Executor 尚未实现；Approval Signal、Ticket、Run 与外部执行状态对账归 `AP-E7-001`。唯一条件 skip 仍是未配置 `AP_TEST_REDIS_URL` 的真实 Redis 测试。
+- 持续待办：RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox/Workspace/Object Store 孤儿对账、生产 Event Worker/TenantContextSource、Sandbox `artifacts:export`/Run Attachment 继续保留。
+- 下一任务建议：进入 `AP-E6-006`，先盘点现有 `audit_log` 生产者和敏感字段，统一写入、查询权限、分页、保留/归档与脱敏契约；不得在 Audit API 中返回 Ticket nonce、Secret、完整工具参数或未脱敏外部响应。
+
+### 2026-08-10 — AP-E6-006 Audit 写入、查询、保留和敏感字段脱敏
+
+- [x] 保持 R10 `GET /api/v1/audit-logs`、`AuditRecord/AuditPage` 和生成 Client 不变；服务端强制 `audit:list`，支持 action、resource_type、actor_id、run_id、时间范围和 `(created_at, id)` 稳定游标分页。数据库 `resource_id` 为空时映射为空字符串，作为冻结必填 string 的兼容策略。
+- [x] 新增统一 Audit ORM 写入防线：从 Run 资源或 metadata 推导 `run_id`，对 Secret、Token、nonce、Prompt、完整参数、原始内容、URL 等敏感键脱敏，限制深度、条目和长字符串，并按脱敏后的 metadata 重算 digest；`content_hash`、`tool_schema_hash` 和 Token 数量等非敏感证明字段保持可用。
+- [x] 新增 `0029_audit_query_retention`：补 `run_id` 回填和查询索引、FORCE RLS、tenant_admin `audit:list` 回填及 UPDATE/DELETE Guard。Tenant UoW 只能访问当前 Tenant，Platform UoW 通过事务级 `app.platform_context` 显式访问平台事实；`tenant_id IS NULL` 的平台 Audit 不会进入租户 API。
+- [x] Vue/Element Plus 审计页完成动作、资源、Actor、Run 和时间过滤，服务端分页、刷新、loading/empty/error 状态及最小投影说明；页面不展示 metadata、reason_codes、digest、Secret、nonce、完整参数或原始内容。
+- [x] 验证通过：定向后端 `46 passed`；真实 PostgreSQL Audit/RLS 集成 `1 passed`，覆盖 Tenant/Platform 隔离、过滤、游标、run_id 推导、脱敏、digest 和不可变 Trigger；`make backend-check` 为 `646 passed, 14 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `659 passed, 1 skipped`，唯一 skip 为未配置真实 Redis；前端 26 个测试文件 `85 passed` 并完成生产构建；R10 契约与 17 个生成文件零漂移。
+- 历史问题评估：首轮门禁发现新增 Audit 页面在 TypeScript `exactOptionalPropertyTypes` 下可能传递显式 `undefined`，已改为逐字段构造请求；RLS 精确清单和迁移计数随 AuditLog 纳管同步增加，未放宽任何既有策略。Audit listener 覆盖所有 ORM 生产者的 digest 属于本阶段明确的统一写入语义，并由真实数据库回归锁定。
+- 保留与部署边界：基线未冻结 Audit 保留天数、归档介质或合法淘汰流程，因此当前以数据库不可更新/删除实现无限期在线保留，不擅自物理清理。部署前执行 `0029_audit_query_retention`；降级会移除 Audit RLS、不可变 Guard、run_id 和新增权限，必须先评估平台审计访问及合规要求。
+- 未闭环与临时边界：`source_ip/client` 尚未进入冻结 Audit API 和可信代理模型，不能直接信任请求 Header 入库；合规期限确定后需补归档、冷存储、分区和受控淘汰。默认 `make check` 的条件 skip 包含 PostgreSQL/Temporal，最终 `check-all` 已启用两者，剩余唯一 skip 为未配置真实 Redis。
+- 持续待办：RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、生产 MCP Gateway/Secret Broker、生产 Event Worker/TenantContextSource、Sandbox `artifacts:export`/Run Attachment 和 Provider/数据库/对象存储孤儿对账继续保留。
+- 下一任务建议：进入 `AP-E6-007`，接通 AgentScope `RequireUserConfirmEvent/RequireExternalExecutionEvent` 暂停、Approval、一次性 Ticket 取回、受控外部执行和 `ExternalExecutionResult` 恢复，并用当前 Audit 查询链路完成高风险工具纵向 E2E；不得绕过 HIGH Bundle 发布阻断或 Tool Gateway 逐次校验。
+
+### 2026-08-11 — AP-E6-007 AgentScope Runtime Bridge 与高风险工具纵向 E2E
+
+- [x] 新增真实 AgentScope 2.0.5 Runtime Bridge，消费 `RequireUserConfirmEvent`、`UserConfirmResultEvent`、`RequireExternalExecutionEvent` 和 `ExternalExecutionResultEvent`；普通流事件继续复用既有 Translator 与 RunEvent Publisher，不建立平行事件或运行事实源。
+- [x] AgentScope state 通过显式 `AgentScopeStateStore` Port 保存，单状态限制 10 MiB；Temporal Workflow History 只保留既有小型 `RuntimeCompletion`，不写入 AgentScope 对象、完整状态、Ticket nonce、完整参数或高频事件。Approval 等待保持在单次 Activity 内并通过 heartbeat 维持可观测性。
+- [x] HIGH 工具调用由可信 `RuntimeToolBindingResolver` 对照不可变 RunSpec/Bundle 事实，创建 durable Approval 并等待终态；APPROVED 后通过 HMAC Issuer 重建 Ticket credential，核对 ticket ID/hash/ref，再以 Run service 身份调用 Tool Gateway。跨 Run service 身份、绑定变化、未审批 External execution 和 Ticket 不一致均失败关闭。
+- [x] Tool Gateway 完成后构造 `ExternalExecutionResultEvent` 恢复 AgentScope；拒绝/取消返回稳定 `RUN_CANCELLING`，过期返回稳定错误。工具参数和结果分别限制 1 MiB，当前一次只处理一个审批工具调用。
+- [x] HIGH 有效策略现可编译为不可变 `REQUIRE_APPROVAL` Bundle 快照，`DENY/CRITICAL` 仍阻断；Bundle verifier 只接受 `ALLOW/REQUIRE_APPROVAL`。`AgentScopeBundleCompiler` 从 `1.1.0` 提升为 `1.2.0`，上线前既有 Deployment Bundle 必须重新发布，旧产物继续由 Admission 失败关闭。
+- [x] 真实 PostgreSQL 纵向 E2E 覆盖 AgentScope control event、Approval 创建和决定、Run `RUNNING → WAITING_APPROVAL → RUNNING`、Ticket 同事务创建与单次消费、Tool Gateway 执行、AgentScope 恢复、RunEvent 有序落库和 Audit 事实。事件顺序包含 `tool_call_start → approval_required → approval_resolved → tool_call_result → text_delta → text_message_end`，审计至少包含 `approval.request/approval.approve/ticket.consume/tool.execute`。
+- [x] 最终门禁通过：`make check` 后端 `652 passed, 14 skipped`、前端 26 个测试文件 `85 passed` 并完成生产构建；真实 PostgreSQL/Temporal `make check-all` 后端 `665 passed, 1 skipped`、前端 `85 passed`；R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移。
+- 历史问题评估：全量门禁发现 Skill Service 的 AVAILABLE Artifact 测试夹具使用固定 `2026-08-11` 过期时间，当前日期到达边界后真实过期校验使 4 个测试失败；生产逻辑正确且未放宽，仅将“长期有效”测试夹具调整为 `2099-01-01` 并复验。`execution_tickets.py` 曾被怀疑存在四元素 tuple 解包问题，核对真实源码后确认不存在，未做修改。
+- 依赖、迁移与契约：未新增 Python/Node 依赖或数据库迁移；R10 公共 API、RunEvent、RunSpec、Temporal V1 DTO 和前端生成代码不变。Bundle compiler 版本提升属于安全产物迁移，回滚到旧代码前必须确认没有继续服务的新 `1.2.0` Bundle。
+- 未闭环与临时边界：`runtime-worker-agentscope/main.py` 仍失败关闭；生产 `AgentScopeSessionFactory`、可信 RunSpec/Bundle Tool Binding Resolver、加密受控对象存储 State Store、MCP Gateway、Secret Broker 和真实外部工具 Executor 尚未装配，因此不能声称生产 Runtime Worker 已可部署运行。Worker 崩溃后的 checkpoint 恢复、Approval/Ticket/Run/Signal 对账和周期 expiry sweep 归 `AP-E7-001`。
+- 持续待办：唯一条件 skip 仍是缺少 `AP_TEST_REDIS_URL` 的真实 Redis 测试；RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment、Audit 归档/source_ip/client 和 Provider/数据库/对象存储孤儿对账继续保留。
+- 下一任务建议：进入 `AP-E7-001`，优先完成生产 Runtime Worker 装配和崩溃恢复/对账规则；不得用测试 Stub、内存 State Store 或未受控外部 Executor 伪装生产可用性。

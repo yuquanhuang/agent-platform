@@ -1,6 +1,6 @@
 # Agent 平台 Sandbox 与 Workspace 服务契约
 
-> 文档版本：V1.2  
+> 文档版本：V1.3
 > 文档状态：开发输入基线
 
 ## 1. 服务边界
@@ -130,16 +130,21 @@ POST /internal/v1/sandboxes/{sandbox_id}/processes
 
 ```json
 {
+  "run_id": "run_xxx",
+  "execution_attempt": 1,
+  "execution_fencing_token": "opaque",
   "process_id": "proc_xxx",
   "argv": ["python", "-m", "runtime_entry"],
   "working_directory": "workspace://.../work/",
   "environment_refs": ["capability://model-gateway/run_xxx"],
   "stdin_mode": "PIPE",
   "stdout_mode": "PIPE",
-  "timeout_seconds": 600
+  "timeout_seconds": 600,
+  "trace_id": "trace_xxx"
 }
 ```
 
+- `run_id, execution_attempt, execution_fencing_token` 必须匹配当前未过期活动 Lease 和 RunAttempt；旧 Attempt、过期 Lease 或旧 token 返回 `SANDBOX_FENCING_REJECTED`。
 - 默认 `shell=false`。
 - argv、工作目录、环境引用必须符合 Policy。
 - 不接受明文 Secret 环境变量。
@@ -151,7 +156,9 @@ POST /internal/v1/sandboxes/{sandbox_id}/processes/{process_id}/cancel
 POST /internal/v1/sandboxes/{sandbox_id}/terminate
 ```
 
-取消流程：SIGTERM/协议取消 → 宽限期 → SIGKILL/Provider 强制终止。接口幂等，返回当前有效状态。
+Process Cancel 请求必须携带 `run_id, execution_attempt, execution_fencing_token, trace_id`，并匹配当前未过期活动 Lease 和 RunAttempt。取消流程：SIGTERM/协议取消 → 宽限期 → SIGKILL/Provider 强制终止。接口幂等，返回当前有效状态。
+
+Terminate 是管理面或对账使用的强制操作，不代表当前 Lease Holder 的正常控制权；它必须通过独立的 Workload Identity、权限和审计边界调用，不接收或替代 Run fencing proof。
 
 ### 5.6 Artifact Export
 
@@ -175,9 +182,11 @@ POST /internal/v1/sandboxes/{sandbox_id}/release
 DELETE /internal/v1/sandboxes/{sandbox_id}
 ```
 
+- Release 请求必须携带 `run_id, execution_attempt, execution_fencing_token, trace_id`。活动 Attempt 必须匹配当前未过期 Lease；Run 已进入终态后，允许使用该 Attempt 最后一次有效 Lease token 幂等完成清理，但旧 Attempt 或其他 token 仍被拒绝。
 - Release 撤销 Lease、短期能力和网络访问。
 - Run Sandbox Release 后进入 TERMINATING。
 - Session Sandbox 清理成功可回 READY；失败进入 QUARANTINED。
+- Destroy 与 Terminate 相同，属于独立管理/对账强制操作，不接收 Lease token；调用方必须具有强制清理权限并写审计。
 - Destroy 失败不能标记 TERMINATED，必须告警和对账。
 
 ## 6. 状态机

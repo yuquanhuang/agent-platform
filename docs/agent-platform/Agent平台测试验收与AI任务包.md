@@ -1,6 +1,6 @@
 # Agent 平台测试验收与 AI 任务包
 
-> 文档版本：V1.9
+> 文档版本：V2.0
 > 文档状态：开发输入基线
 
 ## 1. 测试原则
@@ -261,7 +261,7 @@ Run RUNNING 时关闭浏览器、重启 API/Runtime Worker，重新连接后事�
 ```yaml
 task_id: AP-E4-002
 title: 实现 RunEvent 批量写入和序号分配
-baseline: agent-platform-v1-dev-baseline-2026-08-r9
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
 baseline_integrity:
   hash_algorithm: sha256
   verified_files:

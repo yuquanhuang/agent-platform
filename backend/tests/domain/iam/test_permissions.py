@@ -53,3 +53,26 @@ def test_tenant_admin_includes_message_history_permissions() -> None:
 def test_tenant_admin_includes_run_creation_and_history_permissions() -> None:
     for action in ("create", "read", "list", "cancel", "retry"):
         assert TENANT_ADMIN_PERMISSIONS.allows("run", action)
+
+
+def test_tenant_admin_includes_artifact_lifecycle_permissions() -> None:
+    for action in ("create", "read", "download", "delete"):
+        assert TENANT_ADMIN_PERMISSIONS.allows("artifact", action)
+
+
+def test_tenant_admin_includes_audit_query_permission() -> None:
+    assert TENANT_ADMIN_PERMISSIONS.allows("audit", "list")
+
+
+def test_tenant_admin_includes_skill_lifecycle_permissions() -> None:
+    for action in (
+        "create",
+        "read",
+        "list",
+        "update",
+        "delete",
+        "publish",
+        "rollback",
+        "disable",
+    ):
+        assert TENANT_ADMIN_PERMISSIONS.allows("skill", action)
