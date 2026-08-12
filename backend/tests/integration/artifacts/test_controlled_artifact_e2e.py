@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import secrets
 import zipfile
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -13,20 +14,24 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 import pytest
-from pydantic import JsonValue
+from pydantic import JsonValue, SecretStr
 
 from apps.api.app import create_app
 from packages.application.artifacts import (
     ARTIFACT_DELETE_REQUESTED_EVENT,
     ARTIFACT_SCAN_REQUESTED_EVENT,
     ArchiveAwareArtifactSecurityScanner,
+    ArtifactByteRange,
     ArtifactDeleteProcessor,
-    ArtifactDownloadGrant,
+    ArtifactDownloadCredential,
+    ArtifactDownloadGatewayService,
+    ArtifactDownloadGrantRecord,
     ArtifactGrantUrlPolicy,
     ArtifactManagementService,
     ArtifactObjectObservation,
     ArtifactScanProcessor,
     ArtifactScanVerdict,
+    ArtifactTrustedContent,
     ArtifactUploadGrant,
     RetryableArtifactDeleteError,
 )
@@ -84,7 +89,7 @@ class ControlledArtifactPlatform:
         self.quarantine: dict[tuple[UUID, UUID], bytes] = {}
         self.trusted: dict[tuple[UUID, UUID], bytes] = {}
         self.upload_tokens: dict[str, tuple[UUID, UUID, datetime]] = {}
-        self.download_tokens: dict[str, tuple[UUID, UUID, datetime]] = {}
+        self.download_grants: dict[UUID, ArtifactDownloadGrantRecord] = {}
         self.revoked: set[tuple[UUID, UUID]] = set()
         self.delete_failures = 0
         self.source_run_visible = True
@@ -229,12 +234,23 @@ class ControlledArtifactPlatform:
             return None
         return record
 
-    async def confirm_download(
+    def issue(self) -> ArtifactDownloadCredential:
+        token = secrets.token_urlsafe(32)
+        return ArtifactDownloadCredential(
+            grant_id=uuid5(NAMESPACE_URL, f"artifact-grant/{token}"),
+            token=SecretStr(token),
+            token_hash="sha256:" + hashlib.sha256(token.encode()).hexdigest(),
+        )
+
+    async def create_download_grant(
         self,
         context: TenantContext,
         *,
+        grant_id: UUID,
         artifact_id: UUID,
         owner_user_id: UUID,
+        token_hash: str,
+        grant_expires_at: datetime,
         **kwargs: object,
     ) -> bool:
         record = await self.get_owned(
@@ -242,10 +258,83 @@ class ControlledArtifactPlatform:
         )
         if record is None or record.status != "AVAILABLE":
             return False
+        self.download_grants[grant_id] = ArtifactDownloadGrantRecord(
+            id=grant_id,
+            tenant_id=record.tenant_id,
+            artifact_id=record.id,
+            owner_user_id=record.owner_user_id,
+            token_hash=token_hash,
+            expires_at=grant_expires_at,
+            revoked_at=None,
+            artifact=record,
+        )
         self.audit.append(
             {"action": "artifact.download", "artifact_id": str(record.id)}
         )
         return True
+
+    async def resolve_download_grant(
+        self,
+        *,
+        grant_id: UUID,
+        token_hash: str,
+        service_subject_id: UUID,
+        metadata: RequestMetadata,
+        now: datetime,
+    ) -> ArtifactDownloadGrantRecord | None:
+        grant = self.download_grants.get(grant_id)
+        if (
+            grant is None
+            or grant.token_hash != token_hash
+            or grant.revoked_at is not None
+            or grant.expires_at <= now
+        ):
+            return None
+        record = self.records.get((grant.tenant_id, grant.artifact_id))
+        if record is None or record.status != "AVAILABLE":
+            return None
+        return replace(grant, artifact=record)
+
+    async def record_download_open(
+        self,
+        context: TenantContext,
+        *,
+        grant_id: UUID,
+        artifact_id: UUID,
+        **kwargs: object,
+    ) -> bool:
+        grant = self.download_grants.get(grant_id)
+        if (
+            grant is None
+            or grant.artifact_id != artifact_id
+            or grant.revoked_at is not None
+        ):
+            return False
+        self.audit.append(
+            {"action": "artifact.download.open", "artifact_id": str(artifact_id)}
+        )
+        return True
+
+    async def is_download_grant_active(
+        self,
+        context: TenantContext,
+        *,
+        grant_id: UUID,
+        artifact_id: UUID,
+        now: datetime,
+    ) -> bool:
+        grant = self.download_grants.get(grant_id)
+        artifact = self.records.get((UUID(context.tenant_id), artifact_id))
+        return bool(
+            grant is not None
+            and artifact is not None
+            and str(grant.tenant_id) == context.tenant_id
+            and grant.artifact_id == artifact_id
+            and grant.revoked_at is None
+            and grant.expires_at > now
+            and artifact.status == "AVAILABLE"
+            and artifact.expires_at > now
+        )
 
     async def request_delete(
         self,
@@ -289,6 +378,12 @@ class ControlledArtifactPlatform:
                     operation_id=operation_id,
                 )
             )
+            for grant_id, grant in tuple(self.download_grants.items()):
+                if (
+                    grant.tenant_id == record.tenant_id
+                    and grant.artifact_id == record.id
+                ):
+                    self.download_grants[grant_id] = replace(grant, revoked_at=now)
         return MutationOutcome(value=operation)
 
     async def get_for_scan(
@@ -445,35 +540,31 @@ class ControlledArtifactPlatform:
         self.trusted[key] = self.quarantine[key]
         return artifact_uri(tenant_id=artifact.tenant_id, artifact_id=artifact.id)
 
-    async def create_download_grant(
+    async def open_trusted_artifact(
         self,
         context: TenantContext,
         *,
         artifact: ArtifactRecord,
-        expires_at: datetime,
-    ) -> ArtifactDownloadGrant:
-        token = uuid5(
-            NAMESPACE_URL,
-            f"download/{artifact.tenant_id}/{artifact.id}/{expires_at.isoformat()}",
-        ).hex
-        self.download_tokens[token] = (artifact.tenant_id, artifact.id, expires_at)
-        return ArtifactDownloadGrant(
-            artifact_id=artifact.id,
-            url=f"https://objects.test/download?token={token}",
-            expires_at=expires_at,
+        byte_range: ArtifactByteRange | None,
+    ) -> ArtifactTrustedContent:
+        content = self.trusted[(UUID(context.tenant_id), artifact.id)]
+        selected = (
+            content
+            if byte_range is None
+            else content[byte_range.start : byte_range.end_inclusive + 1]
         )
 
-    def resolve_download(self, url: str, *, tenant_id: UUID) -> bytes:
-        token = _token(url)
-        grant_tenant_id, artifact_id, expires_at = self.download_tokens[token]
-        key = (grant_tenant_id, artifact_id)
-        if (
-            grant_tenant_id != tenant_id
-            or expires_at <= datetime.now(UTC)
-            or key in self.revoked
-        ):
-            raise PermissionError("download capability is not valid")
-        return self.trusted[key]
+        async def body():
+            yield selected
+
+        return ArtifactTrustedContent(
+            body=body(),
+            size_bytes=len(selected),
+            total_size_bytes=len(content),
+            content_type=artifact.content_type,
+            name=artifact.name,
+            byte_range=byte_range,
+        )
 
     async def revoke_download_access(
         self, context: TenantContext, *, artifact: ArtifactRecord
@@ -503,11 +594,18 @@ async def test_artifact_isolation_archive_rejection_and_revocable_cleanup_e2e() 
         platform,
         platform,
         ArtifactGrantUrlPolicy(frozenset({"https://objects.test"})),
+        platform,
+        "https://objects.test",
     )
     app = create_app(
         AppSettings(),
         identity_provider=ControlledIdentityProvider(),
         artifact_service=service,
+        artifact_download_gateway=ArtifactDownloadGatewayService(
+            platform,
+            platform,
+            service_subject_id=USER_A,
+        ),
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -543,11 +641,11 @@ async def test_artifact_isolation_archive_rejection_and_revocable_cleanup_e2e() 
         )
         assert download.status_code == 200
         download_url = download.json()["url"]
-        assert (
-            platform.resolve_download(download_url, tenant_id=TENANT_A) == safe_content
-        )
-        with pytest.raises(PermissionError):
-            platform.resolve_download(download_url, tenant_id=TENANT_B)
+        downloaded = await client.get(download_url)
+        assert downloaded.status_code == 200
+        assert downloaded.content == safe_content
+        invalid_token = await client.get(download_url.replace("token=", "token=x"))
+        assert invalid_token.status_code == 404
 
         for token in ("b", "c"):
             hidden = await client.get(
@@ -615,8 +713,8 @@ async def test_artifact_isolation_archive_rejection_and_revocable_cleanup_e2e() 
                 now=datetime.now(UTC),
             )
         assert platform.records[(TENANT_A, artifact_id)].status == "DELETING"
-        with pytest.raises(PermissionError):
-            platform.resolve_download(download_url, tenant_id=TENANT_A)
+        revoked_download = await client.get(download_url)
+        assert revoked_download.status_code == 404
 
         await delete_processor.process(
             _service_context(TENANT_A, USER_A),

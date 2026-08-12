@@ -57,6 +57,7 @@ class Store:
         )
         self.requeued: list[UUID] = []
         self.mapped: list[UUID] = []
+        self.cancel_deliveries: list[tuple[UUID, str]] = []
 
     async def list_stalled_runs(
         self, context: TenantContext, **kwargs: object
@@ -78,6 +79,17 @@ class Store:
         del context
         self.mapped.append(cast(UUID, kwargs["run_id"]))
         return True
+
+    async def record_cancel_signal_delivery(
+        self,
+        context: TenantContext,
+        *,
+        run_id: UUID,
+        signal_id: str,
+        now: datetime,
+    ) -> None:
+        del context, now
+        self.cancel_deliveries.append((run_id, signal_id))
 
 
 class Control:
@@ -122,6 +134,9 @@ async def test_reconciler_requeues_missing_workflow_and_resignals_cancellation()
     assert store.mapped == [CANCELLING_RUN_ID, TERMINAL_WORKFLOW_RUN_ID]
     assert len(control.signals) == 1
     assert control.signals[0].requested_by == ACTOR_ID
+    assert store.cancel_deliveries == [
+        (CANCELLING_RUN_ID, control.signals[0].signal_id)
+    ]
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ class PlatformError(Exception):
         message: str,
         retryable: bool = False,
         details: Mapping[str, object] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -21,6 +22,7 @@ class PlatformError(Exception):
         self.message = message
         self.retryable = retryable
         self.details = dict(details) if details is not None else None
+        self.headers = dict(headers) if headers is not None else None
 
 
 def unauthenticated(message: str = "Authentication is required.") -> PlatformError:
@@ -60,6 +62,32 @@ def run_already_active(
     message: str = "The Session branch already has an active Run.",
 ) -> PlatformError:
     return PlatformError(status_code=409, code="RUN_ALREADY_ACTIVE", message=message)
+
+
+def rate_limited(
+    message: str = "Request capacity is temporarily exhausted.",
+    *,
+    details: Mapping[str, object] | None = None,
+) -> PlatformError:
+    return PlatformError(
+        status_code=429,
+        code="RATE_LIMITED",
+        message=message,
+        retryable=True,
+        details=details,
+    )
+
+
+def range_not_satisfiable(*, total_size: int) -> PlatformError:
+    if total_size < 0:
+        raise ValueError("total_size must not be negative")
+    return PlatformError(
+        status_code=416,
+        code="RANGE_NOT_SATISFIABLE",
+        message="The requested Artifact byte range cannot be satisfied.",
+        details={"total_size": total_size},
+        headers={"Content-Range": f"bytes */{total_size}"},
+    )
 
 
 def run_event_sequence_gap(

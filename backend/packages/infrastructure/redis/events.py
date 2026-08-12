@@ -99,9 +99,15 @@ class RedisRunEventNotificationSource(RunEventNotificationSource):
         self, context: TenantContext, *, run_id: UUID
     ) -> RunEventNotificationSubscription:
         channel = run_event_notification_channel(UUID(context.tenant_id), run_id)
-        pubsub = self._redis.pubsub(ignore_subscribe_messages=True)
+        pubsub = self._redis.pubsub(ignore_subscribe_messages=False)
         try:
             await pubsub.subscribe(channel)
+            confirmation = await pubsub.get_message(
+                ignore_subscribe_messages=False,
+                timeout=1.0,
+            )
+            if confirmation is None or confirmation.get("type") != "subscribe":
+                raise RedisError("Redis subscription acknowledgement was not received")
         except RedisError as error:
             await _close_quietly(pubsub)
             raise RunEventNotificationUnavailable(

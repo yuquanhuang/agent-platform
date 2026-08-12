@@ -1,6 +1,6 @@
 # Agent 平台核心接口与事件契约
 
-> 文档版本：V1.5
+> 文档版本：V1.8
 > 文档状态：开发输入基线  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
 > 关联架构：[Agent平台架构与流程设计](./Agent平台架构与流程设计.md)
@@ -135,6 +135,7 @@
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 幂等键被不同请求复用 |
 | 412 | `RESOURCE_VERSION_CONFLICT` | ETag/版本冲突 |
 | 413 | `PAYLOAD_TOO_LARGE` | 请求、文件或事件超限 |
+| 416 | `RANGE_NOT_SATISFIABLE` | Artifact 单 Range 超出对象边界或格式不可满足 |
 | 422 | `CONTRACT_VALIDATION_FAILED` | RunSpec、Manifest 或事件 Schema 不合法 |
 | 429 | `RATE_LIMITED` | 限流、并发或配额拒绝 |
 | 503 | `DEPENDENCY_UNAVAILABLE` | Runtime、Model、Temporal、Sandbox 等不可用 |
@@ -607,7 +608,26 @@ Fallback 规则：
 - 本地限流、Token/费用预算、认证、权限、能力和配置错误禁止 fallback；`PROVIDER_TIMEOUT` 以及 `submitted/unknown` 提交状态禁止 fallback。
 - AgentSnapshot 编译时解析确定的 ModelConfig Version，并冻结每一路由关联的不可变 `model_binding_snapshot`；运行时不得读取 Agent Draft、ModelConfig Draft 或 Provider Draft。
 
-## 14. Approval 契约
+## 14. QuotaPolicy 管理契约
+
+```text
+GET   /api/v1/quota-policies
+POST  /api/v1/quota-policies
+GET   /api/v1/quota-policies/{quota_policy_id}
+PATCH /api/v1/quota-policies/{quota_policy_id}
+POST  /api/v1/quota-policies/{quota_policy_id}/disable
+POST  /api/v1/quota-policies/{quota_policy_id}/enable
+GET   /api/v1/quota-policies/{quota_policy_id}/versions
+```
+
+- 每个 Tenant 最多一个 `quota_policy`，创建即 ACTIVE 并原子绑定 `tenant.quota_policy_id`。
+- `limits` 至少配置一个 Run 并发维度；配置变更创建不可变 `quota_policy_version`，不得覆盖历史版本。
+- 部署配置是平台硬上限。租户策略只能收紧显式部署上限；缺失维度继承部署值，超出部署值返回 400 `VALIDATION_ERROR`。
+- ACTIVE 策略参与 Run 创建和重试的 PostgreSQL 原子准入；DISABLED 时回退部署硬限制。超限继续返回冻结 429 `RATE_LIMITED` 并写 DENIED Audit。
+- 写操作使用 RBAC、强 ETag 和幂等键；`quota_policy_version` 不提供普通 Update/Delete。
+- 本阶段只冻结已接入运行链路的 Run capacity。周期 Token/费用 `BudgetPolicy`、存储/速率配额和真实排队在 AP-E7-003 后续子阶段冻结，禁止以占位 API 伪装生效。
+
+## 15. Approval 契约
 
 ```text
 GET  /api/v1/approvals
@@ -626,7 +646,7 @@ POST /api/v1/approvals/{approval_id}/decision
 
 Approval Ticket 必须绑定：tenant、run、execution attempt、tool、参数摘要、申请人、审批策略版本、有效期和 nonce。批准后产生短期单次执行票据，Tool Gateway 原子消费。
 
-## 15. Artifact 契约
+## 16. Artifact 契约
 
 Artifact 状态：`UPLOADING -> SCANNING -> AVAILABLE`，失败进入 `REJECTED` 或 `FAILED`，过期进入 `EXPIRED`。
 
@@ -635,15 +655,19 @@ POST /api/v1/artifacts/uploads
 POST /api/v1/artifacts/{artifact_id}/complete
 GET  /api/v1/artifacts/{artifact_id}
 GET  /api/v1/artifacts/{artifact_id}/download
+GET  /api/v1/artifact-downloads/{grant_id}?token=<opaque>
 DELETE /api/v1/artifacts/{artifact_id}
 ```
 
 - 上传使用受限预签名 URL、内容长度和 Content-Type。
 - Complete 校验 Hash、大小、路径和上传者。
 - 扫描完成前不能被 Runtime 当作可信输入。
-- 下载时重新鉴权并生成短期单资源 URL。
+- 下载时重新鉴权并生成短期单资源 Gateway URL；Bearer Token 只返回一次，数据库只保存 Hash。
+- Download Gateway 每次读取重新校验授权、Artifact 状态和有效期，再流式读取私有对象；删除 Artifact 时必须在同一事务先撤销全部未过期授权。
+- 下载支持可选的标准单字节 `Range`。完整响应返回 200；合法部分响应返回 206、`Accept-Ranges: bytes` 和 `Content-Range`；格式非法、多 Range 或超出边界返回 416 `RANGE_NOT_SATISFIABLE` 和 `Content-Range: bytes */<size>`。
+- Range 不改变 Grant、租户、Artifact 状态和有效期校验；每次请求仍须重新鉴权。已建立连接按撤销通知和周期事实复核在受控窗口内终止，不能因为 Range 缓存绕过撤销。
 
-## 16. 契约版本管理
+## 17. 契约版本管理
 
 - 新增可选字段属于向后兼容变更。
 - 删除字段、改变含义、缩小枚举或改变默认值属于不兼容变更。
@@ -652,7 +676,7 @@ DELETE /api/v1/artifacts/{artifact_id}
 - API、Worker、Bundle Compiler、Runtime Adapter 的版本兼容矩阵必须在发布前验证。
 - 契约测试样例作为代码仓库中的 Golden Files 版本管理。
 
-## 17. OpenAPI 开发完成条件
+## 18. OpenAPI 开发完成条件
 
 每个接口进入开发前必须具备：
 

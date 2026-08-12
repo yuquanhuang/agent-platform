@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-platform-reconciliation-worker
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/name: agent-platform-reconciliation-worker
+    app.kubernetes.io/part-of: agent-platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-platform-reconciliation-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-platform-reconciliation-worker
+        app.kubernetes.io/part-of: agent-platform
+    spec:
+      serviceAccountName: agent-platform-reconciliation-worker
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reconciliation-worker
+          # CI/overlay must replace this tag with the verified Registry digest.
+          image: agent-platform-backend:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.reconciliation_worker.main"]
+          envFrom:
+            - configMapRef:
+                name: agent-platform-reconciliation-worker
+          env:
+            - name: AP_SERVICE_SUBJECT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: agent-platform-runtime-identities
+                  key: reconciliation_worker_subject_id
+            - name: AP_SECRET_DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-runtime-secrets
+                  key: AP_SECRET_DATABASE_DSN
+            - name: AP_SECRET_INTERNAL_SERVICE_TOKEN_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-runtime-secrets
+                  key: AP_SECRET_INTERNAL_SERVICE_TOKEN_SIGNING_KEY
+            - name: AP_SECRET_EXECUTION_TICKET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-runtime-secrets
+                  key: AP_SECRET_EXECUTION_TICKET_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi

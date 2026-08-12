@@ -1,0 +1,63 @@
+task_id: AP-E7-003
+title: 配额、预算、限流和背压
+status: in_progress
+baseline: agent-platform-v1-dev-baseline-2026-08-r14
+current_substage: durable QuotaPolicy 管理、版本与 Run 原子准入
+scope:
+  includes:
+    - Run 创建和重试的 tenant、user、Agent、Runtime 类型非终态并发硬限制
+    - PostgreSQL advisory transaction lock 保证多实例下计数与创建原子化
+    - 超限返回冻结 429 RATE_LIMITED，并持久化 DENIED Audit
+    - staging/production API 组合显式要求全部 Run capacity 配置
+    - 每租户单一 durable quota_policy、不可变 quota_policy_version 与 ACTIVE/DISABLED 管理
+    - QuotaPolicy 管理 API 的 RLS、tenant_admin RBAC、ETag/CAS、幂等和 Audit
+    - ACTIVE 租户策略与部署 capacity 逐维求交并接入 Run create/retry
+  excludes:
+    - 有界排队、最大等待时间、取消和 Temporal Replay 调整
+    - 周期 budget_policy 管理与持久化、Token/费用聚合和可信费用表
+    - Model Token/费用预算、Sandbox/Workspace/Artifact 配额
+    - Temporal Task Queue、Event Store、SSE 背压与 AP-E7-004 指标告警
+decisions:
+  - 当前 Workflow 在同一 Activity 内从 CREATED 到 QUEUED/PREPARING，没有真实等待队列；已完成部分采用硬拒绝 429，不伪造排队
+  - advisory lock key 按稳定字符串排序，避免多维准入锁死锁；计数和 Run 写入位于同一租户事务
+  - 拒绝审计使用独立 Tenant UoW 提交，原创建/重试事务回滚，避免留下失败请求的幂等 claim
+  - Runtime 限制当前按租户内 Runtime 类型（agentscope/codex）统计，集群级限制留待后续
+  - 每租户最多一个 quota_policy；创建即 ACTIVE，更新生成不可变 version；DISABLED 回退部署限制
+  - 部署 capacity 是硬上限，租户策略只能收紧；未配置租户维度继承部署限制
+compatibility:
+  - OpenAPI resources 升至 1.2.0，并重新生成 17 个 Python/TypeScript 契约文件
+  - 新增数据库迁移 0034_quota_policy；未新增 Python/Node 依赖
+  - task 记录同步到最新 R14 baseline；后端代码位于 backend，前端代码位于 frontend
+configuration:
+  required_in_staging_production:
+    - AP_RUN_MAX_NONTERMINAL_PER_TENANT
+    - AP_RUN_MAX_NONTERMINAL_PER_USER
+    - AP_RUN_MAX_NONTERMINAL_PER_AGENT
+    - AP_RUN_MAX_NONTERMINAL_AGENTSCOPE
+    - AP_RUN_MAX_NONTERMINAL_CODEX
+  local_test_behavior: 未配置时保持既有行为
+verification:
+  - durable QuotaPolicy、capacity admission、429 API、配置和组合定向测试：本轮 16 passed
+  - 真实 PostgreSQL migration/RLS 完整升降级与 Resource Registry/Run 协同：定向分别 1 passed
+  - make backend-check：732 passed、18 skipped
+  - make frontend-check：26 个测试文件、85 passed、生产构建通过
+  - make contract-check：R14 完整性与生成代码零漂移，176 个唯一 operationId、17 个生成文件
+  - make check：通过
+  - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 AP_TEST_REDIS_URL=redis://127.0.0.1:16379 AP_TEST_MINIO_ENDPOINT=http://127.0.0.1:19000 make check-all：后端 748 passed、2 skipped；前端 85 passed
+acceptance:
+  - 每租户最多一个 quota_policy，版本不可变，ACTIVE/DISABLED 状态和 ETag/CAS 正确
+  - tenant_admin 只能管理本租户策略；RLS、幂等和 Audit 不越权、不泄漏敏感配置
+  - ACTIVE 租户限制不会扩大部署 capacity；禁用后回退部署限制
+  - 多实例并发申请同一容量槽位时至多一个 Run 被接受
+  - create/retry 超限均返回 RATE_LIMITED，Audit 记录 reason_code/current/limit 且不泄漏敏感信息
+  - 失败请求的幂等 claim 不残留，成功 Run 可正常进入后续 Workflow/Outbox 链路
+later_substages:
+  - 集群级并发、周期 Model Token/费用预算和预算扣减事实
+  - 有界队列、最大等待时间、取消、Temporal Replay 与 Task Queue 背压
+  - Sandbox CPU/内存/PID、Workspace/Artifact 存储配额和汇总
+  - Event Store/SSE 背压、容量指标、SLO、告警与压测（AP-E7-004/AP-E7-005）
+follow_up:
+  - 生产配置发布流程必须为 staging/production 提供五项 capacity limit，并在部署检查中验证
+  - 后续引入真实排队前，先冻结队列持久化、取消和 Workflow Replay 契约
+  - 继续保留 AP-E7-002 未闭环的真实 OIDC、外部 Scanner、Sandbox Manager/AgentScope Runtime 生产组合、Registry digest 和生产网络 overlay
+  - 两项 check-all skip 为显式依赖不可用故障模式测试，正常 Redis/MinIO 链路已通过；故障注入仍待独立演练

@@ -34,6 +34,7 @@ def error_response(
     message: str,
     retryable: bool = False,
     details: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     error: dict[str, object] = {
         "code": code,
@@ -43,7 +44,11 @@ def error_response(
     }
     if details is not None:
         error["details"] = details
-    return JSONResponse(status_code=status_code, content={"error": error})
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": error},
+        headers=headers,
+    )
 
 
 async def handle_platform_error(request: Request, exception: Exception) -> JSONResponse:
@@ -56,6 +61,7 @@ async def handle_platform_error(request: Request, exception: Exception) -> JSONR
         message=exception.message,
         retryable=exception.retryable,
         details=exception.details,
+        headers=exception.headers,
     )
 
 

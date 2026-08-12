@@ -1,6 +1,6 @@
 # agent平台架构与流程设计
 
-> 文档版本：V1.8
+> 文档版本：V2.0
 > 文档状态：开发输入基线  
 > 文档索引：[Agent平台开发文档索引](./Agent平台开发文档索引.md)  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
@@ -873,7 +873,8 @@ Sandbox 创建文件
 → 上传对象存储
 → 创建 Artifact 元数据
 → 生成 artifact_created RunEvent
-→ 前端获得有权限和时效的下载 URL
+→ 前端获得有权限、时效且可撤销的 Download Gateway URL
+→ Gateway 每次校验 Grant/Artifact 后流式读取私有对象
 ```
 
 ## 18. Temporal 工作流设计
@@ -946,6 +947,7 @@ stateDiagram-v2
 - 长 Activity 必须设置 Start-To-Close、Heartbeat Timeout，并在 heartbeat detail 中保存可恢复进度或句柄。
 - Workflow 代码升级使用版本标记并执行 Replay Test；长历史按阈值 Continue-As-New。
 - Runtime Worker 重启后只有在确认原执行失效并获得新 fencing token 后才能接管。
+- AgentScope checkpoint 元数据写 PostgreSQL、加密状态写私有 MinIO；恢复只读取同 Tenant/Run/Attempt/fencing token 的最新 AVAILABLE 记录，等待 Approval 时把 checkpoint ref 固化到 ApprovalRequest。
 - Temporal Search Attributes 只保存查询字段，不保存 Prompt、文件内容和高基数敏感数据。
 
 ## 19. 审批流程
@@ -1128,7 +1130,7 @@ Runtime 返回有效最终结果后，终态 Activity 在独立短事务中 INSE
 - Tool Gateway 执行前重新鉴权，不相信模型声明。
 - MCP 工具使用 Agent 授权与用户权限交集。
 - Sandbox 网络 egress 白名单。
-- Artifact 下载采用短期签名 URL。
+- Artifact 下载采用短期可撤销 Gateway URL；对象存储保持私有，不直接向客户端签发下载 URL。
 - RunEvent 对敏感参数脱敏。
 - Prompt、Skill、Bundle 发布执行安全扫描。
 - 完整审计发布、回滚、Secret、审批、危险工具和管理员操作。

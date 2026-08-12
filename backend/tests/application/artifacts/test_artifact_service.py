@@ -5,9 +5,10 @@ from typing import cast
 from uuid import UUID
 
 import pytest
+from pydantic import SecretStr
 
 from packages.application.artifacts import (
-    ArtifactDownloadGrant,
+    ArtifactDownloadCredential,
     ArtifactGrantUrlPolicy,
     ArtifactManagementService,
     ArtifactObjectObservation,
@@ -117,7 +118,10 @@ class ArtifactStub:
             )
         )
 
-    async def confirm_download(self, context: TenantContext, **kwargs: object) -> bool:
+    async def create_download_grant(
+        self, context: TenantContext, **kwargs: object
+    ) -> bool:
+        self.download_calls += 1
         return self.download_confirmed
 
     async def create_upload_grant(
@@ -129,20 +133,6 @@ class ArtifactStub:
         self, context: TenantContext, *, artifact: ArtifactRecord
     ) -> ArtifactObjectObservation:
         return self.observation
-
-    async def create_download_grant(
-        self,
-        context: TenantContext,
-        *,
-        artifact: ArtifactRecord,
-        expires_at: datetime,
-    ) -> ArtifactDownloadGrant:
-        self.download_calls += 1
-        return ArtifactDownloadGrant(
-            artifact_id=artifact.id,
-            url="https://objects.test/download?signature=opaque",
-            expires_at=expires_at,
-        )
 
 
 def _record(
@@ -180,12 +170,25 @@ def _record(
     )
 
 
-def _service(stub: ArtifactStub) -> ArtifactManagementService:
+class StaticDownloadCredentials:
+    def issue(self) -> ArtifactDownloadCredential:
+        return ArtifactDownloadCredential(
+            grant_id=UUID("55555555-5555-4555-8555-555555555555"),
+            token=SecretStr("t" * 43),
+            token_hash="sha256:" + "b" * 64,
+        )
+
+
+def _service(
+    stub: ArtifactStub, *, base_url: str = "https://objects.test"
+) -> ArtifactManagementService:
     return ArtifactManagementService(
         stub,
         cast(ArtifactStore, stub),
         stub,
         ArtifactGrantUrlPolicy(frozenset({"https://objects.test"})),
+        StaticDownloadCredentials(),
+        base_url,
     )
 
 
@@ -324,7 +327,10 @@ async def test_download_returns_short_lived_single_artifact_grant() -> None:
         _principal(), artifact_id=str(ARTIFACT_ID), metadata=_metadata()
     )
 
-    assert result.url.startswith("https://objects.test/download")
+    assert result.url.startswith(
+        "https://objects.test/api/v1/artifact-downloads/55555555-5555-4555-8555-555555555555"
+    )
+    assert "token=" in result.url
     assert result.expires_at <= NOW + timedelta(minutes=6)
     assert stub.download_calls == 1
 
@@ -359,26 +365,12 @@ async def test_download_fails_closed_when_deletion_wins_authorization_race() -> 
 
 
 @pytest.mark.asyncio
-async def test_download_rejects_grant_bound_to_another_artifact() -> None:
+async def test_download_rejects_gateway_origin_outside_policy() -> None:
     stub = ArtifactStub()
     stub.record = _record(status="AVAILABLE")
 
-    async def wrong_grant(
-        context: TenantContext,
-        *,
-        artifact: ArtifactRecord,
-        expires_at: datetime,
-    ) -> ArtifactDownloadGrant:
-        return ArtifactDownloadGrant(
-            artifact_id=UUID(int=99),
-            url="https://objects.test/download?signature=opaque",
-            expires_at=expires_at,
-        )
-
-    stub.create_download_grant = wrong_grant  # type: ignore[method-assign]
-
-    with pytest.raises(RuntimeError, match="unsafe download URL"):
-        await _service(stub).create_download(
+    with pytest.raises(RuntimeError, match="origin is not allowed"):
+        await _service(stub, base_url="https://gateway.invalid").create_download(
             _principal(), artifact_id=str(ARTIFACT_ID), metadata=_metadata()
         )
 

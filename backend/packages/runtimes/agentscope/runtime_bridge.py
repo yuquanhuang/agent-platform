@@ -83,7 +83,11 @@ class AgentScopeSessionFactory(Protocol):
     """Build one session exclusively from an immutable RunSpec reference."""
 
     async def create(
-        self, context: TenantContext, *, request: RunExecutionRequest
+        self,
+        context: TenantContext,
+        *,
+        request: RunExecutionRequest,
+        checkpoint_state_json: bytes | None,
     ) -> AgentScopeSessionStart: ...
 
 
@@ -97,6 +101,68 @@ class AgentScopeStateStore(Protocol):
         request: RunExecutionRequest,
         state_json: bytes,
     ) -> str: ...
+
+    async def load_latest(
+        self,
+        context: TenantContext,
+        *,
+        request: RunExecutionRequest,
+    ) -> bytes | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AgentScopeCheckpointRecord:
+    id: UUID
+    tenant_id: UUID
+    run_id: UUID
+    execution_attempt: int
+    sequence_no: int
+    state_ref: str
+    object_key: str
+    content_hash: str
+    size_bytes: int
+    fencing_token_hash: str
+    status: Literal["PENDING", "AVAILABLE", "FAILED"]
+    created_at: datetime
+    available_at: datetime | None
+    expires_at: datetime
+
+
+class AgentScopeCheckpointMetadataStore(Protocol):
+    async def reserve(
+        self,
+        context: TenantContext,
+        *,
+        request: RunExecutionRequest,
+        content_hash: str,
+        size_bytes: int,
+        fencing_token_hash: str,
+        expires_at: datetime,
+    ) -> AgentScopeCheckpointRecord: ...
+
+    async def mark_available(
+        self,
+        context: TenantContext,
+        *,
+        checkpoint_id: UUID,
+        available_at: datetime,
+    ) -> AgentScopeCheckpointRecord: ...
+
+    async def mark_failed(
+        self,
+        context: TenantContext,
+        *,
+        checkpoint_id: UUID,
+    ) -> None: ...
+
+    async def load_latest(
+        self,
+        context: TenantContext,
+        *,
+        request: RunExecutionRequest,
+        fencing_token_hash: str,
+        now: datetime,
+    ) -> AgentScopeCheckpointRecord | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +224,7 @@ class AgentScopeApprovalBridge:
         *,
         request: RunExecutionRequest,
         binding: RuntimeToolBinding,
+        runtime_checkpoint_ref: str,
         metadata: RequestMetadata,
         now: datetime,
     ) -> ApprovalRequestRecord:
@@ -175,6 +242,7 @@ class AgentScopeApprovalBridge:
                 deployment_id=binding.deployment_id,
                 expires_at=binding.approval_expires_at,
                 self_approval_allowed=binding.self_approval_allowed,
+                runtime_checkpoint_ref=runtime_checkpoint_ref,
             ),
             metadata=metadata,
             now=now,
@@ -246,7 +314,23 @@ class AgentScopeRuntimeBridge:
                 "RUNTIME_TYPE_MISMATCH",
                 "The AgentScope bridge cannot execute another runtime type.",
             )
-        start = await self._session_factory.create(context, request=request)
+        checkpoint_state_json = await self._state_store.load_latest(
+            context,
+            request=request,
+        )
+        if (
+            checkpoint_state_json is not None
+            and len(checkpoint_state_json) > _MAX_STATE_BYTES
+        ):
+            raise AgentScopeRuntimeBridgeError(
+                "AGENTSCOPE_STATE_TOO_LARGE",
+                "The AgentScope checkpoint exceeds the runtime state limit.",
+            )
+        start = await self._session_factory.create(
+            context,
+            request=request,
+            checkpoint_state_json=checkpoint_state_json,
+        )
         translator = AgentScopeEventTranslator()
         metadata = RequestMetadata(
             request_id=context.request_id,
@@ -358,6 +442,7 @@ class AgentScopeRuntimeBridge:
             context,
             request=request,
             binding=binding,
+            runtime_checkpoint_ref=state_ref,
             metadata=metadata,
             now=self._clock(),
         )

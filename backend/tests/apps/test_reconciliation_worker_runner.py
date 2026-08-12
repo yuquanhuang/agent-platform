@@ -6,7 +6,13 @@ from typing import cast
 import pytest
 
 from apps.reconciliation_worker.runner import reconciliation_cycle
-from packages.application.reconciliation import RunReconciler, RunReconciliationSummary
+from packages.application.reconciliation import (
+    ApprovalReconciliationSummary,
+    PlatformReconciler,
+    PlatformReconciliationSummary,
+    RunReconciliationSummary,
+    SandboxReconciliationSummary,
+)
 from packages.contracts.public import SubjectType, TenantContext
 from packages.infrastructure.observability import PlatformMetrics
 
@@ -36,32 +42,62 @@ class Source:
 class Reconciler:
     async def reconcile_tenant_once(
         self, context: TenantContext, *, now: datetime
-    ) -> RunReconciliationSummary:
+    ) -> PlatformReconciliationSummary:
         del context
         assert now == NOW
-        return RunReconciliationSummary(
-            examined=1,
-            mappings_recorded=1,
-            requests_requeued=1,
-            cancellations_signalled=1,
-            unresolved=1,
+        return PlatformReconciliationSummary(
+            runs=RunReconciliationSummary(
+                examined=1,
+                mappings_recorded=1,
+                requests_requeued=1,
+                cancellations_signalled=1,
+                unresolved=1,
+            ),
+            approvals=ApprovalReconciliationSummary(
+                expired=1,
+                tickets_repaired=1,
+                signals_sent=1,
+                unresolved=1,
+            ),
+            sandboxes=SandboxReconciliationSummary(
+                examined=2,
+                destroyed=1,
+                quarantined=1,
+                cleanup_failed=1,
+                unresolved=1,
+            ),
         )
 
 
 @pytest.mark.asyncio
 async def test_cycle_aggregates_each_explicit_tenant() -> None:
     summary = await reconciliation_cycle(
-        cast(RunReconciler, Reconciler()),
+        cast(PlatformReconciler, Reconciler()),
         Source(),
         PlatformMetrics(),
         tenant_limit=2,
         now=NOW,
     )
 
-    assert summary == RunReconciliationSummary(
-        examined=2,
-        mappings_recorded=2,
-        requests_requeued=2,
-        cancellations_signalled=2,
-        unresolved=2,
+    assert summary == PlatformReconciliationSummary(
+        runs=RunReconciliationSummary(
+            examined=2,
+            mappings_recorded=2,
+            requests_requeued=2,
+            cancellations_signalled=2,
+            unresolved=2,
+        ),
+        approvals=ApprovalReconciliationSummary(
+            expired=2,
+            tickets_repaired=2,
+            signals_sent=2,
+            unresolved=2,
+        ),
+        sandboxes=SandboxReconciliationSummary(
+            examined=4,
+            destroyed=2,
+            quarantined=2,
+            cleanup_failed=2,
+            unresolved=2,
+        ),
     )

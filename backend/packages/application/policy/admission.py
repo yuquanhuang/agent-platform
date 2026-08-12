@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 from packages.domain.bundles import BUNDLE_COMPILER_NAME, BUNDLE_COMPILER_VERSION
 
@@ -18,6 +18,179 @@ class AdmissionDenied(ValueError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(message)
+
+
+class CapacityAdmissionDenied(ValueError):
+    """A stable Run capacity denial mapped to the frozen 429 error."""
+
+    def __init__(
+        self,
+        *,
+        scope: Literal["tenant", "user", "agent", "runtime"],
+        reason_code: str,
+        current: int,
+        limit: int,
+    ) -> None:
+        self.scope = scope
+        self.reason_code = reason_code
+        self.current = current
+        self.limit = limit
+        super().__init__("Run capacity is temporarily exhausted.")
+
+
+@dataclass(frozen=True, slots=True)
+class RunCapacityPolicy:
+    """Deployment-owned hard limits used before a Run fact is created."""
+
+    max_nonterminal_runs_per_tenant: int | None = None
+    max_nonterminal_runs_per_user: int | None = None
+    max_nonterminal_runs_per_agent: int | None = None
+    max_nonterminal_agentscope_runs: int | None = None
+    max_nonterminal_codex_runs: int | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "max_nonterminal_runs_per_tenant",
+            "max_nonterminal_runs_per_user",
+            "max_nonterminal_runs_per_agent",
+            "max_nonterminal_agentscope_runs",
+            "max_nonterminal_codex_runs",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not 1 <= value <= 1_000_000:
+                raise ValueError(f"{field_name} must be between 1 and 1000000")
+
+    @property
+    def enabled(self) -> bool:
+        return any(
+            value is not None
+            for value in (
+                self.max_nonterminal_runs_per_tenant,
+                self.max_nonterminal_runs_per_user,
+                self.max_nonterminal_runs_per_agent,
+                self.max_nonterminal_agentscope_runs,
+                self.max_nonterminal_codex_runs,
+            )
+        )
+
+    def runtime_limit(self, runtime_type: Literal["agentscope", "codex"]) -> int | None:
+        return (
+            self.max_nonterminal_agentscope_runs
+            if runtime_type == "agentscope"
+            else self.max_nonterminal_codex_runs
+        )
+
+    def narrowed_by(self, tenant_policy: RunCapacityPolicy) -> RunCapacityPolicy:
+        """Combine deployment and tenant limits without allowing tenant expansion."""
+
+        def effective(
+            platform_limit: int | None, tenant_limit: int | None
+        ) -> int | None:
+            if platform_limit is None:
+                return tenant_limit
+            if tenant_limit is None:
+                return platform_limit
+            return min(platform_limit, tenant_limit)
+
+        return RunCapacityPolicy(
+            max_nonterminal_runs_per_tenant=effective(
+                self.max_nonterminal_runs_per_tenant,
+                tenant_policy.max_nonterminal_runs_per_tenant,
+            ),
+            max_nonterminal_runs_per_user=effective(
+                self.max_nonterminal_runs_per_user,
+                tenant_policy.max_nonterminal_runs_per_user,
+            ),
+            max_nonterminal_runs_per_agent=effective(
+                self.max_nonterminal_runs_per_agent,
+                tenant_policy.max_nonterminal_runs_per_agent,
+            ),
+            max_nonterminal_agentscope_runs=effective(
+                self.max_nonterminal_agentscope_runs,
+                tenant_policy.max_nonterminal_agentscope_runs,
+            ),
+            max_nonterminal_codex_runs=effective(
+                self.max_nonterminal_codex_runs,
+                tenant_policy.max_nonterminal_codex_runs,
+            ),
+        )
+
+    def expansion_fields(self, tenant_policy: RunCapacityPolicy) -> tuple[str, ...]:
+        """Return tenant dimensions that exceed an explicit deployment hard limit."""
+
+        fields: list[str] = []
+        for field_name in (
+            "max_nonterminal_runs_per_tenant",
+            "max_nonterminal_runs_per_user",
+            "max_nonterminal_runs_per_agent",
+            "max_nonterminal_agentscope_runs",
+            "max_nonterminal_codex_runs",
+        ):
+            platform_limit = getattr(self, field_name)
+            tenant_limit = getattr(tenant_policy, field_name)
+            if (
+                platform_limit is not None
+                and tenant_limit is not None
+                and tenant_limit > platform_limit
+            ):
+                fields.append(field_name)
+        return tuple(fields)
+
+
+@dataclass(frozen=True, slots=True)
+class RunCapacityFacts:
+    tenant_nonterminal_runs: int
+    user_nonterminal_runs: int
+    agent_nonterminal_runs: int
+    runtime_nonterminal_runs: int
+    runtime_type: Literal["agentscope", "codex"]
+
+
+def admit_run_capacity(policy: RunCapacityPolicy, facts: RunCapacityFacts) -> None:
+    """Reject before creating a Run when any configured hard limit is full."""
+
+    checks: tuple[
+        tuple[
+            Literal["tenant", "user", "agent", "runtime"],
+            str,
+            int,
+            int | None,
+        ],
+        ...,
+    ] = (
+        (
+            "tenant",
+            "RUN_TENANT_CONCURRENCY_LIMIT",
+            facts.tenant_nonterminal_runs,
+            policy.max_nonterminal_runs_per_tenant,
+        ),
+        (
+            "user",
+            "RUN_USER_CONCURRENCY_LIMIT",
+            facts.user_nonterminal_runs,
+            policy.max_nonterminal_runs_per_user,
+        ),
+        (
+            "agent",
+            "RUN_AGENT_CONCURRENCY_LIMIT",
+            facts.agent_nonterminal_runs,
+            policy.max_nonterminal_runs_per_agent,
+        ),
+        (
+            "runtime",
+            "RUN_RUNTIME_CONCURRENCY_LIMIT",
+            facts.runtime_nonterminal_runs,
+            policy.runtime_limit(facts.runtime_type),
+        ),
+    )
+    for scope, reason_code, current, limit in checks:
+        if limit is not None and current >= limit:
+            raise CapacityAdmissionDenied(
+                scope=scope,
+                reason_code=reason_code,
+                current=current,
+                limit=limit,
+            )
 
 
 @dataclass(frozen=True, slots=True)

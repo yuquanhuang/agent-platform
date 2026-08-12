@@ -58,6 +58,7 @@ from packages.application.model_gateway import (
     ProviderAdapterRegistry,
 )
 from packages.application.outbox import OutboxDispatcher, OutboxEventRouter
+from packages.application.policy import RunCapacityPolicy
 from packages.application.public import (
     AgUiEventBatch,
     ApprovalCoordinator,
@@ -126,11 +127,13 @@ from packages.contracts.generated.resource_content import (
 )
 from packages.contracts.generated.resources_models import (
     ActionRequest,
+    QuotaPolicyCreateRequest,
     ResourceCopyRequest,
     ResourceCreateRequest,
     ResourcePublishRequest,
     ResourceRollbackRequest,
     ResourceUpdateRequest,
+    RunCapacityLimits,
 )
 from packages.contracts.generated.run_event import (
     RUNTIME_EVENT_CANDIDATE_ADAPTER,
@@ -179,6 +182,7 @@ from packages.domain.public import (
     ReleaseRecord,
     RunRecord,
     RuntimeBundleRecord,
+    SessionRecord,
     SkillSupplyChainScanResult,
     TenantAccess,
     canonical_content_hash,
@@ -204,6 +208,7 @@ from packages.infrastructure.database.public import (
     SqlAlchemyMcpDiscoveryStore,
     SqlAlchemyMessageHistoryStore,
     SqlAlchemyOutboxStore,
+    SqlAlchemyQuotaPolicyStore,
     SqlAlchemyReleaseStore,
     SqlAlchemyResourceRegistry,
     SqlAlchemyRunEventQueryStore,
@@ -2972,9 +2977,18 @@ async def verify_run_creation_atomicity_and_guards(database_url: str) -> None:
                     {"run_id": run.id},
                 )
             ).one()
+            reconciliation_audit = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM audit_log "
+                    "WHERE resource_id = :run_id "
+                    "AND action = 'run.reconcile.request_requeued'"
+                ),
+                {"run_id": run.id},
+            )
         assert outbox_state.status == "PENDING"
         assert outbox_state.attempts == 0
         assert outbox_state.published_at is None
+        assert reconciliation_audit == 1
 
         with pytest.raises(DBAPIError):
             async with admin_engine.begin() as connection:
@@ -3985,6 +3999,270 @@ async def verify_run_workflow_attempt_and_message_finalization(
         await admin_engine.dispose()
 
 
+async def verify_run_capacity_admission(database_url: str) -> None:
+    app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
+    app_engine = create_async_engine(app_url)
+    admin_engine = create_async_engine(database_url)
+    try:
+        session_factory = create_session_factory(app_engine)
+        sessions = SqlAlchemySessionStore(session_factory)
+        async with admin_engine.connect() as connection:
+            session_row = (
+                await connection.execute(
+                    text(
+                        "SELECT agent_id FROM chat_session "
+                        "WHERE tenant_id = :tenant_id "
+                        "AND title = 'Pinned before rollback'"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+            baseline = int(
+                await connection.scalar(
+                    text(
+                        "SELECT count(*) FROM agent_run "
+                        "WHERE tenant_id = :tenant_id "
+                        "AND status IN ('CREATED','QUEUED','PREPARING','RUNNING',"
+                        "'WAITING_APPROVAL','CANCELLING')"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+                or 0
+            )
+        quota_store = SqlAlchemyQuotaPolicyStore(session_factory)
+        quota_outcome = await quota_store.create_policy(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            request=QuotaPolicyCreateRequest(
+                name="Tenant Run capacity",
+                description=None,
+                limits=RunCapacityLimits(
+                    max_nonterminal_runs_per_tenant=baseline + 1,
+                    max_nonterminal_runs_per_user=None,
+                    max_nonterminal_runs_per_agent=None,
+                    max_nonterminal_agentscope_runs=None,
+                    max_nonterminal_codex_runs=None,
+                ),
+            ),
+            limits=RunCapacityPolicy(max_nonterminal_runs_per_tenant=baseline + 1),
+            idempotency_key="quota-policy-capacity-create",
+            request_hash=canonical_request_hash(
+                "quota_policy.create",
+                QuotaPolicyCreateRequest(
+                    name="Tenant Run capacity",
+                    description=None,
+                    limits=RunCapacityLimits(
+                        max_nonterminal_runs_per_tenant=baseline + 1,
+                        max_nonterminal_runs_per_user=None,
+                        max_nonterminal_runs_per_agent=None,
+                        max_nonterminal_agentscope_runs=None,
+                        max_nonterminal_codex_runs=None,
+                    ),
+                ),
+            ),
+            metadata=METADATA,
+        )
+        assert quota_outcome.value is not None
+        quota_policy_id = quota_outcome.value.id
+        runs = SqlAlchemyRunStore(
+            session_factory,
+            run_capacity_policy=RunCapacityPolicy(
+                max_nonterminal_runs_per_tenant=baseline + 100
+            ),
+        )
+        created_sessions: list[SessionRecord] = []
+        for index in (1, 2):
+            request = SessionCreateRequest.model_validate(
+                {
+                    "agent_id": str(session_row.agent_id),
+                    "title": f"Capacity admission {index}",
+                }
+            )
+            outcome = await sessions.create_session(
+                context(TENANT_A),
+                user_id=ACTOR,
+                request=request,
+                metadata_value={},
+                idempotency_key=f"session-capacity-{index}",
+                request_hash=canonical_request_hash("session.create", request),
+                metadata=METADATA,
+            )
+            assert outcome.value is not None
+            created_sessions.append(outcome.value)
+
+        async def create(index: int):
+            request = RunCreateRequest.model_validate(
+                {
+                    "session_id": str(created_sessions[index].id),
+                    "input": {"text": f"capacity request {index}"},
+                }
+            )
+            return await runs.create_run(
+                context(TENANT_A),
+                user_id=ACTOR,
+                request=request,
+                idempotency_key=f"run-capacity-{index}",
+                request_hash=canonical_request_hash("run.create", request),
+                metadata=METADATA,
+            )
+
+        results = await asyncio.gather(create(0), create(1), return_exceptions=True)
+        successes = [
+            result for result in results if not isinstance(result, BaseException)
+        ]
+        denials = [result for result in results if isinstance(result, PlatformError)]
+        assert len(successes) == 1
+        assert len(denials) == 1
+        assert denials[0].status_code == 429
+        assert denials[0].code == "RATE_LIMITED"
+        assert denials[0].retryable is True
+        assert denials[0].details == {
+            "scope": "tenant",
+            "reason_code": "RUN_TENANT_CONCURRENCY_LIMIT",
+        }
+        successful = successes[0]
+        assert not isinstance(successful, BaseException)
+        assert successful.value is not None
+
+        async with admin_engine.begin() as connection:
+            denial_audit = (
+                await connection.execute(
+                    text(
+                        "SELECT result, reason_codes, metadata_json "
+                        "FROM audit_log WHERE tenant_id = :tenant_id "
+                        "AND action = 'run.create.admission_deny' "
+                        "ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+            idempotency_count = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM idempotency_record "
+                    "WHERE tenant_id = :tenant_id "
+                    "AND idempotency_key IN ('run-capacity-0','run-capacity-1')"
+                ),
+                {"tenant_id": TENANT_A},
+            )
+            await connection.execute(
+                text(
+                    "UPDATE agent_run SET status = 'FAILED', finished_at = now() "
+                    "WHERE id = :run_id"
+                ),
+                {"run_id": successful.value.id},
+            )
+        assert denial_audit.result == "DENIED"
+        assert denial_audit.reason_codes == [
+            "RATE_LIMITED",
+            "RUN_TENANT_CONCURRENCY_LIMIT",
+        ]
+        assert denial_audit.metadata_json["scope"] == "tenant"
+        assert denial_audit.metadata_json["current"] == baseline + 1
+        assert denial_audit.metadata_json["limit"] == baseline + 1
+        assert idempotency_count == 1
+
+        unused_session = next(
+            session
+            for session in created_sessions
+            if session.id != successful.value.session_id
+        )
+        occupier_request = RunCreateRequest.model_validate(
+            {
+                "session_id": str(unused_session.id),
+                "input": {"text": "capacity retry occupier"},
+            }
+        )
+        occupier = await SqlAlchemyRunStore(session_factory).create_run(
+            context(TENANT_A),
+            user_id=ACTOR,
+            request=occupier_request,
+            idempotency_key="run-capacity-retry-occupier",
+            request_hash=canonical_request_hash("run.create", occupier_request),
+            metadata=METADATA,
+        )
+        assert occupier.value is not None
+
+        retry_request = RetryRunRequest(deployment_policy="original_snapshot")
+        with pytest.raises(PlatformError) as retry_denied:
+            await runs.retry_run(
+                context(TENANT_A),
+                user_id=ACTOR,
+                run_id=successful.value.id,
+                request=retry_request,
+                idempotency_key="run-capacity-retry-denied",
+                request_hash=canonical_request_hash(
+                    "run.retry",
+                    retry_request,
+                    extra={"run_id": str(successful.value.id)},
+                ),
+                metadata=METADATA,
+            )
+        assert retry_denied.value.status_code == 429
+        assert retry_denied.value.code == "RATE_LIMITED"
+
+        async with admin_engine.begin() as connection:
+            retry_denial_audit = (
+                await connection.execute(
+                    text(
+                        "SELECT result, resource_id, reason_codes, metadata_json "
+                        "FROM audit_log WHERE tenant_id = :tenant_id "
+                        "AND action = 'run.retry.admission_deny' "
+                        "ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+            ).one()
+            retry_idempotency_count = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM idempotency_record "
+                    "WHERE tenant_id = :tenant_id "
+                    "AND idempotency_key = 'run-capacity-retry-denied'"
+                ),
+                {"tenant_id": TENANT_A},
+            )
+            await connection.execute(
+                text(
+                    "UPDATE agent_run SET status = 'FAILED', finished_at = now() "
+                    "WHERE id = :run_id"
+                ),
+                {"run_id": occupier.value.id},
+            )
+        assert retry_denial_audit.result == "DENIED"
+        assert retry_denial_audit.resource_id == successful.value.id
+        assert retry_denial_audit.reason_codes == [
+            "RATE_LIMITED",
+            "RUN_TENANT_CONCURRENCY_LIMIT",
+        ]
+        assert retry_denial_audit.metadata_json["operation"] == "retry"
+        assert retry_idempotency_count == 0
+
+        disable_request = ActionRequest(reason="verify deployment fallback")
+        disabled_quota = await quota_store.set_policy_status(
+            context(TENANT_A),
+            actor_id=ACTOR,
+            policy_id=quota_policy_id,
+            expected_version=1,
+            enabled=False,
+            request=disable_request,
+            idempotency_key="quota-policy-capacity-disable",
+            request_hash=canonical_request_hash(
+                "quota_policy.disable",
+                disable_request,
+                extra={
+                    "policy_id": str(quota_policy_id),
+                    "if_match": '"rv:1"',
+                },
+            ),
+            metadata=METADATA,
+        )
+        assert disabled_quota is not None
+        assert disabled_quota.value is not None
+        assert disabled_quota.value.status == "DISABLED"
+    finally:
+        await app_engine.dispose()
+        await admin_engine.dispose()
+
+
 async def verify_run_cancel_retry_and_recovery_fencing(database_url: str) -> None:
     app_url = make_url(database_url).set(username=APP_ROLE, password=APP_PASSWORD)
     app_engine = create_async_engine(app_url)
@@ -4603,6 +4881,20 @@ async def verify_sandbox_lifecycle_and_fencing(database_url: str) -> None:
                 update={"execution_fencing_token": SecretStr(fencing_token)}
             ),
         )
+        reconciliation_candidates = await SqlAlchemySandboxLifecycleStore(
+            session_factory
+        ).list_sandbox_reconciliation_candidates(
+            service_access.context,
+            now=active_lease.expires_at + timedelta(seconds=1),
+            limit=20,
+        )
+        expired_candidate = next(
+            candidate
+            for candidate in reconciliation_candidates
+            if candidate.sandbox_id == UUID(accepted.sandbox_id)
+        )
+        assert expired_candidate.reason == "EXPIRED_RUN_LEASE"
+        assert expired_candidate.action == "DESTROY"
         stale_process = SandboxProcessRequest(
             run_id=str(run.id),
             execution_attempt=1,
@@ -6021,6 +6313,17 @@ async def verify_approval_control_plane(database_url: str) -> None:
         )
         assert pending.status == "PENDING"
         assert pending.resource_version == 1
+        with pytest.raises(DBAPIError):
+            async with TenantUnitOfWork(
+                session_factory, context(TENANT_A, OTHER_ACTOR)
+            ) as unit_of_work:
+                await unit_of_work.session.execute(
+                    text(
+                        "UPDATE approval_request SET workflow_signal_sent_at = :sent_at "
+                        "WHERE id = :approval_id"
+                    ),
+                    {"sent_at": now, "approval_id": pending.id},
+                )
         duplicate = await coordinator.request_approval(
             context(TENANT_A),
             request=approval_request,
@@ -6123,6 +6426,87 @@ async def verify_approval_control_plane(database_url: str) -> None:
         assert ticket.nonce_hash == ticket_credential.nonce_hash
         assert ticket.consumed_at is None
         assert ticket.expires_at == now + timedelta(minutes=5)
+        unsent = await approvals.list_unsent_approval_signals(
+            context(TENANT_A, OTHER_ACTOR), limit=100
+        )
+        approved_candidate = next(
+            candidate for candidate in unsent if candidate.approval.id == pending.id
+        )
+        assert approved_candidate.decision_id == decision.id
+        assert approved_candidate.ticket == ticket
+        assert await approvals.mark_workflow_signal_sent(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=pending.id,
+            sent_at=now + timedelta(seconds=3),
+        )
+        assert not await approvals.mark_workflow_signal_sent(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=pending.id,
+            sent_at=now + timedelta(seconds=4),
+        )
+        async with admin_engine.connect() as connection:
+            signal_state = (
+                await connection.execute(
+                    text(
+                        "SELECT resource_version, workflow_signal_sent_at "
+                        "FROM approval_request WHERE id = :approval_id"
+                    ),
+                    {"approval_id": pending.id},
+                )
+            ).one()
+        assert signal_state.resource_version == 2
+        assert signal_state.workflow_signal_sent_at == now + timedelta(seconds=3)
+
+        _, repair_pending, _ = await create_pending(
+            "ticket-repair", expires_at=now + timedelta(minutes=20)
+        )
+        repair_decision = await approvals.decide(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=repair_pending.id,
+            actor_id=OTHER_ACTOR,
+            request=approved_decision,
+            expected_version=1,
+            idempotency_key="approval-ticket-repair-decision",
+            request_hash=approved_hash,
+            metadata=METADATA,
+            now=now + timedelta(seconds=3),
+        )
+        assert repair_decision is not None and repair_decision.value is not None
+        repair_candidates = await approvals.list_unsent_approval_signals(
+            context(TENANT_A, OTHER_ACTOR), limit=100
+        )
+        repair_candidate = next(
+            candidate
+            for candidate in repair_candidates
+            if candidate.approval.id == repair_pending.id
+        )
+        assert repair_candidate.ticket is None
+        repair_credential = ticket_issuer.issue(
+            tenant_id=UUID(TENANT_A), approval_id=repair_pending.id
+        )
+        repair_issue = ExecutionTicketIssue(
+            credential=repair_credential,
+            expires_at=now + timedelta(minutes=5),
+        )
+        repaired_ticket = await approvals.ensure_approved_ticket(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=repair_pending.id,
+            ticket_issue=repair_issue,
+            now=now + timedelta(seconds=4),
+        )
+        replayed_ticket = await approvals.ensure_approved_ticket(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=repair_pending.id,
+            ticket_issue=repair_issue,
+            now=now + timedelta(seconds=5),
+        )
+        assert repaired_ticket is not None
+        assert replayed_ticket == repaired_ticket
+        assert await approvals.mark_workflow_signal_sent(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=repair_pending.id,
+            sent_at=now + timedelta(seconds=6),
+        )
 
         execution_role_id = uuid5(
             NAMESPACE_URL, f"tool-execution-role/{TENANT_A}/{ACTOR}"
@@ -6250,6 +6634,11 @@ async def verify_approval_control_plane(database_url: str) -> None:
             ),
         )
         assert ticket_approval is not None
+        assert await approvals.mark_workflow_signal_sent(
+            context(TENANT_A, OTHER_ACTOR),
+            approval_id=ticket_pending.id,
+            sent_at=now + timedelta(seconds=6, milliseconds=500),
+        )
         expired_tool_request = replace(
             tool_request,
             run_id=ticket_expired_run.id,
@@ -6275,6 +6664,16 @@ async def verify_approval_control_plane(database_url: str) -> None:
         )
         assert expired_approval is not None
         assert expired_approval.status == "EXPIRED"
+        expired_candidates = await approvals.list_unsent_approval_signals(
+            context(TENANT_A, OTHER_ACTOR), limit=100
+        )
+        ticket_expired_candidate = next(
+            candidate
+            for candidate in expired_candidates
+            if candidate.approval.id == ticket_pending.id
+        )
+        assert ticket_expired_candidate.decision == "EXPIRED"
+        assert ticket_expired_candidate.ticket is not None
         async with admin_engine.connect() as connection:
             ticket_expired_state = (
                 await connection.execute(
@@ -6607,8 +7006,13 @@ async def verify_agentscope_approval_runtime_bridge(database_url: str) -> None:
 
         class BridgePorts:
             async def create(
-                self, context: TenantContext, *, request: RunExecutionRequest
+                self,
+                context: TenantContext,
+                *,
+                request: RunExecutionRequest,
+                checkpoint_state_json: bytes | None,
             ) -> AgentScopeSessionStart:
+                assert checkpoint_state_json is None
                 return AgentScopeSessionStart(
                     session=runtime_session,
                     initial_input=None,
@@ -6616,7 +7020,15 @@ async def verify_agentscope_approval_runtime_bridge(database_url: str) -> None:
 
             async def save(self, context: TenantContext, **kwargs: object) -> str:
                 checkpoints.append(cast(bytes, kwargs["state_json"]))
-                return f"state://{TENANT_A}/{run.id}/1/checkpoint-1"
+                return (
+                    f"state://tenant/{TENANT_A}/run/{run.id}/"
+                    "attempt/1/checkpoint/checkpoint-1"
+                )
+
+            async def load_latest(
+                self, context: TenantContext, **kwargs: object
+            ) -> bytes | None:
+                return None
 
             async def resolve(
                 self, context: TenantContext, **kwargs: object
@@ -6744,6 +7156,10 @@ async def verify_agentscope_approval_runtime_bridge(database_url: str) -> None:
             context(TENANT_A), approval_id=approval_id
         )
         assert stored_approval is not None and stored_approval.status == "CONSUMED"
+        assert stored_approval.runtime_checkpoint_ref == (
+            f"state://tenant/{TENANT_A}/run/{run.id}/"
+            "attempt/1/checkpoint/checkpoint-1"
+        )
         assert stored_ticket is not None and stored_ticket.consumed_at is not None
         async with admin_engine.connect() as connection:
             event_types = list(
@@ -6815,6 +7231,7 @@ def test_resource_registry_postgresql_integration() -> None:
         asyncio.run(verify_session_lifecycle_and_deployment_pinning(database_url))
         asyncio.run(verify_message_history_branching_and_immutability(database_url))
         asyncio.run(verify_run_creation_atomicity_and_guards(database_url))
+        asyncio.run(verify_run_capacity_admission(database_url))
         asyncio.run(verify_run_event_store_constraints(database_url))
         asyncio.run(verify_run_workflow_attempt_and_message_finalization(database_url))
         asyncio.run(verify_run_cancel_retry_and_recovery_fencing(database_url))

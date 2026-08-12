@@ -1,0 +1,64 @@
+task_id: AP-E7-002
+title: API、Worker、Temporal、Redis、S3 故障恢复
+status: in_progress
+baseline: agent-platform-v1-dev-baseline-2026-08-r13
+scope:
+  includes:
+    - API、Event Worker、Reconciliation Worker 和 Temporal Worker 的依赖恢复边界
+    - Redis 通知丢失后的 PostgreSQL 事实补齐验证
+    - Runtime 未知副作用的 inspect-before-recover、fencing 与 durable checkpoint
+    - MinIO Artifact Adapter、Download Gateway 和对象依赖的失败收敛
+    - Kubernetes 进程装配、Secret 注入、故障注入、指标和恢复记录
+  excludes:
+    - 缺少可信 Inspector 时猜测修复 Provider、Object Store 或 RuntimeSession 孤儿
+    - blanket 重放 DEAD Outbox 或伪造 Run 终态、usage 和 RunEvent
+decisions:
+  - Polling Worker 只重试明确识别的数据库、Redis、Temporal 和传输层短暂错误
+  - Redis 仅作唤醒通道，RunEvent 和下载撤销均由 PostgreSQL durable fact 最终确认
+  - Artifact 下载使用私有 MinIO 前置的 Download Gateway，不签发下载预签名 URL
+  - Download API 支持标准单 Range 200/206/416；多 Range 不进入 V1
+  - Kubernetes 使用 EnvSecretBackend 注入 AP_SECRET_*，Vault Adapter 预留并失败关闭
+  - runtime-worker-agentscope 在 Session/Bundle/Tool/Executor 生产组合缺失时继续失败关闭
+compatibility:
+  - R12 Core OpenAPI 1.6.0 增加 Range Header 和 206/416 响应，既有 ArtifactDownload 结构不变
+  - 新增 0032 artifact_download_grant 和 0033 runtime_checkpoint；部署前顺序迁移
+  - 新增 minio Python 依赖；前后端 Client 由冻结 OpenAPI 重新生成
+verification:
+  completed:
+    - Download Range/API/Secret/MinIO/Redis/Event Worker 定向验证通过
+    - 真实 Redis tenant/run 与 tenant/artifact 隔离唤醒、暂停故障和恢复通过
+    - 真实 MinIO upload/hash/copy/promote/range/delete、暂停故障和恢复通过
+    - AgentScope checkpoint/Approval/ORM/迁移定向测试 65 passed
+    - Download 长连接撤销、Redis Adapter、Event composition 和 API 定向测试 37 passed
+    - Kubernetes 8 个 YAML 文件完成安全解析
+    - make backend-check 通过：718 passed、18 skipped
+    - make check 通过：后端 718 passed、18 skipped；前端 85 passed 并完成生产构建
+    - 真实 PostgreSQL/Temporal/Redis/MinIO make check-all 通过：后端 736 passed、2 skipped；前端 85 passed
+    - R12 契约通过：31 个完整性文件、169 个 operationId、17 个生成文件零漂移
+    - R13 Reconciliation 身份定向测试 51 passed，Ruff/Pyright strict 通过
+    - R13 make check 通过：后端 727 passed、18 skipped；前端 85 passed 并完成生产构建
+    - 真实 PostgreSQL/Temporal/Redis make check-all 通过：后端 742 passed、3 skipped；前端 85 passed
+    - R13 契约通过：31 个完整性文件、169 个 operationId、17 个生成文件零漂移
+    - Kubernetes 9 个 YAML 文件完成解析
+acceptance:
+  - 短暂依赖错误有界恢复，持续错误退出并由 Kubernetes 重启
+  - Redis 通知丢失不造成 RunEvent 永久丢失，也不让已撤销下载持续超过复核窗口
+  - Artifact 上传、扫描、提升、Range 下载、撤销和删除使用同一 MinIO Adapter
+  - Checkpoint 只恢复同 Tenant/Run/Attempt/fencing token 的最新 AVAILABLE 密文状态
+progress:
+  - completed: Event Worker 真实组合 EnvSecretBackend、PostgreSQL、Temporal、Redis、MinIO 与四类 Outbox Dispatcher
+  - completed: EnvSecretBackend 严格 secret://env/AP_SECRET_* 解析，Vault 模式明确失败关闭
+  - completed: MinIO 统一 Adapter、真实故障注入和 Redis 订阅确认竞态修复
+  - completed: Download 200/206/416、并发预算、最大时长、query token 日志回归和长连接撤销事实复核
+  - completed: AgentScope PostgreSQL/MinIO AES-256-GCM durable checkpoint 和 Approval immutable ref
+  - completed: 受控 backend Dockerfile、Event Worker Kubernetes base、Secret 示例和 NetworkPolicy
+  - completed: Ed25519 Service Token、tenant Claim 验证、HTTP Sandbox Cleanup Controller 和 Reconciliation Worker 生产组合
+blocked_validation:
+  - AgentScope Runtime Worker 仍缺生产 SessionFactory、RunSpec/Bundle Loader、Tool Binding、Gateway/Executor 和 Temporal Activity 完整组合
+  - API 生产组合仍受真实 OIDC/JWKS 与受信 Runtime Target 配置约束；download-ingress 仅提供不进入默认 Kustomization 的加固示例
+follow_up:
+  - Sandbox Manager 部署真实隔离 Provider、Policy Resolver 和 Provision Token Verifier 后，将 Reconciliation Deployment 加入 overlay 并执行真实服务 E2E
+  - 在 AP-E6-007/Runtime 子任务完成生产 Adapter 后激活 runtime-worker-agentscope，并复用本任务 checkpoint store
+  - 接入外部 AV/Malware Scanner Adapter；当前 Scanner 只覆盖服务端 Hash、大小、MIME 和 archive 基线检查
+  - 由现有 CI 回填 backend/runtime 镜像 Registry digest，并由部署 overlay 收紧依赖 CIDR
+  - 保留 RunEvent 全局唯一登记表加月分区、AJV codegen、Run Attachment、Audit 归档和可信 Workflow 终态物化待办

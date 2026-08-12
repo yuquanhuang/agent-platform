@@ -29,6 +29,7 @@ from packages.infrastructure.database.models import (
     ApprovalDecisionModel,
     ApprovalRequestModel,
     AppUserModel,
+    ArtifactDownloadGrantModel,
     ArtifactModel,
     AuditLogModel,
     BudgetReservationModel,
@@ -43,6 +44,8 @@ from packages.infrastructure.database.models import (
     ModelUsageModel,
     OperationRecordModel,
     OutboxEventModel,
+    QuotaPolicyModel,
+    QuotaPolicyVersionModel,
     ReleaseModel,
     ResourceDefinitionModel,
     ResourceVersionModel,
@@ -53,6 +56,7 @@ from packages.infrastructure.database.models import (
     RunEventCounterModel,
     RunEventModel,
     RuntimeBundleModel,
+    RuntimeCheckpointModel,
     SandboxInstanceModel,
     SandboxLeaseModel,
     SkillSupplyChainScanModel,
@@ -68,9 +72,13 @@ from packages.infrastructure.database.publishing import (
     SqlAlchemyAgentResourceReferenceProvider,
     SqlAlchemySnapshotCompilationStore,
 )
+from packages.infrastructure.database.quota_policies import SqlAlchemyQuotaPolicyStore
 from packages.infrastructure.database.releases import SqlAlchemyReleaseStore
 from packages.infrastructure.database.resources import SqlAlchemyResourceRegistry
 from packages.infrastructure.database.runs import SqlAlchemyRunStore
+from packages.infrastructure.database.runtime_checkpoints import (
+    SqlAlchemyAgentScopeCheckpointStore,
+)
 from packages.infrastructure.database.sandboxes import SqlAlchemySandboxLifecycleStore
 from packages.infrastructure.database.session import (
     create_database_engine,
@@ -86,6 +94,9 @@ from packages.infrastructure.database.tenant import (
     bind_tenant_context,
 )
 from packages.infrastructure.database.uow import PlatformUnitOfWork, TenantUnitOfWork
+from packages.infrastructure.database.worker_tenants import (
+    SqlAlchemyTenantContextSource,
+)
 from packages.infrastructure.database.workspaces import SqlAlchemyWorkspaceStore
 
 __all__ = [
@@ -99,6 +110,7 @@ __all__ = [
     "AppUserModel",
     "ApprovalDecisionModel",
     "ApprovalRequestModel",
+    "ArtifactDownloadGrantModel",
     "ArtifactModel",
     "AuditLogModel",
     "Base",
@@ -115,6 +127,8 @@ __all__ = [
     "OperationRecordModel",
     "OutboxEventModel",
     "PlatformUnitOfWork",
+    "QuotaPolicyModel",
+    "QuotaPolicyVersionModel",
     "ReleaseModel",
     "ResourceDefinitionModel",
     "ResourceVersionModel",
@@ -125,11 +139,13 @@ __all__ = [
     "RunEventCounterModel",
     "RunEventModel",
     "RuntimeBundleModel",
+    "RuntimeCheckpointModel",
     "SandboxInstanceModel",
     "SandboxLeaseModel",
     "SkillSupplyChainScanModel",
     "SqlAlchemyAgentRegistry",
     "SqlAlchemyAgentResourceReferenceProvider",
+    "SqlAlchemyAgentScopeCheckpointStore",
     "SqlAlchemyApprovalStore",
     "SqlAlchemyArtifactStore",
     "SqlAlchemyAuditQueryStore",
@@ -142,6 +158,7 @@ __all__ = [
     "SqlAlchemyMessageHistoryStore",
     "SqlAlchemyOutboxStore",
     "SqlAlchemyOutboxWriter",
+    "SqlAlchemyQuotaPolicyStore",
     "SqlAlchemyReleaseStore",
     "SqlAlchemyResourceRegistry",
     "SqlAlchemyRunEventQueryStore",
@@ -153,6 +170,7 @@ __all__ = [
     "SqlAlchemySkillArtifactReader",
     "SqlAlchemySkillScanStore",
     "SqlAlchemySnapshotCompilationStore",
+    "SqlAlchemyTenantContextSource",
     "SqlAlchemyToolAuthorizationResolver",
     "SqlAlchemyWorkspaceStore",
     "TenantMemberModel",

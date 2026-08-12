@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-platform-download-gateway
+  namespace: agent-platform
+  annotations:
+    # A dedicated Ingress prevents query bearer tokens from entering access logs.
+    nginx.ingress.kubernetes.io/enable-access-log: "false"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3660"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3660"
+    nginx.ingress.kubernetes.io/limit-rate: "1048576"
+    nginx.ingress.kubernetes.io/limit-rate-after: "1048576"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: artifacts.example.invalid
+      http:
+        paths:
+          - path: /api/v1/artifact-downloads
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-platform-api
+                port:
+                  number: 8000

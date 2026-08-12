@@ -1,6 +1,7 @@
 """Deployment-facing composition for the independent Sandbox Manager."""
 
 from fastapi import FastAPI
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.sandbox_manager.app import create_sandbox_manager_app
@@ -11,8 +12,31 @@ from packages.application.sandbox import (
     SandboxProvider,
     SandboxProvisionTokenVerifier,
 )
+from packages.infrastructure.auth.public import Ed25519SandboxServiceIdentityProvider
 from packages.infrastructure.observability import PlatformMetrics
 from packages.infrastructure.public import AppSettings, SqlAlchemySandboxLifecycleStore
+
+
+def build_sandbox_service_identity_provider(
+    settings: AppSettings,
+    *,
+    public_key: SecretStr,
+) -> Ed25519SandboxServiceIdentityProvider:
+    """Build the strict verifier after the composition root resolves its key."""
+
+    if settings.internal_service_token_issuer is None:
+        raise RuntimeError("AP_INTERNAL_SERVICE_TOKEN_ISSUER is required")
+    if not settings.sandbox_manager_allowed_subject_ids:
+        raise RuntimeError("AP_SANDBOX_MANAGER_ALLOWED_SUBJECT_IDS is required")
+    return Ed25519SandboxServiceIdentityProvider(
+        issuer=str(settings.internal_service_token_issuer),
+        audience=settings.internal_service_token_audience,
+        key_id=settings.internal_service_token_key_id,
+        public_key=public_key,
+        allowed_subject_ids=settings.sandbox_manager_allowed_subject_ids,
+        max_ttl_seconds=settings.internal_service_token_ttl_seconds,
+        clock_skew_seconds=settings.internal_service_token_clock_skew_seconds,
+    )
 
 
 def build_database_sandbox_lifecycle_service(

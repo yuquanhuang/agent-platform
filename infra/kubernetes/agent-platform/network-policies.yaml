@@ -1,0 +1,74 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: agent-platform
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: event-worker-egress
+  namespace: agent-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-platform-event-worker
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Overlays should add CIDR/namespace selectors for each dependency. The
+    # base restricts transport ports but does not guess environment addresses.
+    - ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 7233
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 4317
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: reconciliation-worker-egress
+  namespace: agent-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-platform-reconciliation-worker
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Deployment overlays must constrain each destination to the actual
+    # PostgreSQL, Temporal, Sandbox Manager and OTel namespace/CIDR.
+    - ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 7233
+        - protocol: TCP
+          port: 8443
+        - protocol: TCP
+          port: 4317

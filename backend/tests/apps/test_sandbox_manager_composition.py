@@ -2,10 +2,13 @@
 
 from typing import cast
 
+import pytest
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.sandbox_manager.composition import (
     build_database_sandbox_lifecycle_service,
+    build_sandbox_service_identity_provider,
     create_database_sandbox_manager_app,
 )
 from apps.sandbox_manager.routes import SandboxServiceIdentityProvider
@@ -53,3 +56,23 @@ def test_composition_requires_explicit_trusted_adapters_and_registers_routes() -
         sum(len(operations) for operations in application.openapi()["paths"].values())
         == 9
     )
+
+
+def test_identity_composition_requires_issuer_and_allowed_subjects() -> None:
+    with pytest.raises(RuntimeError, match="AP_INTERNAL_SERVICE_TOKEN_ISSUER"):
+        build_sandbox_service_identity_provider(
+            AppSettings.model_validate({"env": "test"}),
+            public_key=SecretStr("unused"),
+        )
+
+    settings = AppSettings.model_validate(
+        {
+            "env": "test",
+            "internal_service_token_issuer": "https://identity.example.test",
+        }
+    )
+    with pytest.raises(RuntimeError, match="AP_SANDBOX_MANAGER_ALLOWED_SUBJECT_IDS"):
+        build_sandbox_service_identity_provider(
+            settings,
+            public_key=SecretStr("unused"),
+        )

@@ -22,7 +22,12 @@ from packages.application.public import (
     RunManagementService,
     RunStore,
 )
-from packages.contracts.public import AuthenticatedPrincipal, SubjectType, TenantContext
+from packages.contracts.public import (
+    AuthenticatedPrincipal,
+    SubjectType,
+    TenantContext,
+    rate_limited,
+)
 from packages.domain.public import MutationOutcome, RunRecord, TenantAccess
 from packages.infrastructure.auth.public import MockIdentityProvider
 from packages.infrastructure.public import AppSettings
@@ -75,6 +80,7 @@ class Stub:
     def __init__(self) -> None:
         self.current_record = record()
         self.event_afters: list[int] = []
+        self.create_error = False
 
     async def resolve_tenant_access(
         self, principal: AuthenticatedPrincipal, metadata: RequestMetadata
@@ -106,6 +112,13 @@ class Stub:
         return [record()], None
 
     async def create_run(self, _context: TenantContext, **_kwargs: object):
+        if self.create_error:
+            raise rate_limited(
+                details={
+                    "scope": "tenant",
+                    "reason_code": "RUN_TENANT_CONCURRENCY_LIMIT",
+                }
+            )
         return MutationOutcome(value=record())
 
     async def get_run(self, _context: TenantContext, **_kwargs: object):
@@ -299,6 +312,37 @@ async def test_create_run_returns_accepted_contract() -> None:
         "status": "CREATED",
         "events_url": f"/api/v1/runs/{RUN_ID}/events",
         "stream_url": f"/api/v1/runs/{RUN_ID}/events/stream",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_run_maps_capacity_denial_to_frozen_429_error() -> None:
+    application = build_app()
+    application.state.run_stub.create_error = True
+    transport = httpx.ASGITransport(app=application)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/runs",
+            headers={
+                "Authorization": "Bearer mock",
+                "Idempotency-Key": "run-capacity-denied",
+                "X-Request-ID": "req-run-capacity-denied",
+            },
+            json={"session_id": str(SESSION_ID), "input": {"text": "hello"}},
+        )
+
+    assert response.status_code == 429
+    assert response.json()["error"] == {
+        "code": "RATE_LIMITED",
+        "message": "Request capacity is temporarily exhausted.",
+        "request_id": "req-run-capacity-denied",
+        "retryable": True,
+        "details": {
+            "scope": "tenant",
+            "reason_code": "RUN_TENANT_CONCURRENCY_LIMIT",
+        },
     }
 
 

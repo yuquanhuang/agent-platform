@@ -90,6 +90,87 @@ queues, respectively. Worker startup requires `AP_TEMPORAL_ADDRESS`; the
 namespace defaults to `agent-platform-<environment>`, connection retry is
 bounded, and missing Temporal never reports readiness.
 
+Event and Reconciliation polling loops share a bounded recovery policy for
+explicit database, Redis and Temporal transport failures. Backoff is
+interruptible during shutdown, a successful cycle resets the failure count,
+and persistent dependency failure exits non-zero so the deployment orchestrator
+can replace the process. Unknown application errors are never treated as
+transient. Per-event Outbox retry and fencing remain responsible for preventing
+unsafe external side-effect replay.
+
+Deployment composition uses `SqlAlchemyTenantContextSource` to rotate over
+operational ACTIVE/DISABLED tenants with an explicit service subject, then
+combines a fixed set of isolated Event dispatchers or builds the database-backed
+Platform Reconciler.
+The process wrappers install SIGINT/SIGTERM handlers, expose `process_up`, and
+drain the current bounded cycle before stopping. `event-worker/main.py` now
+resolves Env Secret references and composes PostgreSQL, Temporal, Redis and
+MinIO production adapters. `reconciliation-worker/main.py` now composes
+PostgreSQL, Temporal, tenant enumeration and an authenticated HTTP Sandbox
+cleanup controller. Each cleanup request uses an Ed25519-signed token with a
+bounded lifetime, `aud=sandbox-manager`, service subject, tenant, permission and
+`jti`; tenant headers are never trusted. The worker also requires a separate
+Execution Ticket HMAC key so Approval repair does not silently remain partial.
+
+## Secret Backend and Kubernetes
+
+`EnvSecretBackend` accepts only `secret://env/AP_SECRET_*` references. This is
+the initial Kubernetes mode: Secret values are injected with `secretKeyRef`,
+while application configuration contains references rather than plaintext.
+Missing, empty, oversized or malformed values fail closed and resolved values
+remain `SecretStr`. `AP_SECRET_BACKEND=vault` is reserved and intentionally
+fails startup until a reviewed Vault adapter is configured.
+
+The Kubernetes base under `infra/kubernetes/agent-platform` enables the
+production-composed Event Worker. A controlled Reconciliation Worker manifest
+is provided separately and is enabled only after the Sandbox Manager endpoint,
+stable service subject and signing key have been installed. The API, Sandbox
+Manager and AgentScope Runtime Worker are not declared ready merely by creating
+Deployments; their remaining Provider/runtime composition boundaries are
+recorded in the Kubernetes README. Existing CI builds the controlled backend
+Dockerfile and must replace the development image tag with a verified Registry
+digest.
+
+## Artifact Download Gateway
+
+Artifact download authorization returns a short-lived platform Gateway URL,
+not an S3/MinIO presigned URL. The opaque token is returned once and only its
+SHA-256 hash is stored in `artifact_download_grant`. Each download resolves the
+grant through the explicit platform transaction boundary, then validates the
+Artifact and opens the private object with a deployment-injected SERVICE
+`TenantContext`; Artifact deletion revokes all grants before publishing object
+cleanup work.
+
+Production must inject the private object reader and a stable Gateway service
+subject. The MinIO adapter covers upload, inspection, bounded scan copy,
+promotion, delete and trusted full/Range reads with timeouts and bounded
+concurrency. Full responses use 200, valid single byte ranges use 206, and
+invalid/multiple/unsatisfied ranges use the frozen 416 response.
+
+Open streams subscribe to Redis artifact-revocation wake-ups and periodically
+recheck PostgreSQL Grant/Artifact facts; Redis remains non-authoritative and a
+notification outage degrades to database polling. Downloads also have a
+configured maximum duration. Application exception logs record only the path,
+not the query token. Production uses a dedicated Ingress with query-free access
+logging (or access logging disabled) and proxy-level bandwidth shaping.
+
+## Run capacity admission
+
+Run creation and retry can enforce hard non-terminal concurrency limits for the
+tenant, user, Agent and Runtime type. The PostgreSQL store obtains sorted
+transaction advisory locks before counting and inserting, so concurrent API
+instances cannot over-admit the same capacity slot. A rejected request returns
+`429 RATE_LIMITED` and writes a DENIED Audit record; its idempotency claim is
+rolled back.
+
+Staging and production API composition fail closed unless all five limits are
+configured: `AP_RUN_MAX_NONTERMINAL_PER_TENANT`,
+`AP_RUN_MAX_NONTERMINAL_PER_USER`, `AP_RUN_MAX_NONTERMINAL_PER_AGENT`,
+`AP_RUN_MAX_NONTERMINAL_AGENTSCOPE` and `AP_RUN_MAX_NONTERMINAL_CODEX`.
+This is a hard-rejection boundary, not a durable queue. Bounded waiting,
+budget/quota policy, Sandbox/storage quota and Event/SSE backpressure remain
+later AP-E7-003/AP-E7-004 work.
+
 Migration `0003_temporal_outbox` adds the tenant-scoped `outbox_event` table,
 RLS and the `status + next_attempt_at` claim index. Business use cases add rows
 through `SqlAlchemyOutboxWriter` using their existing `AsyncSession`, so the

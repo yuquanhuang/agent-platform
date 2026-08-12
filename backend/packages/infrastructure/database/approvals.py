@@ -5,15 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from typing import cast
+from typing import Literal, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.application.approvals import ApprovalRequestInput, ApprovalStore
 from packages.application.metadata import RequestMetadata
+from packages.application.reconciliation import ApprovalSignalCandidate
 from packages.application.tool_gateway import ExecutionTicketIssue
 from packages.contracts.generated.core_models import ApprovalDecisionRequest
 from packages.contracts.generated.run_event import RUNTIME_EVENT_CANDIDATE_ADAPTER
@@ -125,6 +127,7 @@ class SqlAlchemyApprovalStore(ApprovalStore):
                     expires_at=request.expires_at,
                     resource_version=1,
                     self_approval_allowed=request.self_approval_allowed,
+                    runtime_checkpoint_ref=request.runtime_checkpoint_ref,
                     created_at=now,
                     updated_at=now,
                 )
@@ -321,6 +324,231 @@ class SqlAlchemyApprovalStore(ApprovalStore):
         except SQLAlchemyError as error:
             raise dependency_unavailable("Approval Store is unavailable.") from error
 
+    async def list_unsent_approval_signals(
+        self,
+        context: TenantContext,
+        *,
+        limit: int,
+    ) -> tuple[ApprovalSignalCandidate, ...]:
+        if limit < 1:
+            raise ValueError("Approval reconciliation limit must be positive")
+        tenant_id = UUID(context.tenant_id)
+        try:
+            async with TenantUnitOfWork(
+                self._session_factory, context, read_only=True
+            ) as unit:
+                rows = (
+                    await unit.session.execute(
+                        select(
+                            ApprovalRequestModel,
+                            ApprovalDecisionModel,
+                            ExecutionTicketModel,
+                        )
+                        .outerjoin(
+                            ApprovalDecisionModel,
+                            and_(
+                                ApprovalDecisionModel.tenant_id
+                                == ApprovalRequestModel.tenant_id,
+                                ApprovalDecisionModel.approval_id
+                                == ApprovalRequestModel.id,
+                            ),
+                        )
+                        .outerjoin(
+                            ExecutionTicketModel,
+                            and_(
+                                ExecutionTicketModel.tenant_id
+                                == ApprovalRequestModel.tenant_id,
+                                ExecutionTicketModel.approval_id
+                                == ApprovalRequestModel.id,
+                            ),
+                        )
+                        .where(
+                            ApprovalRequestModel.tenant_id == tenant_id,
+                            ApprovalRequestModel.workflow_signal_sent_at.is_(None),
+                            ApprovalRequestModel.status.in_(
+                                (
+                                    "APPROVED",
+                                    "REJECTED",
+                                    "EXPIRED",
+                                    "CANCELLED",
+                                    "CONSUMED",
+                                )
+                            ),
+                        )
+                        .order_by(
+                            ApprovalRequestModel.updated_at,
+                            ApprovalRequestModel.id,
+                        )
+                        .limit(limit)
+                    )
+                ).all()
+                candidates: list[ApprovalSignalCandidate] = []
+                for approval, decision, ticket in rows:
+                    if approval.status == "EXPIRED":
+                        decision_id = uuid5(
+                            NAMESPACE_URL,
+                            f"approval-expiry/{approval.tenant_id}/{approval.id}/"
+                            f"{approval.resource_version}",
+                        )
+                        decision_value = "EXPIRED"
+                    elif approval.status == "CANCELLED":
+                        decision_id = uuid5(
+                            NAMESPACE_URL,
+                            f"approval-cancellation/{approval.tenant_id}/"
+                            f"{approval.id}/{approval.resource_version}",
+                        )
+                        decision_value = "CANCELLED"
+                    else:
+                        decision_id = decision.id if decision is not None else None
+                        decision_value = (
+                            decision.decision if decision is not None else "APPROVED"
+                        )
+                    candidates.append(
+                        ApprovalSignalCandidate(
+                            approval=_approval_record(approval),
+                            decision_id=decision_id,
+                            decision=cast(
+                                Literal["APPROVED", "REJECTED", "EXPIRED", "CANCELLED"],
+                                decision_value,
+                            ),
+                            decided_at=(
+                                decision.created_at
+                                if decision is not None
+                                else approval.updated_at
+                            ),
+                            ticket=(
+                                _ticket_record(ticket) if ticket is not None else None
+                            ),
+                        )
+                    )
+                return tuple(candidates)
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Approval Store is unavailable.") from error
+
+    async def ensure_approved_ticket(
+        self,
+        context: TenantContext,
+        *,
+        approval_id: UUID,
+        ticket_issue: ExecutionTicketIssue,
+        now: datetime,
+    ) -> ExecutionTicketRecord | None:
+        tenant_id = UUID(context.tenant_id)
+        try:
+            async with TenantUnitOfWork(self._session_factory, context) as unit:
+                session = unit.session
+                approval = await session.scalar(
+                    select(ApprovalRequestModel)
+                    .where(
+                        ApprovalRequestModel.tenant_id == tenant_id,
+                        ApprovalRequestModel.id == approval_id,
+                    )
+                    .with_for_update()
+                )
+                if (
+                    approval is None
+                    or approval.status != "APPROVED"
+                    or approval.expires_at <= now
+                ):
+                    return None
+                inserted_id = (
+                    await session.execute(
+                        insert(ExecutionTicketModel)
+                        .values(
+                            id=ticket_issue.credential.ticket_id,
+                            tenant_id=tenant_id,
+                            approval_id=approval.id,
+                            run_id=approval.run_id,
+                            execution_attempt=approval.execution_attempt,
+                            requester_id=approval.requester_id,
+                            tool_name=approval.tool_name,
+                            tool_schema_hash=approval.tool_schema_hash,
+                            parameter_digest=approval.parameter_digest,
+                            policy_version=approval.policy_version,
+                            deployment_id=approval.deployment_id,
+                            nonce_hash=ticket_issue.credential.nonce_hash,
+                            expires_at=min(
+                                approval.expires_at, ticket_issue.expires_at
+                            ),
+                            single_use=True,
+                            created_at=now,
+                        )
+                        .on_conflict_do_nothing(
+                            index_elements=[ExecutionTicketModel.approval_id]
+                        )
+                        .returning(ExecutionTicketModel.id)
+                    )
+                ).scalar_one_or_none()
+                ticket = await session.scalar(
+                    select(ExecutionTicketModel).where(
+                        ExecutionTicketModel.tenant_id == tenant_id,
+                        ExecutionTicketModel.approval_id == approval.id,
+                    )
+                )
+                if ticket is None or (
+                    ticket.id != ticket_issue.credential.ticket_id
+                    or ticket.nonce_hash != ticket_issue.credential.nonce_hash
+                ):
+                    return None
+                if inserted_id is not None:
+                    _audit(
+                        session,
+                        context,
+                        action="ticket.reconcile",
+                        approval_id=approval.id,
+                        result="SUCCESS",
+                        reason_codes=["EXECUTION_TICKET_REPAIRED"],
+                        metadata={"ticket_id": str(ticket.id)},
+                        occurred_at=now,
+                    )
+                return _ticket_record(ticket)
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Approval Store is unavailable.") from error
+
+    async def mark_workflow_signal_sent(
+        self,
+        context: TenantContext,
+        *,
+        approval_id: UUID,
+        sent_at: datetime,
+    ) -> bool:
+        tenant_id = UUID(context.tenant_id)
+        try:
+            async with TenantUnitOfWork(self._session_factory, context) as unit:
+                row = await unit.session.scalar(
+                    select(ApprovalRequestModel)
+                    .where(
+                        ApprovalRequestModel.tenant_id == tenant_id,
+                        ApprovalRequestModel.id == approval_id,
+                    )
+                    .with_for_update()
+                )
+                if row is None or row.status not in {
+                    "APPROVED",
+                    "REJECTED",
+                    "EXPIRED",
+                    "CANCELLED",
+                    "CONSUMED",
+                }:
+                    return False
+                if row.workflow_signal_sent_at is not None:
+                    return False
+                row.workflow_signal_sent_at = sent_at
+                _audit(
+                    unit.session,
+                    context,
+                    action="approval.signal.delivered",
+                    approval_id=row.id,
+                    result="SUCCESS",
+                    reason_codes=[],
+                    metadata={"status": row.status},
+                    occurred_at=sent_at,
+                )
+                await unit.session.flush()
+                return True
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Approval Store is unavailable.") from error
+
     async def decide(
         self,
         context: TenantContext,
@@ -512,7 +740,7 @@ async def _expire_due_in_transaction(
                 select(ApprovalRequestModel)
                 .where(
                     ApprovalRequestModel.tenant_id == UUID(context.tenant_id),
-                    ApprovalRequestModel.status == "PENDING",
+                    ApprovalRequestModel.status.in_(("PENDING", "APPROVED")),
                     ApprovalRequestModel.expires_at <= now,
                 )
                 .order_by(ApprovalRequestModel.expires_at, ApprovalRequestModel.id)
@@ -533,11 +761,14 @@ async def _expire_one(
     row: ApprovalRequestModel,
     now: datetime,
 ) -> None:
-    if row.status != "PENDING":
+    if row.status not in {"PENDING", "APPROVED"}:
         return
     row.status = "EXPIRED"
     row.resource_version += 1
     row.updated_at = now
+    # A previously delivered APPROVED signal belongs to the old resource version.
+    # The EXPIRED materialization must be delivered as a new Temporal fact.
+    row.workflow_signal_sent_at = None
     run = await session.scalar(
         select(AgentRunModel)
         .where(
@@ -597,6 +828,7 @@ def _same_request(row: ApprovalRequestModel, request: ApprovalRequestInput) -> b
         and row.deployment_id == request.deployment_id
         and row.expires_at == request.expires_at
         and row.self_approval_allowed == request.self_approval_allowed
+        and row.runtime_checkpoint_ref == request.runtime_checkpoint_ref
     )
 
 
@@ -619,6 +851,7 @@ def _approval_record(row: ApprovalRequestModel) -> ApprovalRequestRecord:
         self_approval_allowed=row.self_approval_allowed,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        runtime_checkpoint_ref=row.runtime_checkpoint_ref,
     )
 
 

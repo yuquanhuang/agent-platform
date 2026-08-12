@@ -16,6 +16,18 @@ class PlatformMetrics:
             labelnames=("process",),
             registry=self.registry,
         )
+        self.worker_cycles = Counter(
+            "agent_platform_worker_cycles_total",
+            "Bounded worker cycle and dependency recovery outcomes.",
+            labelnames=("process", "outcome"),
+            registry=self.registry,
+        )
+        self.worker_consecutive_failures = Gauge(
+            "agent_platform_worker_consecutive_failures",
+            "Current consecutive retryable dependency failures by worker process.",
+            labelnames=("process",),
+            registry=self.registry,
+        )
         self.http_requests = Counter(
             "agent_platform_http_requests_total",
             "HTTP requests completed by status class.",
@@ -51,6 +63,18 @@ class PlatformMetrics:
             labelnames=("outcome",),
             registry=self.registry,
         )
+        self.approval_reconciliation = Counter(
+            "agent_platform_approval_reconciliation_total",
+            "Approval expiry, Ticket and Signal reconciliation outcomes.",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
+        self.sandbox_reconciliation = Counter(
+            "agent_platform_sandbox_reconciliation_total",
+            "Sandbox lifecycle reconciliation outcomes.",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
         self.model_gateway_requests = Counter(
             "agent_platform_model_gateway_requests_total",
             "Normalized Model Gateway request outcomes.",
@@ -74,6 +98,14 @@ class PlatformMetrics:
         status_class = f"{status_code // 100}xx"
         self.http_requests.labels(method=method, status_class=status_class).inc()
         self.http_duration.labels(method=method).observe(duration)
+
+    def observe_worker_cycle(self, *, process: str, outcome: str) -> None:
+        self.worker_cycles.labels(process=process, outcome=outcome).inc()
+
+    def set_worker_consecutive_failures(self, *, process: str, count: int) -> None:
+        if count < 0:
+            raise ValueError("worker consecutive failure count cannot be negative")
+        self.worker_consecutive_failures.labels(process=process).set(count)
 
     def observe_outbox(
         self, *, claimed: int, published: int, retried: int, dead: int
@@ -112,6 +144,42 @@ class PlatformMetrics:
         self.model_gateway_requests.labels(
             provider=provider, mode=mode, outcome=outcome
         ).inc()
+
+    def observe_approval_reconciliation(
+        self,
+        *,
+        expired: int,
+        tickets_repaired: int,
+        signals_sent: int,
+        unresolved: int,
+    ) -> None:
+        for outcome, count in (
+            ("expired", expired),
+            ("ticket_repaired", tickets_repaired),
+            ("signal_sent", signals_sent),
+            ("unresolved", unresolved),
+        ):
+            if count:
+                self.approval_reconciliation.labels(outcome=outcome).inc(count)
+
+    def observe_sandbox_reconciliation(
+        self,
+        *,
+        examined: int,
+        destroyed: int,
+        quarantined: int,
+        cleanup_failed: int,
+        unresolved: int,
+    ) -> None:
+        for outcome, count in (
+            ("examined", examined),
+            ("destroyed", destroyed),
+            ("quarantined", quarantined),
+            ("cleanup_failed", cleanup_failed),
+            ("unresolved", unresolved),
+        ):
+            if count:
+                self.sandbox_reconciliation.labels(outcome=outcome).inc(count)
 
     def observe_model_gateway_fallback(
         self, *, source_provider: str, target_provider: str

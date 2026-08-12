@@ -7,10 +7,12 @@ from temporalio.client import Client
 
 from packages.application.artifacts import (
     ARTIFACT_DELETE_REQUESTED_EVENT,
+    ARTIFACT_DOWNLOADS_REVOKED_EVENT,
     ARTIFACT_SCAN_REQUESTED_EVENT,
     ArchiveAwareArtifactSecurityScanner,
     ArtifactDeleteProcessor,
     ArtifactDeletionObjectStore,
+    ArtifactDownloadRevocationDispatcher,
     ArtifactLifecycleDispatcher,
     ArtifactQuarantineContentReader,
     ArtifactScanDispatcher,
@@ -43,6 +45,9 @@ from packages.infrastructure.database.mcp import SqlAlchemyMcpDiscoveryStore
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxStore
 from packages.infrastructure.database.runs import SqlAlchemyRunStore
 from packages.infrastructure.observability import PlatformMetrics
+from packages.infrastructure.redis.artifact_downloads import (
+    RedisArtifactDownloadRevocationPublisher,
+)
 from packages.infrastructure.redis.events import (
     AsyncRedisClient,
     RedisRunEventNotificationPublisher,
@@ -102,6 +107,25 @@ def build_run_event_notification_dispatcher(
             event_types=frozenset({RUN_EVENTS_APPENDED_EVENT}),
         ),
         RedisRunEventNotificationPublisher(redis),
+        batch_size=settings.outbox_batch_size,
+        max_attempts=settings.outbox_max_attempts,
+    )
+
+
+def build_artifact_download_revocation_dispatcher(
+    settings: AppSettings,
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: AsyncRedisClient,
+) -> ArtifactDownloadRevocationDispatcher:
+    """Build the durable Artifact-revocation Outbox-to-Redis dispatcher."""
+
+    return ArtifactDownloadRevocationDispatcher(
+        SqlAlchemyOutboxStore(
+            session_factory,
+            event_types=frozenset({ARTIFACT_DOWNLOADS_REVOKED_EVENT}),
+        ),
+        RedisArtifactDownloadRevocationPublisher(redis),
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,
     )

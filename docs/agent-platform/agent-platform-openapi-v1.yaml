@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Agent Platform Core API
-  version: 1.4.0
+  version: 1.6.0
   description: Core development contract for Agent, Release, Session, Run, Event, Approval and Artifact.
 servers:
   - url: /
@@ -789,6 +789,94 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ArtifactDownload'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/artifact-downloads/{grant_id}:
+    parameters:
+      - name: grant_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Artifacts]
+      operationId: downloadArtifactContent
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 128
+            pattern: '^[A-Za-z0-9_-]+$'
+        - name: Range
+          in: header
+          required: false
+          description: Optional single byte range. Multiple ranges are not supported.
+          schema:
+            type: string
+            pattern: '^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$'
+      responses:
+        '200':
+          description: Revocable private Artifact content stream.
+          headers:
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+            Cache-Control:
+              schema: { type: string }
+            Content-Disposition:
+              schema: { type: string }
+            Content-Length:
+              schema: { type: string }
+            Referrer-Policy:
+              schema: { type: string }
+            X-Content-Type-Options:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Revocable private Artifact partial content stream.
+          headers:
+            Accept-Ranges:
+              schema: { type: string, const: bytes }
+            Cache-Control:
+              schema: { type: string }
+            Content-Disposition:
+              schema: { type: string }
+            Content-Length:
+              schema: { type: string }
+            Content-Range:
+              required: true
+              schema:
+                type: string
+                pattern: '^bytes [0-9]+-[0-9]+/[0-9]+$'
+            Referrer-Policy:
+              schema: { type: string }
+            X-Content-Type-Options:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '416':
+          description: The requested byte range cannot be satisfied.
+          headers:
+            Content-Range:
+              required: true
+              schema:
+                type: string
+                pattern: '^bytes \*/[0-9]+$'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /api/v1/operations/{operation_id}:

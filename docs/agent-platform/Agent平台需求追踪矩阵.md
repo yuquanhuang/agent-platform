@@ -1,6 +1,6 @@
 # Agent 平台需求追踪矩阵
 
-> 文档版本：V1.8
+> 文档版本：V2.1
 > 文档状态：开发输入基线
 
 ## 1. 使用方式
@@ -47,6 +47,7 @@
 | 兼容性 | API、RunSpec、RunEvent、Bundle、Manifest | 当前与前一生产版本契约测试 |
 | 可恢复性 | Temporal、Runtime、Outbox、Event、Sandbox | Worker/依赖重启与对账 |
 | 资源限制 | Model、Run、Sandbox、Workspace、Event | 配额、背压、限流和资源耗尽 |
+| Run 配额策略 | FR-MDL-004、Epic 7 | QuotaPolicy 管理 API、quota_policy/version、Run Admission | RLS、ETag、幂等、版本不可变、部署上限求交、并发 429/Audit |
 | 安全 | Skill、MCP、Prompt、文件、工具、Secret | SSRF、路径、供应链、Prompt Injection |
 | 可观测性 | 所有进程与跨系统调用 | Trace 关联、SLO、告警与 Runbook |
 
@@ -74,7 +75,7 @@
 | Epic 3 Session/Run | FR-RUN-001～006、FR-CON-001～006 | listSessions/createSession/getSession/updateSession/archiveSession/deleteSession/listSessionMessages/listSessionRuns/createRun/getRun/cancelRun/retryRun | chat_session、chat_message、agent_run、run_attempt、outbox | AC-002、AC-003、Session 历史/分支/归档 |
 | Epic 4 Event Store | FR-RUN-003～004、FR-CON-005 | appendRunEventCandidates/listRunEvents/streamRunEvents | run_event、run_event_counter | 并发序号、重连、终态冲突 |
 | Epic 5 Sandbox | FR-SBX-001～007、FR-CON-005 | Sandbox 内部 API、SandboxPolicy、Process/Release fencing、Workspace URI | sandbox_instance、lease、workspace | 旧 Attempt/token 拒绝、路径隔离、容量限制、生命周期、资源耗尽、对账 |
-| Epic 5 Artifact | FR-DAT-001～006 | createArtifactUpload/completeArtifactUpload/getArtifact/createArtifactDownload/deleteArtifact | artifact、workspace | 扫描、越权、过期 |
+| Epic 5 Artifact | FR-DAT-001～006 | createArtifactUpload/completeArtifactUpload/getArtifact/createArtifactDownload/downloadArtifactContent（200/206/416 单 Range）/deleteArtifact | artifact、artifact_download_grant、workspace | 扫描、越权、Token 猜测、授权撤销、过期、Range 边界、长连接撤销 |
 | Epic 6 Skill/MCP | FR-RES-003～005 | Resource API、Skill Manifest、MCP Discover | resource_definition/version | 路径、供应链、Schema Hash |
 | Epic 6 Approval | FR-APR-001～006 | listApprovals/getApproval/decideApproval | approval_request/decision、execution_ticket | AC-004、重放、自审批 |
 | Epic 7 可靠性 | FR-TMP-001～007 | Temporal 契约、Reconciliation | outbox、inbox、workflow mapping | AC-006、Replay、故障注入 |

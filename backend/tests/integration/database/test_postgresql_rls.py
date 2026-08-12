@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from packages.application.artifacts import (
     ARTIFACT_DELETE_REQUESTED_EVENT,
+    ARTIFACT_DOWNLOADS_REVOKED_EVENT,
     ARTIFACT_SCAN_REQUESTED_EVENT,
 )
 from packages.application.metadata import RequestMetadata
@@ -39,6 +40,7 @@ from packages.infrastructure.database.outbox import SqlAlchemyOutboxStore
 from packages.infrastructure.database.public import (
     SqlAlchemyArtifactStore,
     SqlAlchemyAuditQueryStore,
+    SqlAlchemyTenantContextSource,
     create_session_factory,
 )
 from packages.infrastructure.database.uow import PlatformUnitOfWork, TenantUnitOfWork
@@ -311,9 +313,9 @@ async def verify_rls(database_url: str) -> None:
             )
             await connection.execute(
                 text(
-                    "INSERT INTO tenant (id, code, name) VALUES "
-                    "(:tenant_a, 'tenant-a', 'Tenant A'), "
-                    "(:tenant_b, 'tenant-b', 'Tenant B')"
+                    "INSERT INTO tenant (id, code, name, status) VALUES "
+                    "(:tenant_a, 'tenant-a', 'Tenant A', 'ACTIVE'), "
+                    "(:tenant_b, 'tenant-b', 'Tenant B', 'DISABLED')"
                 ),
                 {"tenant_a": TENANT_A, "tenant_b": TENANT_B},
             )
@@ -328,6 +330,20 @@ async def verify_rls(database_url: str) -> None:
 
         app_engine = create_async_engine(app_url)
         try:
+            worker_contexts = await SqlAlchemyTenantContextSource(
+                create_session_factory(app_engine),
+                service_subject_id=UUID(USER_A),
+                process_name="event-worker",
+            ).list_service_contexts(limit=10)
+            assert {context.tenant_id for context in worker_contexts} == {
+                TENANT_A,
+                TENANT_B,
+            }
+            assert all(
+                context.subject_type is SubjectType.SERVICE
+                for context in worker_contexts
+            )
+
             async with app_engine.begin() as connection:
                 await connection.execute(
                     text(
@@ -561,10 +577,14 @@ async def verify_rls(database_url: str) -> None:
             await artifact_outbox.mark_published(
                 tenant_context, scan_events[0].id, now=scan_now
             )
-            download_confirmed = await artifact_store.confirm_download(
+            download_grant_id = UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+            download_token_hash = "sha256:" + "d" * 64
+            download_confirmed = await artifact_store.create_download_grant(
                 tenant_context,
+                grant_id=download_grant_id,
                 artifact_id=ARTIFACT_A,
                 owner_user_id=UUID(USER_A),
+                token_hash=download_token_hash,
                 grant_expires_at=scan_now + timedelta(minutes=5),
                 metadata=RequestMetadata(
                     request_id="req-artifact-download",
@@ -573,6 +593,35 @@ async def verify_rls(database_url: str) -> None:
                 now=scan_now,
             )
             assert download_confirmed is True
+            resolved_download = await artifact_store.resolve_download_grant(
+                grant_id=download_grant_id,
+                token_hash=download_token_hash,
+                service_subject_id=UUID(USER_A),
+                metadata=RequestMetadata(
+                    request_id="req-artifact-download-resolve",
+                    trace_id="trace-artifact-download-resolve",
+                ),
+                now=scan_now,
+            )
+            assert resolved_download is not None
+            assert resolved_download.artifact_id == ARTIFACT_A
+            opened_download = await artifact_store.record_download_open(
+                tenant_context,
+                grant_id=download_grant_id,
+                artifact_id=ARTIFACT_A,
+                metadata=RequestMetadata(
+                    request_id="req-artifact-download-open",
+                    trace_id="trace-artifact-download-open",
+                ),
+                now=scan_now,
+            )
+            assert opened_download is True
+            assert await artifact_store.is_download_grant_active(
+                tenant_context,
+                grant_id=download_grant_id,
+                artifact_id=ARTIFACT_A,
+                now=scan_now,
+            )
 
             expired = await artifact_store.get_downloadable(
                 tenant_context,
@@ -602,6 +651,23 @@ async def verify_rls(database_url: str) -> None:
             assert deletion.value is not None
             assert deletion.value.status == "ACCEPTED"
             delete_operation_id = deletion.value.id
+            revoked_download = await artifact_store.resolve_download_grant(
+                grant_id=download_grant_id,
+                token_hash=download_token_hash,
+                service_subject_id=UUID(USER_A),
+                metadata=RequestMetadata(
+                    request_id="req-artifact-download-revoked-resolve",
+                    trace_id="trace-artifact-download-revoked-resolve",
+                ),
+                now=scan_now,
+            )
+            assert revoked_download is None
+            assert not await artifact_store.is_download_grant_active(
+                tenant_context,
+                grant_id=download_grant_id,
+                artifact_id=ARTIFACT_A,
+                now=scan_now,
+            )
             replayed_deletion = await artifact_store.request_delete(
                 tenant_context,
                 artifact_id=ARTIFACT_A,
@@ -627,6 +693,18 @@ async def verify_rls(database_url: str) -> None:
                 lease_duration=timedelta(seconds=30),
             )
             assert len(delete_events) == 1
+            revocation_outbox = SqlAlchemyOutboxStore(
+                policy_factory,
+                event_types=frozenset({ARTIFACT_DOWNLOADS_REVOKED_EVENT}),
+            )
+            revocation_events = await revocation_outbox.claim_ready(
+                tenant_context,
+                now=artifact_now + timedelta(days=31, seconds=2),
+                limit=10,
+                lease_duration=timedelta(seconds=30),
+            )
+            assert len(revocation_events) == 1
+            assert revocation_events[0].aggregate_id == ARTIFACT_A
             cleanup_target = await artifact_store.get_for_delete(
                 tenant_context,
                 artifact_id=ARTIFACT_A,
@@ -922,6 +1000,7 @@ async def verify_rls(database_url: str) -> None:
                 "approval_decision",
                 "approval_request",
                 "artifact",
+                "artifact_download_grant",
                 "audit_log",
                 "budget_reservation",
                 "chat_message",
@@ -934,6 +1013,8 @@ async def verify_rls(database_url: str) -> None:
                 "model_usage",
                 "operation_record",
                 "outbox_event",
+                "quota_policy",
+                "quota_policy_version",
                 "release",
                 "resource_definition",
                 "resource_version",
@@ -944,6 +1025,7 @@ async def verify_rls(database_url: str) -> None:
                 "run_event",
                 "run_event_counter",
                 "runtime_bundle",
+                "runtime_checkpoint",
                 "sandbox_instance",
                 "sandbox_lease",
                 "skill_supply_chain_scan",

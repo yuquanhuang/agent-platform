@@ -2,7 +2,7 @@
 
 > 本文件是非冻结运行记录，不属于需求、API、事件或数据 Schema 契约。
 
-更新时间：2026-08-11
+更新时间：2026-08-12
 
 ## 开发节奏
 
@@ -65,7 +65,9 @@
 | 48 | `AP-E6-005` 一次性 Execution Ticket 和 Tool Gateway 消费 | ✅ 已完成 | 不可变短时 Ticket、nonce Hash、逐次重校验、单次消费、Run 恢复和安全审计闭环完成 |
 | 49 | `AP-E6-006` Audit 写入、查询、保留和敏感字段脱敏 | ✅ 已完成 | 冻结查询 API、统一写入脱敏、run_id/RLS/不可变保留、Vue 页面和 PostgreSQL 纵向验证完成 |
 | 50 | `AP-E6-007` AgentScope Runtime Bridge 与高风险工具纵向 E2E | ✅ 已完成 | AgentScope 暂停/审批、Ticket 取回、Tool Gateway 受控执行、ExternalExecutionResult 恢复和 PostgreSQL/Temporal 纵向验证完成 |
-| 下一步 | `AP-E7-001` Reconciliation 规则和状态修复 | ⏳ 待开始 | 装配生产 Runtime Worker，并补 Worker 恢复、Approval/Ticket/Run/Signal 对账和状态修复 |
+| 51 | `AP-E7-001` Reconciliation 规则和状态修复 | ✅ 已完成 | Approval/Ticket/Signal、Run 启动/取消和 run scope Sandbox 安全对账完成；不可唯一推导项保持 unresolved |
+| 52 | `AP-E7-002` API、Worker、Temporal、Redis、S3 故障恢复 | 🟡 进行中 | Event/Reconciliation 生产组合、Redis/MinIO、Download Gateway、Secret、Runtime checkpoint 与 Kubernetes 基线完成；AgentScope Runtime Worker 和 Sandbox Manager Provider 仍待继续 |
+| 53 | `AP-E7-003` 配额、预算、限流和背压 | 🟡 第二子阶段完成 | durable QuotaPolicy、不可变版本、RLS/RBAC/Audit 和 Run 原子准入完成；BudgetPolicy、有界排队、Sandbox/存储配额及 Event/SSE 背压待后续子阶段 |
 
 ## 执行记录
 
@@ -602,7 +604,7 @@
 - [x] 最终验证通过：`make backend-check` 为 `485 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `497 passed, 1 skipped`、前端 `76 passed`；R9 契约 31 个完整性文件、168 个 operationId、17 个生成文件零漂移，Black、Ruff、Pyright、前端门禁、`uv lock --check` 和 `git diff --check` 通过。
 - 历史问题评估：全量测试发现 Sandbox 与 Run 状态机测试同名导致 pytest collection 冲突，已仅重命名新增测试；真实 PostgreSQL 测试的精确 RLS 清单遗漏本阶段两表，已补齐并复验。两处均为测试协同修正，未改变冻结公共行为。
 - 未闭环与临时边界：真实隔离 Provider、生产 Provision Token Verifier、不可变 Policy Resolver、`RunSandboxController` HTTP Adapter 和 Sandbox Manager main 激活仍待后续部署任务；Release/Process API 未携带 fencing token，是否扩展冻结契约需要人工确认，当前未擅自变更。
-- 后续记录：Workspace 完整路径、软链接、TOCTOU、配额与生命周期归 `AP-E5-003`；Artifact 归 `AP-E5-004/005`；Provider/数据库对账归 `AP-E7-001`。真实 Redis、RunEvent 全局登记表与月分区、AP-E1-009 registry digest、AJV standalone codegen 待办继续保留。
+- 后续记录：Workspace 完整路径、软链接、TOCTOU、配额与生命周期归 `AP-E5-003`；Artifact 归 `AP-E5-004/005`；数据库侧对账规则归 `AP-E7-001`，生产 Provider Inspector 和故障恢复归 `AP-E7-002`。真实 Redis、RunEvent 全局登记表与月分区、AP-E1-009 registry digest、AJV standalone codegen 待办继续保留。
 - 下一任务建议：`AP-E5-003` 先以 Workspace URI 为单一逻辑标识，完成安全解析、受控根映射、文件句柄级根包含/软链接/TOCTOU 防护、容量限制和 Run 生命周期协同，再开放 Artifact 导出入口。
 
 ### 2026-08-09 — AP-E5-003 Workspace URI、路径隔离、容量限制与生命周期
@@ -616,7 +618,7 @@
 - [x] 验证通过：Workspace URI/路径定向 `14 passed`；真实 PostgreSQL 16 迁移/RLS 与完整资源链路 `2 passed`；带真实 PostgreSQL/Temporal 的 `make check-all` 后端 `514 passed, 1 skipped`、前端 22 个测试文件 `76 passed` 并完成生产构建。R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移，Black、Ruff、Pyright、Prettier、ESLint 和 Vue TypeScript 通过。
 - 历史问题评估：全链路首次发现 FIFO 在文件类型校验前因阻塞式只读打开导致测试和真实导出风险挂起，已在候选文件打开时增加 `O_NONBLOCK` 并复验；普通文件语义不变。测试环境禁止创建 UNIX Socket，因此未增加真实 Socket 节点用例，代码仍以打开失败或 `fstat` 非普通文件失败关闭，完整特殊文件隔离 E2E 记录到 AP-E5-006。
 - 依赖与迁移：未新增 Python/Node 依赖；部署前执行 Alembic `0022_workspace_isolation`。R10 的 Start/Cancel/Release 请求新增必填 fencing proof，内部调用方与 Sandbox Manager 必须协同发布，不能滚动混用 R9 请求模型。
-- 未闭环与临时边界：Artifact 上传/扫描归 AP-E5-004，下载/过期/删除归 AP-E5-005，真实 Provider、生产 Token Verifier、不可变 Policy Resolver、Workspace root mapper、RunSandboxController HTTP Adapter 和 Sandbox Manager main 激活仍未实现；Provider/数据库/Workspace 对账归 AP-E7-001。
+- 未闭环与临时边界：Artifact 上传/扫描归 AP-E5-004，下载/过期/删除归 AP-E5-005，真实 Provider、生产 Token Verifier、不可变 Policy Resolver、Workspace root mapper、RunSandboxController HTTP Adapter 和 Sandbox Manager main 激活仍未实现；数据库侧规则和安全清理归 AP-E7-001，真实 Provider/Workspace Inspector 归 AP-E7-002。
 - 持续待办：唯一 skip 仍是缺少 `AP_TEST_REDIS_URL` 的真实 Redis 条件测试；RunEvent “全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 registry digest 回填、AJV standalone codegen 继续保留，不因本阶段验证而视为完成。
 - 下一任务建议：`AP-E5-004` 复用本阶段 Workspace URI、root fd 和配额事实，实现 Artifact 上传、完成、Hash、隔离区对象存储及扫描状态机；不得允许客户端提供宿主路径，也不得在扫描通过前开放下载。
 
@@ -659,7 +661,7 @@
 - [x] 最终验证通过：定向 `63 passed`；`make backend-check` 为 `561 passed, 13 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `573 passed, 1 skipped`、前端 `76 passed` 并完成生产构建。R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移，`uv lock --check` 与 `git diff --check` 通过。
 - 依赖、迁移与部署：未新增 Python/Node 依赖、迁移或冻结契约。启用生产 Artifact Object Store 前必须配置 `AP_ARTIFACT_PUBLIC_ORIGINS`，并提供 Object Store/Scanner/Publisher/Reader/Revocation/Delete Adapter、TenantContextSource 和 Event Worker main；缺失时继续失败关闭。
 - 历史问题评估：定向测试首次受 macOS AF_UNIX 路径长度和执行沙箱 bind 权限影响，已改为不依赖文件系统 bind 的真实 Socket FD 类型验证，未放宽 Workspace 规则或增加条件 skip。未发现需要修改历史冻结公共语义的问题。
-- 未闭环与临时边界：应用 Origin 校验不能替代生产 egress proxy/NetworkPolicy 的逐次 DNS IP 与重定向校验；Provider/数据库/Workspace/Object Storage 孤儿对账归 `AP-E7-001`。Sandbox `artifacts:export`、Run Attachment 不可变 RunSpec、生产隔离 Provider/main 仍待独立冻结或部署实现。
+- 未闭环与临时边界：应用 Origin 校验不能替代生产 egress proxy/NetworkPolicy 的逐次 DNS IP 与重定向校验；数据库侧安全对账归 `AP-E7-001`，Provider/Workspace/Object Storage 孤儿扫描依赖生产 Inspector，归 `AP-E7-002`。Sandbox `artifacts:export`、Run Attachment 不可变 RunSpec、生产隔离 Provider/main 仍待独立冻结或部署实现。
 - 持续待办：唯一条件 skip 仍是缺少 `AP_TEST_REDIS_URL` 的真实 Redis 测试；RunEvent“全局唯一登记表 + recorded_at 月分区事件表”、AP-E1-009 registry digest、AJV standalone codegen 保持记录。
 - 下一任务建议：进入 `AP-E6-001`，先冻结 Skill Manifest 导入、不可变版本、Artifact 来源/Hash、供应链扫描、签名、权限和审计，再实现 API/Store；不得复用运行时临时文件或把未扫描 Skill 直接装入 Bundle。
 
@@ -733,7 +735,7 @@
 - 安全边界：HIGH Bundle 继续以 `POLICY_APPROVAL_REQUIRED` 阻止发布。当前完成的是内部 Ticket/Gateway 安全闭环；生产 AgentScope `RequireUserConfirmEvent/RequireExternalExecutionEvent` 暂停、审批、Ticket 取回、`ExternalExecutionResult` 恢复及高风险工具 E2E 归 `AP-E6-007`，完成前不能声称生产纵向链路可用。
 - 依赖、迁移与部署：未新增 Python/Node 依赖。部署前执行 `0028_execution_ticket_gateway`；生产必须由 Secret 管理注入至少 32 字节的 Execution Ticket HMAC 密钥。降级会删除未消费和已消费 Ticket 事实，必须先确认无待执行审批和审计依赖。
 - 历史问题评估：真实 PostgreSQL 迁移发现 Alembic `version_num VARCHAR(32)` 无法容纳原 revision，已缩短实际 revision 为 `0028_execution_ticket_gateway` 并复验；拒绝审计事务回滚属于本阶段安全缺陷，已最小修正并由重放/拒绝集成测试锁定。未修改冻结公共契约或为验证放宽 HIGH 策略。
-- 未闭环与临时边界：生产 MCP Gateway、Secret Broker、工具网络 Executor 尚未实现；Approval Signal、Ticket、Run 与外部执行状态对账归 `AP-E7-001`。唯一条件 skip 仍是未配置 `AP_TEST_REDIS_URL` 的真实 Redis 测试。
+- 未闭环与临时边界：生产 MCP Gateway、Secret Broker、工具网络 Executor 尚未实现；Approval Signal、Ticket 和 Run 安全对账归 `AP-E7-001`，真实外部执行状态 Inspector 与依赖恢复归 `AP-E7-002`。唯一条件 skip 仍是未配置 `AP_TEST_REDIS_URL` 的真实 Redis 测试。
 - 持续待办：RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox/Workspace/Object Store 孤儿对账、生产 Event Worker/TenantContextSource、Sandbox `artifacts:export`/Run Attachment 继续保留。
 - 下一任务建议：进入 `AP-E6-006`，先盘点现有 `audit_log` 生产者和敏感字段，统一写入、查询权限、分页、保留/归档与脱敏契约；不得在 Audit API 中返回 Ticket nonce、Secret、完整工具参数或未脱敏外部响应。
 
@@ -761,6 +763,111 @@
 - [x] 最终门禁通过：`make check` 后端 `652 passed, 14 skipped`、前端 26 个测试文件 `85 passed` 并完成生产构建；真实 PostgreSQL/Temporal `make check-all` 后端 `665 passed, 1 skipped`、前端 `85 passed`；R10 的 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移。
 - 历史问题评估：全量门禁发现 Skill Service 的 AVAILABLE Artifact 测试夹具使用固定 `2026-08-11` 过期时间，当前日期到达边界后真实过期校验使 4 个测试失败；生产逻辑正确且未放宽，仅将“长期有效”测试夹具调整为 `2099-01-01` 并复验。`execution_tickets.py` 曾被怀疑存在四元素 tuple 解包问题，核对真实源码后确认不存在，未做修改。
 - 依赖、迁移与契约：未新增 Python/Node 依赖或数据库迁移；R10 公共 API、RunEvent、RunSpec、Temporal V1 DTO 和前端生成代码不变。Bundle compiler 版本提升属于安全产物迁移，回滚到旧代码前必须确认没有继续服务的新 `1.2.0` Bundle。
-- 未闭环与临时边界：`runtime-worker-agentscope/main.py` 仍失败关闭；生产 `AgentScopeSessionFactory`、可信 RunSpec/Bundle Tool Binding Resolver、加密受控对象存储 State Store、MCP Gateway、Secret Broker 和真实外部工具 Executor 尚未装配，因此不能声称生产 Runtime Worker 已可部署运行。Worker 崩溃后的 checkpoint 恢复、Approval/Ticket/Run/Signal 对账和周期 expiry sweep 归 `AP-E7-001`。
+- 未闭环与临时边界：`runtime-worker-agentscope/main.py` 仍失败关闭；生产 `AgentScopeSessionFactory`、可信 RunSpec/Bundle Tool Binding Resolver、加密受控对象存储 State Store、MCP Gateway、Secret Broker 和真实外部工具 Executor 尚未装配，因此不能声称生产 Runtime Worker 已可部署运行。按冻结执行计划，Approval/Ticket/Run/Signal 对账和周期 expiry sweep 归 `AP-E7-001`；生产 Worker 装配、checkpoint 和依赖故障恢复归 `AP-E7-002`。
 - 持续待办：唯一条件 skip 仍是缺少 `AP_TEST_REDIS_URL` 的真实 Redis 测试；RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment、Audit 归档/source_ip/client 和 Provider/数据库/对象存储孤儿对账继续保留。
-- 下一任务建议：进入 `AP-E7-001`，优先完成生产 Runtime Worker 装配和崩溃恢复/对账规则；不得用测试 Stub、内存 State Store 或未受控外部 Executor 伪装生产可用性。
+- 下一任务建议：进入 `AP-E7-001`，先完成可由 durable facts 唯一推导的幂等对账；生产 Runtime Worker 装配和依赖故障恢复按冻结计划留到 `AP-E7-002`，不得用测试 Stub、内存 State Store 或未受控外部 Executor 伪装生产可用性。
+
+### 2026-08-11 — AP-E7-001 Reconciliation 规则和状态修复
+
+- [x] 新增 Approval Reconciler 和 `workflow_signal_sent_at` Guard：PENDING/APPROVED 到期、APPROVED/REJECTED/EXPIRED/CANCELLED/CONSUMED 未投递事实均可重新识别；缺失 APPROVED Ticket 只通过确定性 HMAC Issuer 幂等补偿，Signal 成功后写一次 Audit 和投递标记。
+- [x] 修正跨状态协同：投递标记属于当前决策版本，`APPROVED → EXPIRED` 时清空旧标记，确保 Ticket 到期或周期过期后仍会生成新的 EXPIRED Signal 候选，不把旧批准投递误当成新终态已投递。
+- [x] Run 既有 CREATED/CANCELLING 对账保持确定性 Workflow ID、稳定 Cancel Signal 和“不直接写 CANCELLED”边界；启动映射、Outbox 恢复和取消 Signal 成功均补齐同事务/后置幂等 Audit。
+- [x] 新增 Sandbox Reconciler：检测终态 Run 的 run scope Sandbox 和过期 run Lease，统一调用 `SandboxLifecycleService.destroy`；只有 Provider 确认才写 TERMINATED，不确定进入 QUARANTINED/失败计数。session scope 过期 Lease 暂记 unresolved，避免破坏可复用 Session Sandbox。
+- [x] Reconciliation Worker runner 升级为 Run/Approval/Sandbox tenant-scoped 有界组合，增加低基数 outcome 指标；生产 `main.py` 仍失败关闭，真实 TenantContextSource、Provider、Temporal Client 和 Secret 由 `AP-E7-002` 部署装配。
+- [x] 新增 `0030_approval_signal_reconcile` 和 `0031_sandbox_reconcile_index`。真实 PostgreSQL 首轮发现 downgrade 的 Check 名被命名约定二次加前缀并触发 63 字符截断，已使用 `op.f(...)` 固定真实名称并通过完整升降级。
+- [x] 验证通过：定向测试 `66 passed`，Ticket 到期回归 `18 passed`，真实 PostgreSQL Resource Registry 纵向测试 `1 passed`；`make backend-check` 为 `656 passed, 14 skipped`；真实 PostgreSQL/Temporal `make check-all` 为后端 `669 passed, 1 skipped`、前端 26 个测试文件 `85 passed`，R10 契约和 17 个生成文件零漂移。
+- 依赖、迁移与部署：未新增 Python/Node 依赖；部署前顺序执行 `0030`、`0031`。Reconciliation 进程必须注入数据库、Temporal、确定性 Ticket HMAC Issuer、Sandbox Provider 和显式 TenantContextSource，缺失时继续失败关闭。
+- 未自动修复并已保留记录：Temporal 已终态但 Run 非终态缺少可信 Workflow result/history；Run 终态缺事件无法重建 usage/warnings/result_quality/cancel actor/stage；Provider/Object Store 孤儿、RuntimeSession、Secret Capability、Artifact 对象一致性缺少生产 Inspector；DEAD Outbox 缺少持久失败分类；Deployment 无 ACTIVE 时不能猜测选择。这些不伪造事实，归 `AP-E7-002` 或后续冻结契约扩展。
+- 持续待办：真实 Redis 仍是唯一条件 skip；RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment、Audit 归档/source_ip/client 继续保留。
+- 下一任务建议：进入 `AP-E7-002`，先装配可部署的 Reconciliation/Runtime Worker 和真实依赖故障恢复，再接入 Provider/Object Store Inspector；不得用猜测终态、填零 usage 或 blanket 重放 DEAD Outbox 代替可信恢复事实。
+
+### 2026-08-11 — AP-E7-002 故障恢复第一子阶段
+
+- [x] 新增 Event/Reconciliation Worker 共用的有界恢复循环：明确识别数据库连接、Redis、Temporal RPC 和传输层短暂错误，指数退避可被停机立即中断；成功周期清零连续失败，持续失败达到上限后抛出原异常并交由部署编排重启。
+- [x] 未知应用异常保持立即失败，不用宽泛重试掩盖代码错误；恢复的是下一轮 tenant-scoped 有界扫描，不直接重放未知外部副作用，继续依赖既有 Outbox、fencing、Approval/Ticket 和 durable fact 幂等边界。
+- [x] 新增固定 `process/outcome` 的 Worker cycle Counter 和固定 `process` 的连续失败 Gauge，不使用 tenant、run、workflow、approval 或 sandbox 高基数标签。
+- [x] 定向恢复、runner 和 metrics 测试 `10 passed`；`make backend-check` 为 `661 passed, 14 skipped`，Black、Ruff、Pyright strict 通过。`make contract-check` 和 `make check` 通过，前端 26 个测试文件、`85 passed` 并完成生产构建；真实 PostgreSQL/Temporal `make check-all` 为后端 `674 passed, 1 skipped`、前端 `85 passed`，R10 契约和 17 个生成文件零漂移。
+- 已复核现有协同：Redis 仅作为 SSE 唤醒通道，订阅不可用时从 PostgreSQL sequence 轮询补齐；Temporal Workflow 已覆盖 inspect-before-recover，UNKNOWN 状态不创建新 Attempt；Artifact scan/delete Dispatcher 已有超时、有界退避和失败收敛。
+- 历史边界评估：`runtime-worker-agentscope/main.py` 是有意的失败关闭注册占位，现有代码和历史记录均不能证明生产 SessionFactory、加密 State Store、不可变 Tool Binding、Secret Broker、MCP Gateway 和外部 Executor 已可装配，因此本子阶段未擅自激活。
+- 未闭环与临时边界：生产 Secret Backend/TenantContextSource、Event/Reconciliation main 装配、真实 S3/MinIO Adapter 与 Object Store Inspector、AgentScope Runtime checkpoint/Controller 仍待继续。Docker daemon 已启动，但 `redis:8.0-alpine` 从 Docker Hub 拉取连续连接超时，本机也无 `redis-server`，因此真实 Redis 仍是唯一条件 skip；S3 故障注入因尚无生产 Adapter 不能用 Stub 冒充通过。
+- 持续待办：RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment、Audit 归档/source_ip/client 和可信 Workflow 终态物化继续保留。
+
+### 2026-08-11 — AP-E7-002 故障恢复第二子阶段
+
+- [x] 新增 `SqlAlchemyTenantContextSource`：只通过显式 Platform UoW 查询 ACTIVE/DISABLED Tenant，单次最多 500 个，以 UUID keyset 游标跨轮轮转；每轮生成同一 trace 的 SERVICE `TenantContext`，服务主体由部署显式注入，不伪造用户 membership。DISABLED 继续处理禁用前的 Outbox、Run 和清理事实，但用户访问仍由既有 IAM ACTIVE 校验阻断。
+- [x] Event Worker 支持最多 16 个固定 Dispatcher 的顺序组合并汇总 claimed/published/retried/dead；仍保留每个业务 Dispatcher 自己的事件类型、超时、幂等和 Dead Letter 语义，不建立通用 blanket 重放器。
+- [x] 新增 Reconciliation 生产组合：Run/Approval/Sandbox 数据库 Store、Temporal Run Control 和显式 Sandbox Cleanup/Ticket Issuer 组成现有 `PlatformReconciler`，没有复制或旁路 AP-E7-001 的状态修复规则。
+- [x] Event/Reconciliation process wrapper 安装 SIGINT/SIGTERM，维护 `process_up` 并使用可中断恢复循环完成优雅停机。`main.py` 继续失败关闭，直到部署层完成 Secret Reference 和真实 Provider/Redis/Sandbox/Executor 注入。
+- [x] 修正第一子阶段跨层协同：Temporal Run Control 会把 RPC 故障转换为 retryable `DEPENDENCY_UNAVAILABLE`，此前 Worker classifier 未识别该稳定应用错误；现仅对 `503 + DEPENDENCY_UNAVAILABLE + retryable` 进入恢复，400/409 等业务错误仍立即失败。
+- 历史协同评估：最初实现只枚举 ACTIVE Tenant，会使禁用租户的既有 Outbox、Run、Approval、Artifact 和 Sandbox 清理停止；已在全链路评估中改为 ACTIVE/DISABLED operational tenant，仍排除 DELETING/DELETED，未放宽用户鉴权或新业务写入。
+- [x] 代码历史问答未找到 Event Worker main 的原始 AI 会话；按源码客观边界确认该入口是有意的失败关闭，不能仅因 runner/composition 已存在就报告生产进程可用。
+- [x] 定向 Worker、Event、Reconciliation、Tenant Source 和 Temporal Control 测试 `16 passed`；`make backend-check` 为 `667 passed, 14 skipped`，真实 PostgreSQL 活动租户查询/RLS 集成测试 `1 passed`。最终真实 PostgreSQL/Temporal `make check-all` 为后端 `680 passed, 1 skipped`、前端 26 个测试文件 `85 passed` 并完成生产构建；R10 契约和 17 个生成文件零漂移。
+- 未闭环与临时边界：生产 Secret Backend、Event/Reconciliation main 激活、Redis Client 构造、S3/MinIO Adapter/Object Store Inspector、AgentScope Runtime checkpoint/Controller 仍未完成；本阶段提供的是可部署组合边界，不是包含凭证猜测的默认入口。
+- 持续待办：真实 Redis、RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment、Audit 归档/source_ip/client、可信 Workflow 终态物化和 Provider/Object Store 孤儿对账继续保留。
+
+### 2026-08-11 — AP-E7-002 第三子阶段启动与 Object Store 卡点确认
+
+- [x] 第二子阶段最终真实依赖门禁已完成：R10 契约和 17 个生成文件零漂移，后端 `680 passed, 1 skipped`，前端 26 个测试文件 `85 passed` 并完成生产构建；`uv lock --check` 与 `git diff --check` 通过。唯一 skip 仍为未配置真实 Redis。
+- [x] 复核 Secret 配置边界：`AppSettings` 只保存 Secret Reference 和 Backend 选择，不解析 Secret 明文；生产组合根必须显式选择 Vault/KMS Adapter、解析所需引用并注入 API/Worker，缺失时继续失败关闭。代码历史问答未找到可证明既定生产 Provider 的原始会话，因此不猜测选型。
+- Object Store 人工确认卡点：现有 Artifact 删除流程要求先 `revoke_download_access`，即使随后对象删除暂时失败，既有下载 URL 也必须立即失效；标准 S3/MinIO 直签 URL 在过期前不能单独撤销。推荐使用平台签发的可撤销 Download Gateway URL，由网关在每次读取时校验短期授权事实，再访问私有 Bucket；若坚持 S3 直签，需要调整冻结安全语义并重新评估删除失败窗口。
+- 环境状态更新：Docker daemon 当前未运行，本机仍无 `redis-server`/`valkey-server`/MinIO；此前 Redis 镜像拉取受 Docker Hub 超时阻断。未用内存 Stub 或 SDK Mock 冒充真实 Redis/S3 故障注入。
+- 下一步等待确认后执行：选定 Artifact Download Gateway 或直签基线调整方案，再实现 S3/MinIO Adapter、真实故障注入和 Event Worker Artifact Dispatcher 装配；生产 Secret Backend 仍需在 Vault/具体云 KMS 间确认。
+
+### 2026-08-11 — AP-E7-002 第三子阶段：可撤销 Artifact Download Gateway
+
+- [x] 采用私有 S3/MinIO + 平台 Download Gateway：R11 Core OpenAPI 新增 `downloadArtifactContent`，既有 `ArtifactDownload` 结构保持不变；Gateway URL 是短期 bearer capability，不回退为对象存储直签 URL。
+- [x] 新增不可变 `artifact_download_grant` 和迁移 `0032`：Token 明文只返回一次，数据库仅保存 SHA-256；Grant 绑定不可修改、只能撤销一次且禁止删除。Artifact 删除在同一事务先撤销全部 Grant，再写删除 Outbox 和 Audit。
+- [x] Gateway 每次请求重新校验 Grant、Artifact 状态/有效期和 canonical `artifact://` URI，以显式 SERVICE `TenantContext` 打开私有对象；对象打开后再次锁定校验 Grant/Artifact 并写 `artifact.download.open`，撤销竞态失败时关闭流并返回统一 404。
+- [x] 真实 PostgreSQL 首轮发现 Platform UoW 可见 Grant、但 JOIN 的 Artifact 被原租户 RLS 隐藏；已改为 Platform UoW 只解析 Grant，随后使用部署注入的 SERVICE subject 和租户上下文读取 Artifact，未扩大 `artifact` 平台级 RLS 权限。
+- [x] 验证通过：Download Gateway 定向后端 `93 passed`，真实 PostgreSQL 迁移/RLS/撤销链路 `1 passed`；`make backend-check` 为 `675 passed, 14 skipped`，前端 26 个测试文件 `85 passed` 并完成生产构建；真实 PostgreSQL/Temporal `make check-all` 为后端 `688 passed, 1 skipped`、前端 `85 passed`；R11 的 31 个完整性文件、169 个 operationId 和 17 个生成文件零漂移。
+- 生产边界：当前仓库尚无真实 S3/MinIO SDK Adapter，不能声称 upload/inspect/promote/delete/trusted-reader 或 MinIO 故障注入已完成；Gateway 撤销只能阻止后续请求，不能主动中断已建立的长下载连接。反向代理 query token 脱敏、Range/断点续传、带宽/并发限制、egress/proxy 仍需生产加固。
+- 持续待办：真实 Redis/MinIO 故障注入、生产 Secret Backend、Event/Reconciliation main、AgentScope Runtime checkpoint/Controller、Object Store/Provider Inspector；以及 RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AP-E1-009 Registry digest、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment、Audit 归档/source_ip/client 和可信 Workflow 终态物化继续保留。
+
+### 2026-08-11 — AP-E7-003 第一子阶段：Run 并发硬限制与原子准入
+
+- [x] 新增配置驱动的 Run capacity policy，覆盖 tenant、user、Agent 和 Runtime 类型（AgentScope/Codex）非终态并发限制；local/test 未配置时保持既有行为，staging/production 缺少任一配置则 API 组合失败关闭。
+- [x] Run create/retry 在既有 Session active guard、Bundle Admission 和 Deployment 解析之后执行容量准入；按稳定 key 排序获取 PostgreSQL transaction advisory lock，在同一租户事务统计非终态 Run 并写入 Run/Outbox。
+- [x] 超限统一映射冻结 `429 RATE_LIMITED`，并在独立 Tenant UoW 持久化 `run.create.admission_deny`/`run.retry.admission_deny` DENIED Audit；原事务回滚，失败幂等 claim 不残留。
+- [x] 真实 PostgreSQL 并发验证覆盖两个不同 Session 的竞争、审计、幂等回滚以及 retry 拒绝；定向测试 34 passed，真实 Resource Registry 1 passed。
+- [x] 最终门禁通过：`make backend-check` 为 685 passed、14 skipped；`make contract-check`、`make frontend-check` 和 `make check` 通过；真实 PostgreSQL/Temporal `make check-all` 为后端 698 passed、1 skipped，前端 85 passed 并完成生产构建。
+- 契约、依赖与迁移：未修改 R11 OpenAPI/RunEvent/RunSpec/Temporal 契约，未新增迁移或 Python/Node 依赖；R11 生成代码零漂移。
+- 历史问题评估：本阶段发现的仅为新增类型标注和导入排序问题，已在静态检查前修复；未发现需要扩大范围修改的历史业务缺陷。`.npmrc` 权限告警和 Rollup 上游 PURE 注释为既有非阻断环境告警。
+- 未完整实现与临时边界：当前 Workflow 没有真实等待队列，因此本轮明确采用 429 硬拒绝；集群级并发、quota/budget 持久化、Model 费用预算、Sandbox/Workspace/Artifact 配额、Task Queue/Event/SSE 背压和容量告警均未完成，不以配置占位或测试替身宣称完成。
+- 下一子阶段建议：先冻结 durable `quota_policy`/`budget_policy` 和有界队列/取消/Replay 契约，再分别实现预算扣减、集群级并发、Sandbox/存储配额及 Event/SSE 背压；AP-E7-002 的真实 Redis/MinIO、生产 Secret/main、Runtime checkpoint 与 Adapter 待办继续并行保留。
+
+### 2026-08-11 — AP-E7-002 生产依赖与 Kubernetes 收口
+
+- [x] `EnvSecretBackend` 仅解析 `secret://env/AP_SECRET_*`，空值、超长、NUL、非法名称和缺失均失败关闭；Vault 保留 Adapter 选择但未配置时明确拒绝启动。MinIO 凭证使用单一 JSON Secret，明文不进入日志或数据库。
+- [x] 新增统一 MinIO Adapter，覆盖上传授权、quarantine inspection/hash、受限扫描复制、trusted promote、全量/单 Range 流、并发预算和幂等删除；真实 Redis/MinIO 容器验证覆盖正常链路、暂停故障分类和恢复。
+- [x] Event Worker main 已真实装配 PostgreSQL、Temporal、Redis、MinIO、TenantContextSource，以及 Temporal、RunEvent、Artifact scan/delete、Artifact download revoke 五类隔离 Dispatcher；持续依赖故障仍由有界恢复循环退出交给 Kubernetes 重启。
+- [x] Download Gateway 冻结 Core OpenAPI 1.6.0 的 200/206/416 单 Range 语义；应用日志回归锁定只记录 path、不记录 query token。长连接订阅 Redis artifact 撤销 wake-up，并按配置周期复核 PostgreSQL Grant/Artifact；Redis 故障退化为数据库轮询，最大连接时长有上限，Ingress 示例关闭 query access log 并执行代理带宽整形。
+- [x] AgentScope durable checkpoint 使用 PostgreSQL 不可变元数据和 MinIO AES-256-GCM 密文，AAD、明文 Hash/大小、Tenant/Run/Attempt/fencing token 全部复核；ApprovalRequest 固化 `runtime_checkpoint_ref`。新增迁移 `0033_runtime_checkpoint`，定向 checkpoint/Approval/ORM/迁移测试 `65 passed`。
+- [x] 新增受控 backend Dockerfile 和 Kubernetes Event Worker base：非 root、只读根文件系统、禁提权、默认拒绝 NetworkPolicy、独立 ServiceAccount、显式 Secret keyRef。现有 CI 仍负责构建扫描并以 Registry digest 覆盖开发 tag。
+- [x] 最终门禁通过：R12 的 31 个完整性文件、169 个 operationId 和 17 个生成文件零漂移；`make backend-check` 为 `718 passed, 18 skipped`，`make check` 前端 `85 passed` 并完成生产构建；加入部署契约测试后的真实 PostgreSQL/Temporal/Redis/MinIO `make check-all` 为后端 `736 passed, 2 skipped`、前端 `85 passed`。两个 skip 是显式故障模式开关，正常链路真实 Redis/MinIO 均已执行。
+- 历史问题评估：真实 PostgreSQL 首轮发现 AgentScope E2E 旧 State Store 仍返回非 canonical `state://<tenant>/...`，以及固定 RLS 表清单未纳入 `runtime_checkpoint`；已只更新测试事实与清单，两个真实 PostgreSQL 回归 `2 passed`，未放宽迁移 Guard 或生产约束。
+- 未伪装完成的边界：Reconciliation main 缺 Sandbox Manager workload identity/tenant 传输契约；AgentScope Runtime Worker 缺生产 SessionFactory、RunSpec/Bundle Loader、Tool Binding、Gateway/Executor 和 Temporal Activity 完整组合；API 生产组合仍受真实 OIDC/JWKS 与受信 Runtime Target 配置约束。对应进程继续 fail-closed，未用 no-op/Stub 或 `replicas: 0` 宣称可用。
+- 后续必须保留：外部 AV/Malware Scanner Adapter、CI Registry digest 回填与生产 CIDR overlay；RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AJV standalone codegen、Sandbox `artifacts:export`/Run Attachment、Audit 归档和可信 Workflow 终态物化继续记录。
+
+### 2026-08-11 — AP-E7-002 Reconciliation Worker 服务身份与生产组合
+
+- [x] R13 冻结 Kubernetes ServiceAccount + Ed25519/EdDSA 短期 Service Token：`iss/sub/aud=sandbox-manager/tenant_id/permissions/iat/nbf/exp/jti` 为必需 Claim，默认 TTL 60 秒、最大 300 秒，`kid` 受控；tenant 只从验签 Claim 构造，普通 `X-Tenant-ID` 不参与身份。
+- [x] 新增 `Ed25519ServiceTokenIssuer` 和 Sandbox Manager 验证 Adapter；签名私钥只进入 Reconciliation Worker，Sandbox Manager 只使用公钥，允许主体清单和既有 `internal:sandbox_manage` 权限继续失败关闭。
+- [x] 新增 `HttpSandboxCleanupController`，以短期 Bearer Token 调用冻结 `DELETE /internal/v1/sandboxes/{sandbox_id}`，校验响应资源/动作匹配；网络、超时、5xx 和非法响应收敛为 retryable dependency failure，401/403/404 不猜测成功。
+- [x] 激活 `apps.reconciliation_worker.main`：显式解析 PostgreSQL、Temporal、Sandbox Manager、SERVICE subject、Service Token 私钥和独立 Execution Ticket HMAC Key，复用 TenantContextSource、PlatformReconciler 与有界恢复循环；任一依赖缺失继续启动失败。
+- [x] 提供不进入默认 Kustomization 的受控 Reconciliation Deployment、ServiceAccount、Secret keyRef 和 NetworkPolicy。Sandbox Manager 真实 Provider/Policy Resolver/Provision Token Verifier 尚未装配前，不用 no-op 或 `replicas: 0` 冒充服务 E2E 完成。
+- 依赖与部署：新增直接依赖 `pyjwt[crypto]>=2.13.0` 并同步 `uv.lock`。部署时需提供稳定 Reconciliation SERVICE UUID、Ed25519 Key Pair、独立至少 32 字节 Execution Ticket Key、Sandbox Manager TLS 地址和收紧后的依赖 CIDR；真实值不得提交仓库或发送到开发记录。
+- [x] 最终验证：身份/HTTP Cleanup/进程/Sandbox API/配置/部署契约定向 `51 passed`；Ruff、Pyright strict、R13 契约与 17 个生成文件零漂移。`make check` 为后端 `727 passed, 18 skipped`、前端 `85 passed` 并完成生产构建；真实 PostgreSQL/Temporal/Redis `make check-all` 为后端 `742 passed, 3 skipped`、前端 `85 passed`。3 个 skip 为未读取既有 MinIO 容器凭证的 2 个条件测试和显式 Redis-unavailable 故障模式，MinIO Adapter 本轮未改动且上一阶段真实链路已通过。
+- 环境记录：`ap-e7-002-redis` 与 `ap-e7-002-minio` 已恢复运行，未停止或删除。Kubernetes 9 个 YAML 文件解析通过；Reconciliation Deployment 继续不进入默认 Kustomization，直到真实 Sandbox Manager Provider/Service 可用。
+
+### 2026-08-12 — AP-E7-003 第二子阶段：durable QuotaPolicy
+
+- [x] R14 冻结 7 个 QuotaPolicy 管理 operationId：每租户最多一个 Policy，创建即 ACTIVE；更新创建不可变 `quota_policy_version` 并原子切换 current version，启用/禁用使用 ETag/CAS、幂等和 Audit。
+- [x] 新增领域模型、管理 Service、FastAPI Router、SQLAlchemy Store、ORM 与 `0034_quota_policy`；两表启用 FORCE RLS，版本由数据库 Trigger 保证不可修改/删除，`tenant.quota_policy_id` 形成当前策略绑定。
+- [x] ACTIVE 租户策略接入 Run create/retry 原事务；与 staging/production 必填的部署 capacity 逐维取最小值。租户未配置的维度继承部署限制，策略 DISABLED 时完整回退部署限制，租户策略不能扩大平台硬上限。
+- [x] 资源 OpenAPI 升至 `1.2.0`，同步生成 17 个 Python/TypeScript 文件；修正两端生成契约测试中遗留的 `127/169` 固定 operationId 数量为 R14 的 `134/176`，并增加 QuotaPolicy 代表性 operationId 断言。该修正只同步冻结清单，不改变运行语义。
+- [x] 验证通过：QuotaPolicy/Capacity/API/Composition 定向 `16 passed`；真实 PostgreSQL migration/RLS 完整升降级与 Resource Registry/Run 协同定向分别 `1 passed`；`make backend-check` 为 `732 passed, 18 skipped`；`make frontend-check` 为 26 个测试文件、`85 passed` 并完成生产构建；`make check`、`git diff --check` 通过。
+- [x] 最终真实依赖门禁通过：PostgreSQL、Temporal、Redis、MinIO 正常链路下 `make check-all` 为后端 `748 passed, 2 skipped`、前端 `85 passed`；R14 的 31 个完整性文件、176 个唯一 operationId 和 17 个生成文件零漂移。两个 skip 是显式 Redis/MinIO unavailable 故障注入开关，正常链路均实际执行。
+- 迁移与兼容：部署前执行 `0034_quota_policy`；新增 API 为向后兼容扩展，未新增 Python/Node 依赖。回滚会删除 Policy/Version 和 Tenant 绑定，执行前必须确认没有依赖租户级配额的生产 Run 准入。
+- 未完整实现与后续待办：BudgetPolicy 周期 Token/费用预算、可信价格表与聚合；有界队列、最大等待、取消和 Temporal Replay；集群级全局并发；Sandbox/Workspace/Artifact 配额；Event/SSE 背压、容量指标、SLO 和告警均保留到后续子阶段，不用占位 API 或配置冒充完成。
+- 持续保留的非阻塞项：真实 OIDC/JWKS、外部 AV/Malware Scanner、Registry digest 与生产 CIDR overlay、Sandbox Manager 真实 Provider/Policy Resolver/Provision Token Verifier、AgentScope Runtime Worker 生产组合、RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AJV standalone codegen、Run Attachment、Audit 归档和可信 Workflow 终态物化。
+- 下一子阶段建议：进入 AP-E7-003 子阶段 C，先冻结 BudgetPolicy 的周期、币种/精度、价格版本、Token/费用事实来源、预约/结算/释放与幂等契约，再实现 PostgreSQL 原子预算准入；不要与排队和存储配额在同一轮铺开。

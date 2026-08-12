@@ -7,9 +7,12 @@ import type { ApiTransport } from '@/api/generated/transport';
 
 describe('generated contracts', () => {
   it('covers both frozen OpenAPI operation catalogs', () => {
-    expect(coreOperationIds).toHaveLength(41);
-    expect(resourceOperationIds).toHaveLength(127);
-    expect(new Set([...coreOperationIds, ...resourceOperationIds]).size).toBe(168);
+    expect(coreOperationIds).toHaveLength(42);
+    expect(coreOperationIds).toContain('downloadArtifactContent');
+    expect(resourceOperationIds).toHaveLength(134);
+    expect(resourceOperationIds).toContain('createQuotaPolicy');
+    expect(resourceOperationIds).toContain('listQuotaPolicyVersions');
+    expect(new Set([...coreOperationIds, ...resourceOperationIds]).size).toBe(176);
   });
 
   it('keeps RunEvent as a discriminated union', () => {

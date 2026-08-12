@@ -101,6 +101,163 @@ class AppUserModel(Base):
     )
 
 
+class QuotaPolicyModel(Base):
+    """Tenant singleton selecting one active immutable Run capacity version."""
+
+    __tablename__ = "quota_policy"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_quota_policy__tenant_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_quota_policy__tenant_id_id"),
+        CheckConstraint("status IN ('ACTIVE', 'DISABLED')", name="status"),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "current_version_id"],
+            [
+                "quota_policy_version.tenant_id",
+                "quota_policy_version.policy_id",
+                "quota_policy_version.id",
+            ],
+            name="fk_quota_policy__current_version",
+            ondelete="RESTRICT",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        Index("ix_quota_policy__tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'ACTIVE'")
+    )
+    current_version_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class QuotaPolicyVersionModel(Base):
+    """Immutable tenant Run capacity policy version."""
+
+    __tablename__ = "quota_policy_version"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "policy_id",
+            "version_no",
+            name="uq_quota_policy_version__tenant_policy_version",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "policy_id",
+            "id",
+            name="uq_quota_policy_version__tenant_policy_id",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "policy_id"],
+            ["quota_policy.tenant_id", "quota_policy.id"],
+            name="fk_quota_policy_version__tenant_policy",
+            ondelete="RESTRICT",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint("version_no >= 1", name="version_no"),
+        CheckConstraint(
+            "max_nonterminal_runs_per_tenant IS NOT NULL OR "
+            "max_nonterminal_runs_per_user IS NOT NULL OR "
+            "max_nonterminal_runs_per_agent IS NOT NULL OR "
+            "max_nonterminal_agentscope_runs IS NOT NULL OR "
+            "max_nonterminal_codex_runs IS NOT NULL",
+            name="at_least_one_limit",
+        ),
+        CheckConstraint(
+            "max_nonterminal_runs_per_tenant IS NULL OR "
+            "max_nonterminal_runs_per_tenant BETWEEN 1 AND 1000000",
+            name="tenant_limit",
+        ),
+        CheckConstraint(
+            "max_nonterminal_runs_per_user IS NULL OR "
+            "max_nonterminal_runs_per_user BETWEEN 1 AND 1000000",
+            name="user_limit",
+        ),
+        CheckConstraint(
+            "max_nonterminal_runs_per_agent IS NULL OR "
+            "max_nonterminal_runs_per_agent BETWEEN 1 AND 1000000",
+            name="agent_limit",
+        ),
+        CheckConstraint(
+            "max_nonterminal_agentscope_runs IS NULL OR "
+            "max_nonterminal_agentscope_runs BETWEEN 1 AND 1000000",
+            name="agentscope_limit",
+        ),
+        CheckConstraint(
+            "max_nonterminal_codex_runs IS NULL OR "
+            "max_nonterminal_codex_runs BETWEEN 1 AND 1000000",
+            name="codex_limit",
+        ),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        Index(
+            "ix_quota_policy_version__tenant_policy_created",
+            "tenant_id",
+            "policy_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    policy_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    version_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_nonterminal_runs_per_tenant: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    max_nonterminal_runs_per_user: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    max_nonterminal_runs_per_agent: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    max_nonterminal_agentscope_runs: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    max_nonterminal_codex_runs: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class TenantMemberModel(Base):
     """Authoritative user membership and authorization invalidation version."""
 
@@ -1629,6 +1786,81 @@ class RunAttemptModel(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class RuntimeCheckpointModel(Base):
+    """Durable immutable AgentScope state metadata backed by private object storage."""
+
+    __tablename__ = "runtime_checkpoint"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["agent_run.tenant_id", "agent_run.id"],
+            name="fk_runtime_checkpoint__tenant_run__agent_run",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_runtime_checkpoint__tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "execution_attempt",
+            "sequence_no",
+            name="uq_runtime_checkpoint__tenant_run_attempt_sequence",
+        ),
+        UniqueConstraint(
+            "tenant_id", "state_ref", name="uq_runtime_checkpoint__tenant_state_ref"
+        ),
+        CheckConstraint("execution_attempt >= 1", name="execution_attempt"),
+        CheckConstraint("sequence_no >= 1", name="sequence_no"),
+        CheckConstraint("size_bytes >= 1", name="size_bytes"),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        CheckConstraint(
+            "fencing_token_hash ~ '^sha256:[a-f0-9]{64}$'",
+            name="fencing_token_hash",
+        ),
+        CheckConstraint("status IN ('PENDING','AVAILABLE','FAILED')", name="status"),
+        CheckConstraint("expires_at > created_at", name="expires_at"),
+        CheckConstraint(
+            "(status = 'AVAILABLE' AND available_at IS NOT NULL) OR "
+            "(status <> 'AVAILABLE' AND available_at IS NULL)",
+            name="available_status",
+        ),
+        Index(
+            "ix_runtime_checkpoint__tenant_run_attempt_latest",
+            "tenant_id",
+            "run_id",
+            "execution_attempt",
+            text("sequence_no DESC"),
+            postgresql_where=text("status = 'AVAILABLE'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    execution_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    sequence_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state_ref: Mapped[str] = mapped_column(String(2048), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    fencing_token_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'PENDING'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class ApprovalRequestModel(Base):
     """Durable approval request bound to one immutable tool invocation."""
 
@@ -1678,6 +1910,11 @@ class ApprovalRequestModel(Base):
         ),
         CheckConstraint("expires_at > created_at", name="expires_at"),
         CheckConstraint("resource_version >= 1", name="resource_version"),
+        CheckConstraint(
+            "runtime_checkpoint_ref IS NULL OR "
+            "runtime_checkpoint_ref ~ '^state://tenant/[A-Za-z0-9._:/-]+$'",
+            name="runtime_checkpoint_ref",
+        ),
         CheckConstraint("updated_at >= created_at", name="updated_at"),
         Index(
             "ix_approval_request__tenant_status_expires_at",
@@ -1690,6 +1927,13 @@ class ApprovalRequestModel(Base):
             "tenant_id",
             "run_id",
             text("created_at DESC"),
+        ),
+        Index(
+            "ix_approval_request__tenant_unsent_signal",
+            "tenant_id",
+            "status",
+            "updated_at",
+            postgresql_where=text("workflow_signal_sent_at IS NULL"),
         ),
     )
 
@@ -1720,11 +1964,17 @@ class ApprovalRequestModel(Base):
     self_approval_allowed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    runtime_checkpoint_ref: Mapped[str | None] = mapped_column(
+        String(2048), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    workflow_signal_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
 
@@ -2059,6 +2309,56 @@ class ArtifactModel(Base):
     )
 
 
+class ArtifactDownloadGrantModel(Base):
+    """Revocable bearer authorization for one trusted Artifact object."""
+
+    __tablename__ = "artifact_download_grant"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "artifact_id"],
+            ["artifact.tenant_id", "artifact.id"],
+            name="fk_artifact_download_grant__tenant_artifact__artifact",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "owner_user_id"],
+            ["tenant_member.tenant_id", "tenant_member.user_id"],
+            name="fk_artifact_download_grant__tenant_owner__tenant_member",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_artifact_download_grant__tenant_id_id"
+        ),
+        UniqueConstraint("token_hash", name="uq_artifact_download_grant__token_hash"),
+        CheckConstraint("token_hash ~ '^sha256:[a-f0-9]{64}$'", name="token_hash"),
+        CheckConstraint("expires_at > created_at", name="expires_at"),
+        CheckConstraint(
+            "revoked_at IS NULL OR revoked_at >= created_at", name="revoked_at"
+        ),
+        Index(
+            "ix_artifact_download_grant__tenant_artifact_expires_at",
+            "tenant_id",
+            "artifact_id",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    artifact_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    owner_user_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class SandboxInstanceModel(Base):
     """Tenant-isolated materialization of one Provider-backed Sandbox."""
 
@@ -2123,6 +2423,14 @@ class SandboxInstanceModel(Base):
             "tenant_id",
             "status",
             "updated_at",
+        ),
+        Index(
+            "ix_sandbox_instance__tenant_expired_lease",
+            "tenant_id",
+            "lease_expires_at",
+            postgresql_where=text(
+                "lease_expires_at IS NOT NULL AND status IN ('READY','IN_USE')"
+            ),
         ),
     )
 

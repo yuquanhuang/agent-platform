@@ -1,0 +1,54 @@
+task_id: AP-E7-001
+title: Reconciliation 规则和状态修复
+status: completed
+baseline: agent-platform-v1-dev-baseline-2026-08-r10
+scope:
+  includes:
+    - Approval 过期、确定性 Execution Ticket 补偿、Temporal Signal 重发和持久投递标记
+    - CREATED/CANCELLING Run 启动与取消补偿的 Audit 完整性
+    - 终态 Run 或过期 Run Lease 的 Sandbox 候选检测和 Provider 证据驱动清理
+    - Run、Approval、Sandbox 的 tenant-scoped 有界组合、汇总和低基数指标
+    - Approval Signal Guard 和 Sandbox 过期 Lease 查询索引迁移
+  excludes:
+    - 缺少可信 Workflow result/history 时直接补写 Run 终态或 RunEvent
+    - Provider、对象存储、Secret Broker 和外部工具状态的生产 Inspector/孤儿清理
+    - DEAD Outbox 永久错误分类、Deployment ACTIVE 猜测修复和 Artifact 对象枚举
+    - Reconciliation Worker main、生产 Runtime Worker 装配和依赖故障恢复
+decisions:
+  - 仅自动修复可由 durable facts 唯一推导且重复执行幂等的状态
+  - Approval Signal 标记属于当前决策版本；APPROVED 转 EXPIRED 时清空旧标记并补发 EXPIRED
+  - Sandbox 清理复用 SandboxLifecycleService.destroy，由 Provider 证据决定 TERMINATED 或 QUARANTINED
+  - session scope 过期 Lease 当前登记 unresolved，不在缺少安全 reset 契约时销毁可复用 Session Sandbox
+  - Temporal 已终态但 Run 非终态、Run 缺终态事件等只计 unresolved，不伪造 payload 或成功事实
+compatibility:
+  - R10 OpenAPI、RunEvent、RunSpec、Temporal V1 DTO 和前端生成代码不变
+  - 新增 Alembic 0030_approval_signal_reconcile 和 0031_sandbox_reconcile_index
+  - 未新增 Python 或 Node 依赖，生产 Reconciliation 入口仍保持失败关闭
+verification:
+  commands:
+    - targeted Approval、Run、Sandbox、Worker、metrics、migration tests
+    - PostgreSQL Resource Registry vertical integration test
+    - make backend-check
+    - make contract-check
+    - make check
+    - AP_TEST_DATABASE_URL=postgresql+asyncpg://localhost/agent_platform_test AP_TEST_TEMPORAL=1 make check-all
+    - uv lock --check
+    - git diff --check
+acceptance:
+  - Approval 决策或过期事实可在 Signal 失败后幂等重发，成功后写一次投递标记
+  - APPROVED 缺 Ticket 时只使用确定性 HMAC Issuer 补偿，身份或 Hash 冲突转 unresolved
+  - Run 启动、映射和取消 Signal 补偿写 Audit，不产生第二个 Workflow 或伪造 CANCELLED
+  - run scope Sandbox 泄漏通过既有 Provider 边界清理，失败进入 QUARANTINED 或失败计数
+  - 每轮显式限定 Tenant 和批量上限，指标不包含 tenant、run、approval 或 sandbox 高基数标签
+results:
+  - 定向测试 66 passed；补充 Ticket 到期回归 18 passed
+  - 真实 PostgreSQL Resource Registry 迁移、Approval、Run、Sandbox 纵向测试 1 passed
+  - make backend-check 为 656 passed、14 skipped
+  - 真实 PostgreSQL/Temporal make check-all 为后端 669 passed、1 skipped；前端 85 passed
+  - R10 契约 31 个完整性文件、168 个 operationId 和 17 个生成文件零漂移
+follow_up:
+  - AP-E7-002 实现 API、Worker、Temporal、Redis、S3 和生产 Runtime Worker 的故障恢复与进程装配
+  - 冻结可信 Workflow 终态结果物化后再自动修复 Run 终态和缺失终态 RunEvent
+  - 扩展生产 Sandbox Provider/Object Store Inspector 后补 Provider、Workspace、Artifact 和孤儿对象对账
+  - 为 DEAD Outbox 持久化失败分类后，只对白名单可重试错误开放自动重放
+  - 继续保留真实 Redis、RunEvent 全局登记表加月分区、Registry digest、AJV codegen 和 Run Attachment 待办

@@ -1,10 +1,16 @@
 """Frozen Artifact upload, metadata and completion routes."""
 
 from typing import Annotated
+from urllib.parse import quote
 
-from fastapi import APIRouter, Header, Request, status
+from fastapi import APIRouter, Header, Query, Request, status
+from starlette.responses import StreamingResponse
 
-from packages.application.public import ArtifactManagementService, RequestMetadata
+from packages.application.public import (
+    ArtifactDownloadGatewayService,
+    ArtifactManagementService,
+    RequestMetadata,
+)
 from packages.contracts.generated.core_models import (
     Artifact,
     ArtifactCompleteRequest,
@@ -23,6 +29,7 @@ from packages.contracts.public import (
 def create_artifact_router(
     identity_provider: IdentityProvider | None,
     service: ArtifactManagementService | None,
+    download_gateway: ArtifactDownloadGatewayService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
 
@@ -124,6 +131,68 @@ def create_artifact_router(
             metadata=metadata(request),
         )
 
+    @router.get(
+        "/artifact-downloads/{grant_id}",
+        tags=["Artifacts"],
+        operation_id="downloadArtifactContent",
+        response_class=StreamingResponse,
+        responses={
+            200: {
+                "description": "Revocable private Artifact content stream.",
+                "content": {
+                    "application/octet-stream": {
+                        "schema": {"type": "string", "format": "binary"}
+                    }
+                },
+            }
+        },
+    )
+    async def download_artifact_content(  # pyright: ignore[reportUnusedFunction]
+        grant_id: str,
+        request: Request,
+        token: Annotated[
+            str,
+            Query(min_length=43, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
+        ],
+        range_header: Annotated[
+            str | None,
+            Header(alias="Range", max_length=128),
+        ] = None,
+    ) -> StreamingResponse:
+        if download_gateway is None:
+            raise dependency_unavailable("Artifact Download Gateway is not configured.")
+        content = await download_gateway.open_download(
+            grant_id=grant_id,
+            token=token,
+            range_header=range_header,
+            metadata=metadata(request),
+        )
+        safe_name = _safe_filename(content.name)
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": (
+                f'attachment; filename="{safe_name}"; '
+                f"filename*=UTF-8''{quote(content.name, safe='') }"
+            ),
+            "Content-Length": str(content.size_bytes),
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        }
+        response_status = status.HTTP_200_OK
+        if content.byte_range is not None:
+            response_status = status.HTTP_206_PARTIAL_CONTENT
+            headers["Content-Range"] = (
+                f"bytes {content.byte_range.start}-"
+                f"{content.byte_range.end_inclusive}/{content.total_size_bytes}"
+            )
+        return StreamingResponse(
+            content.body,
+            status_code=response_status,
+            media_type=content.content_type,
+            headers=headers,
+        )
+
     @router.delete(
         "/artifacts/{artifact_id}",
         tags=["Artifacts"],
@@ -148,3 +217,11 @@ def create_artifact_router(
         )
 
     return router
+
+
+def _safe_filename(name: str) -> str:
+    value = "".join(
+        "_" if ord(char) < 32 or char in {'"', "\\"} else char for char in name
+    )
+    value = value.strip() or "artifact"
+    return value.encode("ascii", "replace").decode("ascii")[:255] or "artifact"

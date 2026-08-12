@@ -179,6 +179,7 @@ class SqlAlchemyExecutionTicketStore(ExecutionTicketStore):
                             approval.status = "EXPIRED"
                             approval.resource_version += 1
                             approval.updated_at = now
+                            approval.workflow_signal_sent_at = None
                             if run is not None and run.status == "WAITING_APPROVAL":
                                 ensure_run_transition("WAITING_APPROVAL", "TIMEOUT")
                                 run.status = "TIMEOUT"

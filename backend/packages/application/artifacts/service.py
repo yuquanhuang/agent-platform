@@ -6,8 +6,12 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
+from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from packages.application.artifacts.downloads import (
+    ArtifactDownloadCredentialIssuer,
+)
 from packages.application.artifacts.url_security import ArtifactGrantUrlPolicy
 from packages.application.metadata import RequestMetadata
 from packages.application.resources.hashing import canonical_request_hash
@@ -94,14 +98,6 @@ class ArtifactObjectStore(Protocol):
         self, context: TenantContext, *, artifact: ArtifactRecord
     ) -> ArtifactObjectObservation: ...
 
-    async def create_download_grant(
-        self,
-        context: TenantContext,
-        *,
-        artifact: ArtifactRecord,
-        expires_at: datetime,
-    ) -> ArtifactDownloadGrant: ...
-
 
 class ArtifactAccessResolver(Protocol):
     async def resolve_tenant_access(
@@ -177,12 +173,14 @@ class ArtifactStore(Protocol):
         now: datetime,
     ) -> MutationOutcome[OperationRecord] | None: ...
 
-    async def confirm_download(
+    async def create_download_grant(
         self,
         context: TenantContext,
         *,
+        grant_id: UUID,
         artifact_id: UUID,
         owner_user_id: UUID,
+        token_hash: str,
         grant_expires_at: datetime,
         metadata: RequestMetadata,
         now: datetime,
@@ -198,11 +196,15 @@ class ArtifactManagementService:
         store: ArtifactStore,
         object_store: ArtifactObjectStore,
         url_policy: ArtifactGrantUrlPolicy,
+        download_credentials: ArtifactDownloadCredentialIssuer,
+        download_gateway_base_url: str,
     ) -> None:
         self._access_resolver = access_resolver
         self._store = store
         self._objects = object_store
         self._url_policy = url_policy
+        self._download_credentials = download_credentials
+        self._download_gateway_base_url = download_gateway_base_url.rstrip("/")
 
     async def create_upload(
         self,
@@ -404,16 +406,16 @@ class ArtifactManagementService:
         ):
             raise RuntimeError("Artifact trusted object URI is not canonical")
         grant_expires_at = min(now + ARTIFACT_DOWNLOAD_TTL, record.expires_at)
-        try:
-            grant = await self._objects.create_download_grant(
-                access.context,
-                artifact=record,
-                expires_at=grant_expires_at,
-            )
-        except ArtifactObjectStoreUnavailable as error:
-            raise dependency_unavailable(
-                "Artifact object storage is unavailable."
-            ) from error
+        credential = self._download_credentials.issue()
+        grant = ArtifactDownloadGrant(
+            artifact_id=record.id,
+            url=_download_gateway_url(
+                self._download_gateway_base_url,
+                grant_id=credential.grant_id,
+                token=credential.token.get_secret_value(),
+            ),
+            expires_at=grant_expires_at,
+        )
         _validate_download_grant(
             grant,
             record,
@@ -421,10 +423,12 @@ class ArtifactManagementService:
             now=now,
             url_policy=self._url_policy,
         )
-        confirmed = await self._store.confirm_download(
+        confirmed = await self._store.create_download_grant(
             access.context,
+            grant_id=credential.grant_id,
             artifact_id=record.id,
             owner_user_id=_actor_id(access.context),
+            token_hash=credential.token_hash,
             grant_expires_at=grant.expires_at,
             metadata=metadata,
             now=datetime.now(UTC),
@@ -561,6 +565,14 @@ def _validate_download_grant(
         or grant.expires_at > record.expires_at
     ):
         raise RuntimeError("Artifact download grant exceeds its authorization window")
+
+
+def _download_gateway_url(base_url: str, *, grant_id: UUID, token: str) -> str:
+    split = urlsplit(base_url)
+    if split.scheme not in {"http", "https"} or not split.netloc:
+        raise ValueError("Artifact Download Gateway base URL must be HTTP(S)")
+    path = f"{split.path.rstrip('/')}/api/v1/artifact-downloads/{grant_id}"
+    return urlunsplit((split.scheme, split.netloc, path, f"token={quote(token)}", ""))
 
 
 def _require_completion_matches(

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.application.policy import (
@@ -18,12 +18,13 @@ from packages.application.policy import (
     RuntimeBundleAdmissionFacts,
     admit_runtime_bundle,
 )
+from packages.application.reconciliation import SandboxReconciliationCandidate
 from packages.application.sandbox.policy import FrozenSandboxPolicy
 from packages.application.sandbox.service import (
     SandboxProvisionClaim,
     SandboxServiceAccess,
 )
-from packages.contracts.public import PlatformError
+from packages.contracts.public import PlatformError, TenantContext
 from packages.contracts.sandbox_api import (
     SandboxLeaseControlRequest,
     SandboxLeaseRequest,
@@ -63,6 +64,71 @@ class SqlAlchemySandboxLifecycleStore:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+
+    async def list_sandbox_reconciliation_candidates(
+        self,
+        context: TenantContext,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> tuple[SandboxReconciliationCandidate, ...]:
+        if limit < 1:
+            raise ValueError("Sandbox reconciliation limit must be positive")
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(
+            self._session_factory, context, read_only=True
+        ) as unit:
+            rows = (
+                await unit.session.execute(
+                    select(SandboxInstanceModel, AgentRunModel.status)
+                    .join(
+                        AgentRunModel,
+                        and_(
+                            AgentRunModel.tenant_id == SandboxInstanceModel.tenant_id,
+                            AgentRunModel.id == SandboxInstanceModel.run_id,
+                        ),
+                    )
+                    .where(
+                        SandboxInstanceModel.tenant_id == tenant_id,
+                        SandboxInstanceModel.status != "TERMINATED",
+                        or_(
+                            and_(
+                                SandboxInstanceModel.scope == "run",
+                                AgentRunModel.status.in_(
+                                    ("SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT")
+                                ),
+                            ),
+                            and_(
+                                SandboxInstanceModel.status.in_(("READY", "IN_USE")),
+                                SandboxInstanceModel.lease_expires_at.is_not(None),
+                                SandboxInstanceModel.lease_expires_at <= now,
+                            ),
+                        ),
+                    )
+                    .order_by(
+                        SandboxInstanceModel.updated_at,
+                        SandboxInstanceModel.id,
+                    )
+                    .limit(limit)
+                )
+            ).all()
+        terminal_statuses = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT"}
+        return tuple(
+            SandboxReconciliationCandidate(
+                sandbox_id=row.id,
+                reason=(
+                    "TERMINAL_RUN"
+                    if row.scope == "run" and run_status in terminal_statuses
+                    else (
+                        "EXPIRED_RUN_LEASE"
+                        if row.scope == "run"
+                        else "EXPIRED_SESSION_LEASE"
+                    )
+                ),
+                action="DESTROY" if row.scope == "run" else "MANUAL",
+            )
+            for row, run_status in rows
+        )
 
     async def begin_provision(
         self,

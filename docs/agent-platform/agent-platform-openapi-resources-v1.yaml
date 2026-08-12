@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Agent Platform Resource and Administration API
-  version: 1.1.0
+  version: 1.2.0
   description: Machine-readable contract for versioned resources, administration, Knowledge, Evaluation, Schedule, A2A Client and Audit APIs.
 servers:
   - url: /
@@ -16,6 +16,7 @@ tags:
   - name: RuntimeTargets
   - name: SandboxProfiles
   - name: Tenants
+  - name: QuotaPolicies
   - name: Members
   - name: Roles
   - name: Knowledge
@@ -556,6 +557,55 @@ paths:
       operationId: enableTenant
       requestBody: { $ref: '#/components/requestBodies/ActionBody' }
       responses: { '200': { $ref: '#/components/responses/TenantResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/quota-policies:
+    get:
+      tags: [QuotaPolicies]
+      operationId: listQuotaPolicies
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/QuotaPolicyPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [QuotaPolicies]
+      operationId: createQuotaPolicy
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/QuotaPolicyCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/QuotaPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/quota-policies/{quota_policy_id}:
+    parameters: [{ $ref: '#/components/parameters/QuotaPolicyId' }]
+    get:
+      tags: [QuotaPolicies]
+      operationId: getQuotaPolicy
+      responses: { '200': { $ref: '#/components/responses/QuotaPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [QuotaPolicies]
+      operationId: updateQuotaPolicy
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/QuotaPolicyUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/QuotaPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/quota-policies/{quota_policy_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/QuotaPolicyId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [QuotaPolicies]
+      operationId: disableQuotaPolicy
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/QuotaPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/quota-policies/{quota_policy_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/QuotaPolicyId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [QuotaPolicies]
+      operationId: enableQuotaPolicy
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/QuotaPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/quota-policies/{quota_policy_id}/versions:
+    parameters: [{ $ref: '#/components/parameters/QuotaPolicyId' }]
+    get:
+      tags: [QuotaPolicies]
+      operationId: listQuotaPolicyVersions
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/QuotaPolicyVersionPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
   /api/v1/members:
     get:
       tags: [Members]
@@ -905,6 +955,7 @@ components:
     TenantId: { name: tenant_id, in: path, required: true, schema: { type: string } }
     MemberId: { name: member_id, in: path, required: true, schema: { type: string } }
     RoleId: { name: role_id, in: path, required: true, schema: { type: string } }
+    QuotaPolicyId: { name: quota_policy_id, in: path, required: true, schema: { type: string } }
     KnowledgeBaseId: { name: knowledge_base_id, in: path, required: true, schema: { type: string } }
     DocumentId: { name: document_id, in: path, required: true, schema: { type: string } }
     EvaluationSetId: { name: evaluation_set_id, in: path, required: true, schema: { type: string } }
@@ -963,6 +1014,16 @@ components:
     TenantPageResponse:
       description: Tenant page.
       content: { application/json: { schema: { $ref: '#/components/schemas/TenantPage' } } }
+    QuotaPolicyResponse:
+      description: Tenant Run capacity policy and its active immutable version.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/QuotaPolicy' } } }
+    QuotaPolicyPageResponse:
+      description: Tenant Run capacity policy page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/QuotaPolicyPage' } } }
+    QuotaPolicyVersionPageResponse:
+      description: Immutable Run capacity policy version page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/QuotaPolicyVersionPage' } } }
     MemberResponse:
       description: Tenant member.
       headers: { ETag: { $ref: '#/components/headers/ETag' } }
@@ -1242,6 +1303,75 @@ components:
       required: [items, has_more]
       properties:
         items: { type: array, items: { $ref: '#/components/schemas/Tenant' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    RunCapacityLimits:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Tenant limits may only narrow deployment-owned hard limits; omitted dimensions inherit the deployment limit.
+      properties:
+        max_nonterminal_runs_per_tenant: { type: integer, minimum: 1, maximum: 1000000 }
+        max_nonterminal_runs_per_user: { type: integer, minimum: 1, maximum: 1000000 }
+        max_nonterminal_runs_per_agent: { type: integer, minimum: 1, maximum: 1000000 }
+        max_nonterminal_agentscope_runs: { type: integer, minimum: 1, maximum: 1000000 }
+        max_nonterminal_codex_runs: { type: integer, minimum: 1, maximum: 1000000 }
+    QuotaPolicyCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, limits]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        limits: { $ref: '#/components/schemas/RunCapacityLimits' }
+    QuotaPolicyUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        limits: { $ref: '#/components/schemas/RunCapacityLimits' }
+    QuotaPolicyVersion:
+      type: object
+      additionalProperties: false
+      required: [id, policy_id, version_no, limits, content_hash, created_by, created_at]
+      properties:
+        id: { type: string }
+        policy_id: { type: string }
+        version_no: { type: integer, minimum: 1 }
+        limits: { $ref: '#/components/schemas/RunCapacityLimits' }
+        content_hash: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+    QuotaPolicy:
+      type: object
+      additionalProperties: false
+      required: [id, tenant_id, name, status, current_version, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        status: { enum: [ACTIVE, DISABLED] }
+        current_version: { $ref: '#/components/schemas/QuotaPolicyVersion' }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    QuotaPolicyPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/QuotaPolicy' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    QuotaPolicyVersionPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/QuotaPolicyVersion' } }
         next_cursor: { type: [string, 'null'] }
         has_more: { type: boolean }
     MemberCreateRequest:

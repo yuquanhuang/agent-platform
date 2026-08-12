@@ -301,6 +301,81 @@ class TenantPage(BaseModel):
     has_more: bool
 
 
+class RunCapacityLimits(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    max_nonterminal_runs_per_tenant: int | None = Field(None, ge=1, le=1000000)
+    max_nonterminal_runs_per_user: int | None = Field(None, ge=1, le=1000000)
+    max_nonterminal_runs_per_agent: int | None = Field(None, ge=1, le=1000000)
+    max_nonterminal_agentscope_runs: int | None = Field(None, ge=1, le=1000000)
+    max_nonterminal_codex_runs: int | None = Field(None, ge=1, le=1000000)
+
+
+class QuotaPolicyCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=2000)
+    limits: RunCapacityLimits
+
+
+class QuotaPolicyUpdateRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    name: str | None = Field(None, min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=2000)
+    limits: RunCapacityLimits | None = None
+
+
+class QuotaPolicyVersion(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    id: str
+    policy_id: str
+    version_no: int = Field(..., ge=1)
+    limits: RunCapacityLimits
+    content_hash: str = Field(..., pattern="^sha256:[a-f0-9]{64}$")
+    created_by: str
+    created_at: datetime
+
+
+class QuotaPolicy(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    id: str
+    tenant_id: str
+    name: str
+    description: str | None = None
+    status: Literal["ACTIVE", "DISABLED"]
+    current_version: QuotaPolicyVersion
+    resource_version: int = Field(..., ge=1)
+    created_at: datetime
+    updated_at: datetime
+
+
+class QuotaPolicyPage(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    items: list[QuotaPolicy]
+    next_cursor: str | None = None
+    has_more: bool
+
+
+class QuotaPolicyVersionPage(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    items: list[QuotaPolicyVersion]
+    next_cursor: str | None = None
+    has_more: bool
+
+
 class MemberCreateRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid", populate_by_name=True, regex_engine="python-re"
@@ -1149,6 +1224,36 @@ type EnableTenantIdempotencyKey = str
 
 type EnableTenantIfMatch = str
 
+type ListQuotaPoliciesLimit = int
+
+type ListQuotaPoliciesCursor = str
+
+type CreateQuotaPolicyIdempotencyKey = str
+
+type GetQuotaPolicyQuotaPolicyId = str
+
+type UpdateQuotaPolicyQuotaPolicyId = str
+
+type UpdateQuotaPolicyIfMatch = str
+
+type DisableQuotaPolicyQuotaPolicyId = str
+
+type DisableQuotaPolicyIdempotencyKey = str
+
+type DisableQuotaPolicyIfMatch = str
+
+type EnableQuotaPolicyQuotaPolicyId = str
+
+type EnableQuotaPolicyIdempotencyKey = str
+
+type EnableQuotaPolicyIfMatch = str
+
+type ListQuotaPolicyVersionsQuotaPolicyId = str
+
+type ListQuotaPolicyVersionsLimit = int
+
+type ListQuotaPolicyVersionsCursor = str
+
 type ListMembersLimit = int
 
 type ListMembersCursor = str
@@ -1392,6 +1497,13 @@ for _model in (
     TenantUpdateRequest,
     Tenant,
     TenantPage,
+    RunCapacityLimits,
+    QuotaPolicyCreateRequest,
+    QuotaPolicyUpdateRequest,
+    QuotaPolicyVersion,
+    QuotaPolicy,
+    QuotaPolicyPage,
+    QuotaPolicyVersionPage,
     MemberCreateRequest,
     MemberUpdateRequest,
     Member,

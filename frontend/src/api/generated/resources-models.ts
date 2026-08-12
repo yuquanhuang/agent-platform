@@ -206,6 +206,60 @@ export interface TenantPage {
   readonly has_more: boolean;
 }
 
+export interface RunCapacityLimits {
+  readonly max_nonterminal_runs_per_tenant?: number;
+  readonly max_nonterminal_runs_per_user?: number;
+  readonly max_nonterminal_runs_per_agent?: number;
+  readonly max_nonterminal_agentscope_runs?: number;
+  readonly max_nonterminal_codex_runs?: number;
+}
+
+export interface QuotaPolicyCreateRequest {
+  readonly name: string;
+  readonly description?: string | null;
+  readonly limits: RunCapacityLimits;
+}
+
+export interface QuotaPolicyUpdateRequest {
+  readonly name?: string;
+  readonly description?: string | null;
+  readonly limits?: RunCapacityLimits;
+}
+
+export interface QuotaPolicyVersion {
+  readonly id: string;
+  readonly policy_id: string;
+  readonly version_no: number;
+  readonly limits: RunCapacityLimits;
+  readonly content_hash: string;
+  readonly created_by: string;
+  readonly created_at: string;
+}
+
+export interface QuotaPolicy {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly description?: string | null;
+  readonly status: "ACTIVE" | "DISABLED";
+  readonly current_version: QuotaPolicyVersion;
+  readonly resource_version: number;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface QuotaPolicyPage {
+  readonly items: ReadonlyArray<QuotaPolicy>;
+  readonly next_cursor?: string | null;
+  readonly has_more: boolean;
+}
+
+export interface QuotaPolicyVersionPage {
+  readonly items: ReadonlyArray<QuotaPolicyVersion>;
+  readonly next_cursor?: string | null;
+  readonly has_more: boolean;
+}
+
 export interface MemberCreateRequest {
   readonly external_subject: string;
   readonly display_name: string;
@@ -914,6 +968,36 @@ export type EnableTenantTenantId = string;
 export type EnableTenantIdempotencyKey = string;
 
 export type EnableTenantIfMatch = string;
+
+export type ListQuotaPoliciesLimit = number;
+
+export type ListQuotaPoliciesCursor = string;
+
+export type CreateQuotaPolicyIdempotencyKey = string;
+
+export type GetQuotaPolicyQuotaPolicyId = string;
+
+export type UpdateQuotaPolicyQuotaPolicyId = string;
+
+export type UpdateQuotaPolicyIfMatch = string;
+
+export type DisableQuotaPolicyQuotaPolicyId = string;
+
+export type DisableQuotaPolicyIdempotencyKey = string;
+
+export type DisableQuotaPolicyIfMatch = string;
+
+export type EnableQuotaPolicyQuotaPolicyId = string;
+
+export type EnableQuotaPolicyIdempotencyKey = string;
+
+export type EnableQuotaPolicyIfMatch = string;
+
+export type ListQuotaPolicyVersionsQuotaPolicyId = string;
+
+export type ListQuotaPolicyVersionsLimit = number;
+
+export type ListQuotaPolicyVersionsCursor = string;
 
 export type ListMembersLimit = number;
 

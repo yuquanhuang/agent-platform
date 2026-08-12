@@ -190,6 +190,8 @@ class Stub:
         self.session = Session(external_first=external_first)
         self.decision = decision
         self.saved_states: list[bytes] = []
+        self.loaded_state: bytes | None = None
+        self.factory_checkpoint: bytes | None = None
         self.published: list[RuntimeEventCandidate] = []
         self.gateway_requests: list[object] = []
         self.requested = 0
@@ -197,8 +199,18 @@ class Stub:
             __import__("pydantic").SecretStr("ticket-secret-" * 4)
         )
 
-    async def create(self, context: TenantContext, *, request: RunExecutionRequest):
+    async def create(
+        self,
+        context: TenantContext,
+        *,
+        request: RunExecutionRequest,
+        checkpoint_state_json: bytes | None,
+    ):
+        self.factory_checkpoint = checkpoint_state_json
         return AgentScopeSessionStart(session=self.session, initial_input=None)
+
+    async def load_latest(self, context: TenantContext, **kwargs: object):
+        return self.loaded_state
 
     async def save(self, context: TenantContext, **kwargs: object) -> str:
         self.saved_states.append(cast(bytes, kwargs["state_json"]))
@@ -275,6 +287,7 @@ async def test_bridge_parks_approves_executes_once_and_resumes_agentscope() -> N
     assert b"agent-session-1" in stub.saved_states[0]
     assert len(stub.gateway_requests) == 1
     assert heartbeats == ["waiting_approval", "external_execution_completed"]
+    assert stub.factory_checkpoint is None
     assert [candidate.event_type for candidate in stub.published] == [
         "text_message_start",
         "tool_call_start",
@@ -282,6 +295,18 @@ async def test_bridge_parks_approves_executes_once_and_resumes_agentscope() -> N
         "text_delta",
         "text_message_end",
     ]
+
+
+@pytest.mark.asyncio
+async def test_bridge_passes_latest_durable_checkpoint_to_session_factory() -> None:
+    stub = Stub()
+    stub.loaded_state = b'{"session_id":"restored-agent-session"}'
+
+    await bridge(stub).execute(
+        context(), request=execution_request(), event_publisher=stub
+    )
+
+    assert stub.factory_checkpoint == stub.loaded_state
 
 
 @pytest.mark.asyncio

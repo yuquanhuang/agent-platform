@@ -569,6 +569,10 @@ def parse_operations(document: Mapping[str, Any]) -> list[ApiOperation]:
             streaming = (
                 media_schema(document, success_response, "text/event-stream")
                 is not None
+                or media_schema(
+                    document, success_response, "application/octet-stream"
+                )
+                is not None
             )
             operations.append(
                 ApiOperation(

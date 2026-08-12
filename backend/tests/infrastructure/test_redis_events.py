@@ -1,4 +1,4 @@
-"""Redis RunEvent wake-up adapter tests."""
+"""Redis wake-up adapter tests."""
 
 import json
 from datetime import UTC, datetime
@@ -8,12 +8,21 @@ from uuid import UUID
 import pytest
 from redis.exceptions import RedisError
 
+from packages.application.artifacts import (
+    ArtifactDownloadRevocationNotification,
+    ArtifactDownloadRevocationUnavailable,
+)
 from packages.application.event_service import (
     RunEventNotification,
     RunEventNotificationUnavailable,
 )
 from packages.application.outbox import RetryableOutboxError
 from packages.contracts.public import SubjectType, TenantContext
+from packages.infrastructure.redis.artifact_downloads import (
+    RedisArtifactDownloadRevocationPublisher,
+    RedisArtifactDownloadRevocationSource,
+    artifact_download_revocation_channel,
+)
 from packages.infrastructure.redis.events import (
     AsyncRedisClient,
     AsyncRedisPubSub,
@@ -26,11 +35,13 @@ TENANT_ID = UUID("11111111-1111-4111-8111-111111111111")
 OTHER_TENANT_ID = UUID("22222222-2222-4222-8222-222222222222")
 RUN_ID = UUID("33333333-3333-4333-8333-333333333333")
 NOTIFICATION_ID = UUID("44444444-4444-4444-8444-444444444444")
+ARTIFACT_ID = UUID("66666666-6666-4666-8666-666666666666")
 
 
 class FakePubSub:
     def __init__(self) -> None:
         self.channels: list[str] = []
+        self.subscription_acknowledged = False
         self.message: dict[str, object] | None = {"type": "message"}
         self.error: RedisError | None = None
         self.closed = False
@@ -43,8 +54,11 @@ class FakePubSub:
     async def get_message(
         self, ignore_subscribe_messages: bool = False, timeout: float = 0.0
     ) -> dict[str, object] | None:
-        assert ignore_subscribe_messages is True
         assert timeout > 0
+        if not ignore_subscribe_messages and not self.subscription_acknowledged:
+            self.subscription_acknowledged = True
+            return {"type": "subscribe"}
+        assert ignore_subscribe_messages is True
         if self.error is not None:
             raise self.error
         return self.message
@@ -68,7 +82,7 @@ class FakeRedis:
         return 1
 
     def pubsub(self, **kwargs: object) -> AsyncRedisPubSub:
-        assert kwargs == {"ignore_subscribe_messages": True}
+        assert kwargs == {"ignore_subscribe_messages": False}
         return cast(AsyncRedisPubSub, self.subscription)
 
 
@@ -167,4 +181,50 @@ async def test_source_converts_subscribe_and_wait_failures_to_unavailable() -> N
     subscription = await wait_source.subscribe(context(), run_id=RUN_ID)
     wait_pubsub.error = RedisError("wait down")
     with pytest.raises(RunEventNotificationUnavailable, match="subscription"):
+        await subscription.wait(timeout_seconds=0.1)
+
+
+@pytest.mark.asyncio
+async def test_artifact_revocation_uses_tenant_artifact_channel() -> None:
+    redis = FakeRedis()
+    publisher = RedisArtifactDownloadRevocationPublisher(cast(AsyncRedisClient, redis))
+    revoked_at = datetime(2026, 8, 11, tzinfo=UTC)
+
+    await publisher.publish(
+        ArtifactDownloadRevocationNotification(
+            notification_id=NOTIFICATION_ID,
+            tenant_id=TENANT_ID,
+            artifact_id=ARTIFACT_ID,
+            revoked_at=revoked_at,
+            grant_count=2,
+        )
+    )
+
+    channel, raw_payload = redis.published[0]
+    assert channel == artifact_download_revocation_channel(TENANT_ID, ARTIFACT_ID)
+    assert json.loads(raw_payload) == {
+        "artifact_id": str(ARTIFACT_ID),
+        "grant_count": 2,
+        "notification_id": str(NOTIFICATION_ID),
+        "revoked_at": revoked_at.isoformat(),
+        "tenant_id": str(TENANT_ID),
+    }
+
+
+@pytest.mark.asyncio
+async def test_artifact_revocation_source_fails_closed_to_polling_boundary() -> None:
+    pubsub = FakePubSub()
+    source = RedisArtifactDownloadRevocationSource(
+        cast(AsyncRedisClient, FakeRedis(pubsub))
+    )
+    subscription = await source.subscribe(
+        tenant_id=TENANT_ID,
+        artifact_id=ARTIFACT_ID,
+    )
+
+    assert pubsub.channels == [
+        artifact_download_revocation_channel(TENANT_ID, ARTIFACT_ID)
+    ]
+    pubsub.error = RedisError("wait down")
+    with pytest.raises(ArtifactDownloadRevocationUnavailable, match="subscription"):
         await subscription.wait(timeout_seconds=0.1)

@@ -59,6 +59,15 @@ class RunReconciliationStore(RunWorkflowStartStore, Protocol):
         now: datetime,
     ) -> bool: ...
 
+    async def record_cancel_signal_delivery(
+        self,
+        context: TenantContext,
+        *,
+        run_id: UUID,
+        signal_id: str,
+        now: datetime,
+    ) -> None: ...
+
 
 class RunWorkflowReconciliationControl(Protocol):
     async def describe_run(
@@ -151,6 +160,12 @@ class RunReconciler:
                         requested_at=now,
                         reason=None,
                     ),
+                )
+                await self._store.record_cancel_signal_delivery(
+                    context,
+                    run_id=candidate.run_id,
+                    signal_id=_reconciliation_signal_id(candidate),
+                    now=now,
                 )
                 cancellations_signalled += 1
         return RunReconciliationSummary(

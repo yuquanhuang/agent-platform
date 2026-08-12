@@ -821,6 +821,12 @@ type CompleteArtifactUploadIdempotencyKey = str
 
 type CreateArtifactDownloadArtifactId = str
 
+type DownloadArtifactContentGrantId = str
+
+type DownloadArtifactContentToken = str
+
+type DownloadArtifactContentRange = str
+
 type GetOperationOperationId = str
 
 type AppendRunEventCandidatesRunId = str

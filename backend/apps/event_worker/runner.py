@@ -5,6 +5,12 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 
+from apps.processes import ProcessName
+from apps.worker_recovery import (
+    WorkerRecoveryPolicy,
+    run_polling_worker_process,
+    run_resilient_poll_loop,
+)
 from packages.application.outbox import OutboxDispatchSummary
 from packages.contracts.public import TenantContext
 from packages.infrastructure.observability import PlatformMetrics
@@ -20,6 +26,31 @@ class TenantOutboxDispatcher(Protocol):
     async def dispatch_tenant_once(
         self, context: TenantContext, *, now: datetime
     ) -> OutboxDispatchSummary: ...
+
+
+class CompositeTenantOutboxDispatcher:
+    """Run a fixed, bounded set of isolated Outbox dispatchers per tenant."""
+
+    def __init__(self, dispatchers: Sequence[TenantOutboxDispatcher]) -> None:
+        if not dispatchers:
+            raise ValueError("at least one tenant Outbox dispatcher is required")
+        if len(dispatchers) > 16:
+            raise ValueError("tenant Outbox dispatcher count cannot exceed 16")
+        self._dispatchers = tuple(dispatchers)
+
+    async def dispatch_tenant_once(
+        self, context: TenantContext, *, now: datetime
+    ) -> OutboxDispatchSummary:
+        total = OutboxDispatchSummary()
+        for dispatcher in self._dispatchers:
+            summary = await dispatcher.dispatch_tenant_once(context, now=now)
+            total = OutboxDispatchSummary(
+                claimed=total.claimed + summary.claimed,
+                published=total.published + summary.published,
+                retried=total.retried + summary.retried,
+                dead=total.dead + summary.dead,
+            )
+        return total
 
 
 async def dispatch_cycle(
@@ -57,17 +88,50 @@ async def run_event_worker_loop(
     *,
     tenant_limit: int = 100,
     poll_interval_seconds: float = 1.0,
+    recovery_policy: WorkerRecoveryPolicy | None = None,
 ) -> None:
-    if poll_interval_seconds <= 0:
-        raise ValueError("poll_interval_seconds must be positive")
-    while not stop_event.is_set():
+    async def cycle() -> None:
         await dispatch_cycle(
             dispatcher,
             context_source,
             metrics,
             tenant_limit=tenant_limit,
         )
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=poll_interval_seconds)
-        except TimeoutError:
-            continue
+
+    await run_resilient_poll_loop(
+        cycle,
+        stop_event,
+        metrics,
+        process_name="event-worker",
+        poll_interval_seconds=poll_interval_seconds,
+        recovery_policy=recovery_policy,
+    )
+
+
+async def run_event_worker_process(
+    dispatcher: TenantOutboxDispatcher,
+    context_source: TenantContextSource,
+    metrics: PlatformMetrics,
+    *,
+    tenant_limit: int = 100,
+    poll_interval_seconds: float = 1.0,
+    recovery_policy: WorkerRecoveryPolicy | None = None,
+) -> None:
+    """Run one explicitly composed Event Worker until SIGINT or SIGTERM."""
+
+    async def worker(stop_event: asyncio.Event) -> None:
+        await run_event_worker_loop(
+            dispatcher,
+            context_source,
+            metrics,
+            stop_event,
+            tenant_limit=tenant_limit,
+            poll_interval_seconds=poll_interval_seconds,
+            recovery_policy=recovery_policy,
+        )
+
+    await run_polling_worker_process(
+        worker,
+        metrics,
+        process_name=ProcessName.EVENT_WORKER.value,
+    )

@@ -112,8 +112,10 @@ def test_generated_run_event_rejects_payload_for_other_discriminator() -> None:
 
 
 def test_generated_operation_catalog_covers_both_frozen_openapi_files() -> None:
-    assert len(CORE_OPERATION_IDS) == 41
-    assert len(RESOURCE_OPERATION_IDS) == 127
+    assert len(CORE_OPERATION_IDS) == 42
+    assert len(RESOURCE_OPERATION_IDS) == 134
+    assert "createQuotaPolicy" in RESOURCE_OPERATION_IDS
+    assert "listQuotaPolicyVersions" in RESOURCE_OPERATION_IDS
     assert CORE_OPERATION_IDS.isdisjoint(RESOURCE_OPERATION_IDS)
 
 

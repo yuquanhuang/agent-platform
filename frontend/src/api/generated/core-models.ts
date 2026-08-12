@@ -593,6 +593,12 @@ export type CompleteArtifactUploadIdempotencyKey = string;
 
 export type CreateArtifactDownloadArtifactId = string;
 
+export type DownloadArtifactContentGrantId = string;
+
+export type DownloadArtifactContentToken = string;
+
+export type DownloadArtifactContentRange = string;
+
 export type GetOperationOperationId = string;
 
 export type AppendRunEventCandidatesRunId = string;

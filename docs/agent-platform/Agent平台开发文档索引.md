@@ -1,6 +1,6 @@
 # Agent 平台开发文档索引
 
-> 文档版本：V2.1
+> 文档版本：V2.4
 > 文档状态：开发输入基线
 
 ## 1. 文档集合与阅读顺序
@@ -110,6 +110,8 @@ Epic 8：Codex ACP
 Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 ```
 
+R14 在 Epic 7 增加 durable QuotaPolicy：资源管理 OpenAPI、不可变版本、RLS/RBAC/Audit 和 Run 原子准入已冻结；BudgetPolicy、存储/速率配额和排队仍按 AP-E7-003 后续子阶段推进。
+
 每个 Epic 必须以纵向可验收场景结束，不能只交付数据库表或管理页面。
 
 ## 8. 当前机器可读契约
@@ -128,7 +130,7 @@ Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 
 机器可读契约与自然语言示例冲突时不得继续编码，必须先更新基线和变更记录。
 
-当前冻结版本：核心 OpenAPI 1.4.0，资源管理 OpenAPI 1.1.0。准确文件版本和 SHA-256 以 `agent-platform-baseline.yaml` 为准。
+当前冻结版本：核心 OpenAPI 1.6.0，资源管理 OpenAPI 1.1.0。准确文件版本和 SHA-256 以 `agent-platform-baseline.yaml` 为准。
 
 ## 9. 版本变更摘要
 
@@ -209,10 +211,25 @@ Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 - 新增 `cancelling_at` 和对账索引；公共 OpenAPI、Run DTO、RunSpec、RunEvent、Message 不可变语义及前端生成代码均未改变。
 - 同步提升数据库、领域、架构、Temporal、AI Coding、执行计划、测试和索引文档版本，并重新冻结 SHA-256。
 
-### Frozen Baseline 2026-08-R10
+### Frozen Baseline 2026-08-R10（已被 R11 取代）
 
 - Sandbox Start Process、Cancel Process 和 Release 请求冻结携带 Run、Attempt、execution fencing token 与 Trace 证明；旧 Attempt、过期 Lease 和旧 token 失败关闭。
 - Terminate/Destroy 保留为独立管理与对账强制操作，使用 Workload Identity、强制清理权限和审计，不以 Lease token 代替管理授权。
 - 冻结 canonical Workspace URI、结构化身份隔离、文件描述符级路径打开、软/硬链接与 TOCTOU 防护、Run 配额及七天保留生命周期。
 - 新增 Workspace 持久化、RLS、不可变配额和状态机；Artifact 上传、扫描、下载与删除仍由 AP-E5-004/005 独立实现。
 - 同步提升 Sandbox、AI Coding、执行计划、测试、追踪矩阵和索引文档版本，并重新冻结 SHA-256。
+
+### Frozen Baseline 2026-08-R11
+
+- Artifact 下载固定采用私有对象存储前置的可撤销 Download Gateway，不向客户端暴露 S3/MinIO 下载预签名 URL。
+- 新增 `artifact_download_grant` 持久化授权事实和 `downloadArtifactContent` 二进制流接口；Token 明文只返回一次，数据库只保存 SHA-256。
+- Artifact 删除在同一事务先撤销全部 Grant，再通过既有 Outbox 执行对象删除；Gateway 每次请求重新校验 Grant、Artifact 状态和有效期。
+- Core OpenAPI 提升至 1.5.0；同步提升核心接口、架构、数据库、安全、AI Coding、执行计划、测试、追踪矩阵和索引版本，并重新冻结 SHA-256。
+
+### Frozen Baseline 2026-08-R12
+
+- `downloadArtifactContent` 增加可选标准单字节 `Range`，冻结 200/206/416、`Accept-Ranges`、`Content-Range` 和 `RANGE_NOT_SATISFIABLE` 语义；多 Range 不进入 V1。
+- Artifact Range 继续绑定同一可撤销 Grant，不改变租户和对象授权；长连接采用 Redis 撤销通知与 PostgreSQL 周期事实复核，Ingress/日志禁止记录 query token。
+- Kubernetes 作为生产部署平台；Secret Backend 首先实现 EnvSecretBackend 并保留 Vault Adapter 边界，生产对象存储采用 MinIO。
+- AgentScope checkpoint 使用 PostgreSQL 不可变元数据与 MinIO AES-256-GCM 密文，ApprovalRequest 固化对应 `runtime_checkpoint_ref`；完整 Runtime Worker 仍须在生产 Session/Tool/Executor 组合完成后启用。
+- Core OpenAPI 提升至 1.6.0；同步提升核心接口、安全、追踪矩阵和索引版本并重新冻结 SHA-256。

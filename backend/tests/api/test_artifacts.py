@@ -10,7 +10,12 @@ import httpx
 import pytest
 
 from apps.api.app import create_app
-from packages.application.public import ArtifactManagementService
+from packages.application.public import (
+    ArtifactByteRange,
+    ArtifactDownloadGatewayService,
+    ArtifactManagementService,
+    ArtifactTrustedContent,
+)
 from packages.contracts.generated.core_models import (
     Artifact,
     ArtifactDownload,
@@ -54,6 +59,27 @@ class ArtifactServiceStub:
         )
 
 
+class ArtifactDownloadGatewayStub:
+    async def open_download(self, **kwargs: object) -> ArtifactTrustedContent:
+        requested_range = kwargs.get("range_header")
+
+        async def body():
+            yield b"artifact" if requested_range is not None else b"artifact-body"
+
+        return ArtifactTrustedContent(
+            body=body(),
+            size_bytes=8 if requested_range is not None else 13,
+            total_size_bytes=13,
+            content_type="text/plain",
+            name="result.txt",
+            byte_range=(
+                ArtifactByteRange(start=0, end_inclusive=7)
+                if requested_range is not None
+                else None
+            ),
+        )
+
+
 def _artifact(status: str) -> Artifact:
     return Artifact(
         id=str(ARTIFACT_ID),
@@ -86,6 +112,9 @@ def build_app():
         settings,
         identity_provider=MockIdentityProvider(settings, now=lambda: NOW),
         artifact_service=cast(ArtifactManagementService, ArtifactServiceStub()),
+        artifact_download_gateway=cast(
+            ArtifactDownloadGatewayService, ArtifactDownloadGatewayStub()
+        ),
     )
 
 
@@ -99,6 +128,7 @@ def test_app_registers_all_frozen_artifact_operations() -> None:
         "getArtifact",
         "completeArtifactUpload",
         "createArtifactDownload",
+        "downloadArtifactContent",
         "deleteArtifact",
     } <= operation_ids
 
@@ -160,6 +190,79 @@ async def test_artifact_download_and_delete_preserve_frozen_contract() -> None:
     assert download.json()["url"].startswith("https://objects.test/download")
     assert deleted.status_code == 202
     assert deleted.json()["status"] == "ACCEPTED"
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_gateway_streams_with_private_security_headers() -> (
+    None
+):
+    transport = httpx.ASGITransport(app=build_app())
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/artifact-downloads/55555555-5555-4555-8555-555555555555",
+            params={"token": "t" * 43},
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"artifact-body"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["content-length"] == "13"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "result.txt" in response.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_gateway_supports_single_byte_range() -> None:
+    transport = httpx.ASGITransport(app=build_app())
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/artifact-downloads/55555555-5555-4555-8555-555555555555",
+            params={"token": "t" * 43},
+            headers={"Range": "bytes=0-7"},
+        )
+
+    assert response.status_code == 206
+    assert response.content == b"artifact"
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["content-range"] == "bytes 0-7/13"
+    assert response.headers["content-length"] == "8"
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_gateway_returns_416_with_total_size() -> None:
+    class RejectingGateway:
+        async def open_download(self, **kwargs: object) -> ArtifactTrustedContent:
+            del kwargs
+            from packages.contracts.public import range_not_satisfiable
+
+            raise range_not_satisfiable(total_size=13)
+
+    settings = AppSettings()
+    app = create_app(
+        settings,
+        identity_provider=MockIdentityProvider(settings, now=lambda: NOW),
+        artifact_service=cast(ArtifactManagementService, ArtifactServiceStub()),
+        artifact_download_gateway=cast(
+            ArtifactDownloadGatewayService, RejectingGateway()
+        ),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/v1/artifact-downloads/55555555-5555-4555-8555-555555555555",
+            params={"token": "t" * 43},
+            headers={"Range": "bytes=13-"},
+        )
+
+    assert response.status_code == 416
+    assert response.headers["content-range"] == "bytes */13"
+    assert response.json()["error"]["code"] == "RANGE_NOT_SATISFIABLE"
 
 
 @pytest.mark.asyncio

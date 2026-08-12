@@ -53,6 +53,7 @@ OPERATION_IDS = frozenset(
         "deleteArtifact",
         "completeArtifactUpload",
         "createArtifactDownload",
+        "downloadArtifactContent",
         "getOperation",
         "appendRunEventCandidates",
     }
@@ -854,6 +855,23 @@ class CoreApiClient:
             body=None,
         )
         return TypeAdapter(models.ArtifactDownload).validate_python(payload)
+
+    def download_artifact_content(
+        self,
+        *,
+        grant_id: models.DownloadArtifactContentGrantId,
+        token: models.DownloadArtifactContentToken,
+        range: models.DownloadArtifactContentRange | None = None,
+    ) -> AbstractAsyncContextManager[httpx.Response]:
+        path = "/api/v1/artifact-downloads/{grant_id}".replace(
+            "{grant_id}", quote(str(grant_id), safe="")
+        )
+        query: dict[str, QueryValue] = {}
+        query["token"] = token
+        headers: dict[str, str] = {}
+        if range is not None:
+            headers["Range"] = str(range)
+        return self._transport.open_stream("GET", path, query=query, headers=headers)
 
     async def get_operation(
         self,

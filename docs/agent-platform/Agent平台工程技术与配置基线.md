@@ -1,6 +1,6 @@
 # Agent 平台工程技术与配置基线
 
-> 文档版本：V1.4  
+> 文档版本：V1.5
 > 文档状态：开发输入基线
 
 ## 1. 固定选型
@@ -119,6 +119,17 @@ AP_OBJECT_STORAGE_BUCKET
 AP_OBJECT_STORAGE_CREDENTIAL_REF
 AP_TEMPORAL_ADDRESS
 AP_TEMPORAL_NAMESPACE
+AP_SANDBOX_MANAGER_BASE_URL
+AP_SANDBOX_MANAGER_REQUEST_TIMEOUT_SECONDS
+AP_SANDBOX_MANAGER_ALLOWED_SUBJECT_IDS
+AP_INTERNAL_SERVICE_TOKEN_ISSUER
+AP_INTERNAL_SERVICE_TOKEN_AUDIENCE
+AP_INTERNAL_SERVICE_TOKEN_KEY_ID
+AP_INTERNAL_SERVICE_TOKEN_SIGNING_KEY_REF
+AP_INTERNAL_SERVICE_TOKEN_VERIFICATION_KEY_REF
+AP_INTERNAL_SERVICE_TOKEN_TTL_SECONDS
+AP_INTERNAL_SERVICE_TOKEN_CLOCK_SKEW_SECONDS
+AP_EXECUTION_TICKET_KEY_REF
 AP_OIDC_ISSUER
 AP_OIDC_CLIENT_ID
 AP_OIDC_CLIENT_SECRET_REF
@@ -129,6 +140,8 @@ AP_CONTRACT_BASELINE_ID
 ```
 
 `*_REF` 指向 Secret Backend，不包含明文值。启动时必须校验 `AP_CONTRACT_BASELINE_ID` 与部署 Bundle 一致。
+
+Reconciliation Worker 必须配置稳定 SERVICE subject、Sandbox Manager 内部地址、Ed25519 签名私钥引用和独立 Execution Ticket HMAC Key 引用；Sandbox Manager 配置同一 Issuer/Audience/Key ID、验证公钥引用和允许的 SERVICE subject。签名/验证 Key 不得复用模型、OIDC、Checkpoint 或 Execution Ticket Key。
 
 `AP_AUTH_MODE=mock` 仅允许 local/test，提供固定的 `sub`、tenant、role 和 `membership_version` Claim；staging/production 启动时必须拒绝 Mock，并要求配置真实 OIDC Issuer/Claim 映射。
 

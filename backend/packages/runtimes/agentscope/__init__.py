@@ -19,6 +19,8 @@ from packages.runtimes.agentscope.model_bridge import (
 )
 from packages.runtimes.agentscope.runtime_bridge import (
     AgentScopeApprovalBridge,
+    AgentScopeCheckpointMetadataStore,
+    AgentScopeCheckpointRecord,
     AgentScopeRuntimeBridge,
     AgentScopeRuntimeBridgeError,
     AgentScopeSessionFactory,
@@ -34,6 +36,8 @@ __all__ = [
     "AgentScopeApprovalBridge",
     "AgentScopeBoundaryError",
     "AgentScopeBundleCompiler",
+    "AgentScopeCheckpointMetadataStore",
+    "AgentScopeCheckpointRecord",
     "AgentScopeCompatibilityReport",
     "AgentScopeEventTranslator",
     "AgentScopeGatewayChatModel",

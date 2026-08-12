@@ -1,6 +1,6 @@
 # Agent 平台数据库详细设计
 
-> 文档版本：V1.4
+> 文档版本：V1.7
 > 文档状态：开发输入基线  
 > 数据库：PostgreSQL 16+  
 > ORM：SQLAlchemy 2.x Async  
@@ -388,29 +388,45 @@ Event Service 在事务中通过原子更新分配连续序号；实现也可使
 - `sandbox_lease`：`id, tenant_id, sandbox_id, holder_run_id, fencing_token_hash, acquired_at, expires_at, released_at`。
 - `workspace`：`id, tenant_id, user_id, session_id, run_id, uri, quota_bytes, used_bytes, status, created_at, expires_at`。
 - `artifact`：`id, tenant_id, workspace_id, run_id, owner_user_id, name, object_uri, content_hash, size_bytes, content_type, status, required_output, scan_result_json, created_at, expires_at, deleted_at`。
+- `artifact_download_grant`：`id, tenant_id, artifact_id, owner_user_id, token_hash, expires_at, revoked_at, created_at`；Token 明文只返回一次，表中只保存 SHA-256。
 
 约束：
 
 - Workspace URI 唯一且必须通过 URI Parser 生成，禁止直接拼接。
 - Artifact 在 AVAILABLE 前不得提供普通下载。
+- Artifact Download Grant 绑定单一 Tenant/Artifact/Owner；除一次性写入 `revoked_at` 外绑定字段不可变，Artifact 进入删除流程时同事务撤销全部 Grant。
 - Sandbox Lease 同一 Sandbox 同时最多一个未释放记录。
 
 ## 10. Approval、审计和可靠消息
 
-- `approval_request`：`id, tenant_id, run_id, execution_attempt, requester_id, tool_name, parameter_digest, policy_version, status, expires_at, resource_version, created_at`。
+- `approval_request`：`id, tenant_id, run_id, execution_attempt, requester_id, tool_name, parameter_digest, policy_version, runtime_checkpoint_ref, status, expires_at, resource_version, created_at`；进入等待审批时绑定当次不可变 Runtime checkpoint 引用。
 - `approval_decision`：`id, tenant_id, approval_id, actor_id, decision, comment, created_at`，不可变。
 - `execution_ticket`：`id, tenant_id, approval_id, nonce_hash, tool_name, parameter_digest, expires_at, consumed_at`。
 - `audit_log`：`id, tenant_id, actor_type/id, action, resource_type/id, result, reason, diff_digest, metadata_json, trace_id, created_at`，不可更新删除。
 - `idempotency_record`：`id, tenant_id, actor_id, operation_type, idempotency_key, request_hash, status, response_status, response_ref, expires_at`。
 - `outbox_event`：`id, tenant_id, aggregate_type/id, event_type, payload_json, payload_schema_version, status, attempts, next_attempt_at, created_at, published_at`。
 - `inbox_record`：`consumer, message_id, tenant_id, status, received_at, processed_at`，`consumer + message_id` 唯一。
+- `runtime_checkpoint`：`id, tenant_id, run_id, execution_attempt, sequence_no, state_ref, object_key, content_hash, size_bytes, fencing_token_hash, status, created_at, available_at, expires_at`。元数据保存在 PostgreSQL，密文保存在私有 MinIO；同 Run/Attempt 按 `sequence_no` 选择最新 AVAILABLE 记录。
+
+Runtime checkpoint 约束：
+
+- `state_ref`、对象 Key、Hash、大小、Attempt 和 fencing token hash 创建后不可修改；状态只允许 `PENDING → AVAILABLE/FAILED`。
+- 读取必须同时匹配 Tenant、Run、Attempt 和当前 fencing token hash，并复核 AES-256-GCM AAD、明文 SHA-256 与大小。
+- Approval 绑定的 `runtime_checkpoint_ref` 是不可变审批事实；不得在批准后替换为另一份 Runtime 状态。
 
 ## 11. 模型用量与预算
 
 - `model_usage`：`id, tenant_id, run_id, provider, model, provider_request_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, token_estimated, cost_amount, cost_currency, started_at, finished_at`。
-- `quota_policy`：租户/用户/Agent/Runtime 范围和并发、速率、存储上限。
+- `quota_policy`：`id, tenant_id, name, description, status, current_version_id, resource_version, created_by, created_at, updated_at`；每租户最多一条，状态为 `ACTIVE/DISABLED`，`tenant.quota_policy_id` 选择当前策略。
+- `quota_policy_version`：`id, tenant_id, policy_id, version_no, max_nonterminal_runs_per_tenant/user/agent, max_nonterminal_agentscope_runs, max_nonterminal_codex_runs, content_hash, created_by, created_at`；至少一个限制非空，版本和内容不可更新删除。
 - `budget_policy`：周期 Token/费用硬软限制。
 - `budget_reservation`：`run_id, policy_id, reserved_amount, consumed_amount, released_amount, status`。
+
+QuotaPolicy 约束：
+
+- 两表启用 ENABLE/FORCE RLS；策略版本通过 deferred FK 绑定所属策略和当前版本。
+- ACTIVE 版本在 Run 创建/重试事务中读取，与部署硬限制逐维取最小值；禁用策略回退部署限制。
+- 本阶段字段仅表达已执行的 Run capacity，不提前加入未实现的存储、速率或费用字段。
 
 ## 12. V1 增量表
 

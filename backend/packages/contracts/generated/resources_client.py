@@ -93,6 +93,13 @@ OPERATION_IDS = frozenset(
         "updateTenant",
         "disableTenant",
         "enableTenant",
+        "listQuotaPolicies",
+        "createQuotaPolicy",
+        "getQuotaPolicy",
+        "updateQuotaPolicy",
+        "disableQuotaPolicy",
+        "enableQuotaPolicy",
+        "listQuotaPolicyVersions",
         "listMembers",
         "createMember",
         "getMember",
@@ -1832,6 +1839,153 @@ class ResourcesApiClient:
             body=body,
         )
         return TypeAdapter(models.Tenant).validate_python(payload)
+
+    async def list_quota_policies(
+        self,
+        *,
+        limit: models.ListQuotaPoliciesLimit | None = None,
+        cursor: models.ListQuotaPoliciesCursor | None = None,
+    ) -> models.QuotaPolicyPage:
+        path = "/api/v1/quota-policies"
+        query: dict[str, QueryValue] = {}
+        if limit is not None:
+            query["limit"] = limit
+        if cursor is not None:
+            query["cursor"] = cursor
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=query,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.QuotaPolicyPage).validate_python(payload)
+
+    async def create_quota_policy(
+        self,
+        *,
+        idempotency_key: models.CreateQuotaPolicyIdempotencyKey,
+        body: models.QuotaPolicyCreateRequest,
+    ) -> models.QuotaPolicy:
+        path = "/api/v1/quota-policies"
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.QuotaPolicy).validate_python(payload)
+
+    async def get_quota_policy(
+        self,
+        *,
+        quota_policy_id: models.GetQuotaPolicyQuotaPolicyId,
+    ) -> models.QuotaPolicy:
+        path = "/api/v1/quota-policies/{quota_policy_id}".replace(
+            "{quota_policy_id}", quote(str(quota_policy_id), safe="")
+        )
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=None,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.QuotaPolicy).validate_python(payload)
+
+    async def update_quota_policy(
+        self,
+        *,
+        quota_policy_id: models.UpdateQuotaPolicyQuotaPolicyId,
+        if_match: models.UpdateQuotaPolicyIfMatch,
+        body: models.QuotaPolicyUpdateRequest,
+    ) -> models.QuotaPolicy:
+        path = "/api/v1/quota-policies/{quota_policy_id}".replace(
+            "{quota_policy_id}", quote(str(quota_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "PATCH",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.QuotaPolicy).validate_python(payload)
+
+    async def disable_quota_policy(
+        self,
+        *,
+        quota_policy_id: models.DisableQuotaPolicyQuotaPolicyId,
+        idempotency_key: models.DisableQuotaPolicyIdempotencyKey,
+        if_match: models.DisableQuotaPolicyIfMatch,
+        body: models.ActionRequest | None = None,
+    ) -> models.QuotaPolicy:
+        path = "/api/v1/quota-policies/{quota_policy_id}/disable".replace(
+            "{quota_policy_id}", quote(str(quota_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.QuotaPolicy).validate_python(payload)
+
+    async def enable_quota_policy(
+        self,
+        *,
+        quota_policy_id: models.EnableQuotaPolicyQuotaPolicyId,
+        idempotency_key: models.EnableQuotaPolicyIdempotencyKey,
+        if_match: models.EnableQuotaPolicyIfMatch,
+        body: models.ActionRequest | None = None,
+    ) -> models.QuotaPolicy:
+        path = "/api/v1/quota-policies/{quota_policy_id}/enable".replace(
+            "{quota_policy_id}", quote(str(quota_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.QuotaPolicy).validate_python(payload)
+
+    async def list_quota_policy_versions(
+        self,
+        *,
+        quota_policy_id: models.ListQuotaPolicyVersionsQuotaPolicyId,
+        limit: models.ListQuotaPolicyVersionsLimit | None = None,
+        cursor: models.ListQuotaPolicyVersionsCursor | None = None,
+    ) -> models.QuotaPolicyVersionPage:
+        path = "/api/v1/quota-policies/{quota_policy_id}/versions".replace(
+            "{quota_policy_id}", quote(str(quota_policy_id), safe="")
+        )
+        query: dict[str, QueryValue] = {}
+        if limit is not None:
+            query["limit"] = limit
+        if cursor is not None:
+            query["cursor"] = cursor
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=query,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.QuotaPolicyVersionPage).validate_python(payload)
 
     async def list_members(
         self,

@@ -1,6 +1,6 @@
 # Agent 平台 Sandbox 与 Workspace 服务契约
 
-> 文档版本：V1.3
+> 文档版本：V1.4
 > 文档状态：开发输入基线
 
 ## 1. 服务边界
@@ -57,7 +57,12 @@ artifact policy
 
 ## 4. 服务认证
 
-- 内部 API 使用 mTLS 或 Workload Identity。
+- Kubernetes ServiceAccount 标识工作负载并限制签名 Secret 的读取范围；传输层使用集群内 TLS，具备 Service Mesh 时叠加 mTLS/SPIFFE。
+- 应用层内部 API 使用 `Authorization: Bearer <service-token>`。V1 Service Token 固定为 Ed25519/EdDSA 短期 JWT，Header 必须携带受控 `kid`，禁止回退为共享管理员 Token。
+- Sandbox Manager Token 必须包含 `iss`、`sub`、`aud=sandbox-manager`、`tenant_id`、`permissions`、`iat`、`nbf`、`exp` 和 `jti`；默认 TTL 60 秒、最大 300 秒，验证端必须配置非空 SERVICE subject allowlist，并要求 `internal:sandbox_manage` 权限。
+- `tenant_id` 只从验签后的 Token Claim 构造 TenantContext；普通 `X-Tenant-ID`、Query、Path 或 Body 不得覆盖调用租户。
+- Reconciliation Worker 持有签名私钥并按当前 tenant-scoped cycle 签发单请求 Token；Sandbox Manager 只持有验证公钥。私钥、公钥和 Execution Ticket HMAC Key 均通过 Secret Backend 引用注入，不写入配置、日志、审计或数据库。
+- Token `jti` 用于审计关联；破坏性接口仍必须幂等。轮换通过新 `kid` 和短兼容窗口完成，过期 Key 立即停止接受。
 - 每次 Provision 使用短期 `provision_token`，绑定 tenant、run、policy_hash、bundle_hash、过期时间和 nonce。
 - Sandbox Manager 校验调用方身份、Token、租户、Hash 和重放状态。
 - 所有控制操作记录 caller service、tenant、run、sandbox、trace_id 和结果。

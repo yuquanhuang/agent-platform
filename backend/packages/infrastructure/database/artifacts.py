@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from datetime import UTC, datetime
 from typing import Literal, cast
@@ -15,11 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.application.artifacts import (
     ARTIFACT_DELETE_REQUESTED_EVENT,
+    ARTIFACT_DOWNLOADS_REVOKED_EVENT,
     ARTIFACT_SCAN_REQUESTED_EVENT,
+    ArtifactDownloadGrantRecord,
 )
 from packages.application.metadata import RequestMetadata
 from packages.contracts.generated.core_models import ArtifactUploadCreateRequest
 from packages.contracts.public import (
+    SubjectType,
     TenantContext,
     dependency_unavailable,
     resource_state_conflict,
@@ -41,13 +45,14 @@ from packages.infrastructure.database.idempotency import (
 )
 from packages.infrastructure.database.models import (
     AgentRunModel,
+    ArtifactDownloadGrantModel,
     ArtifactModel,
     AuditLogModel,
     ChatSessionModel,
     OperationRecordModel,
 )
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxWriter
-from packages.infrastructure.database.uow import TenantUnitOfWork
+from packages.infrastructure.database.uow import PlatformUnitOfWork, TenantUnitOfWork
 
 
 class SqlAlchemyArtifactStore:
@@ -428,7 +433,39 @@ class SqlAlchemyArtifactStore:
                     session.add(operation)
                     should_dispatch = True
 
+                revocation_time = max(now, model.updated_at)
+                revoked_grant_ids = await _revoke_download_grants(
+                    session,
+                    tenant_id=tenant_id,
+                    artifact_id=artifact_id,
+                    now=revocation_time,
+                )
                 await session.flush()
+                if revoked_grant_ids:
+                    SqlAlchemyOutboxWriter(session, context).add(
+                        OutboxEvent(
+                            id=uuid5(
+                                NAMESPACE_URL,
+                                "artifact-download-revocation-outbox/"
+                                f"{tenant_id}/{operation.id}",
+                            ),
+                            tenant_id=tenant_id,
+                            aggregate_type="artifact",
+                            aggregate_id=artifact_id,
+                            event_type=ARTIFACT_DOWNLOADS_REVOKED_EVENT,
+                            payload={
+                                "tenant_id": str(tenant_id),
+                                "artifact_id": str(artifact_id),
+                                "revoked_at": revocation_time.isoformat(),
+                                "grant_count": len(revoked_grant_ids),
+                            },
+                            payload_schema_version=1,
+                            status=OutboxStatus.PENDING,
+                            attempts=0,
+                            next_attempt_at=revocation_time,
+                            created_at=revocation_time,
+                        )
+                    )
                 if should_dispatch:
                     SqlAlchemyOutboxWriter(session, context).add(
                         OutboxEvent(
@@ -462,6 +499,7 @@ class SqlAlchemyArtifactStore:
                             "operation_id": str(operation.id),
                             "status": "DELETING",
                             "downloads_revoked": True,
+                            "revoked_grant_count": len(revoked_grant_ids),
                         },
                         occurred_at=max(now, model.updated_at),
                     )
@@ -478,12 +516,14 @@ class SqlAlchemyArtifactStore:
         except SQLAlchemyError as error:
             raise dependency_unavailable("Artifact Store is unavailable.") from error
 
-    async def confirm_download(
+    async def create_download_grant(
         self,
         context: TenantContext,
         *,
+        grant_id: UUID,
         artifact_id: UUID,
         owner_user_id: UUID,
+        token_hash: str,
         grant_expires_at: datetime,
         metadata: RequestMetadata,
         now: datetime,
@@ -512,6 +552,18 @@ class SqlAlchemyArtifactStore:
                     owner_user_id=owner_user_id,
                 ):
                     return False
+                unit.session.add(
+                    ArtifactDownloadGrantModel(
+                        id=grant_id,
+                        tenant_id=tenant_id,
+                        artifact_id=artifact_id,
+                        owner_user_id=owner_user_id,
+                        token_hash=token_hash,
+                        expires_at=grant_expires_at,
+                        revoked_at=None,
+                        created_at=now,
+                    )
+                )
                 await _audit(
                     unit.session,
                     context,
@@ -519,10 +571,158 @@ class SqlAlchemyArtifactStore:
                     artifact_id=artifact_id,
                     result="SUCCESS",
                     reason_codes=[],
-                    metadata={"grant_expires_at": grant_expires_at.isoformat()},
+                    metadata={
+                        "grant_id": str(grant_id),
+                        "grant_expires_at": grant_expires_at.isoformat(),
+                    },
                     occurred_at=max(now, model.updated_at),
                 )
                 return True
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Artifact Store is unavailable.") from error
+
+    async def resolve_download_grant(
+        self,
+        *,
+        grant_id: UUID,
+        token_hash: str,
+        service_subject_id: UUID,
+        metadata: RequestMetadata,
+        now: datetime,
+    ) -> ArtifactDownloadGrantRecord | None:
+        try:
+            async with PlatformUnitOfWork(self._session_factory) as unit:
+                grant = await unit.session.scalar(
+                    select(ArtifactDownloadGrantModel).where(
+                        ArtifactDownloadGrantModel.id == grant_id
+                    )
+                )
+                if (
+                    grant is None
+                    or not hmac.compare_digest(grant.token_hash, token_hash)
+                    or grant.revoked_at is not None
+                    or grant.expires_at <= now
+                ):
+                    return None
+                tenant_context = TenantContext(
+                    tenant_id=str(grant.tenant_id),
+                    subject_type=SubjectType.SERVICE,
+                    subject_id=str(service_subject_id),
+                    auth_time=now,
+                    request_id=metadata.request_id,
+                    trace_id=metadata.trace_id,
+                )
+            async with TenantUnitOfWork(
+                self._session_factory, tenant_context, read_only=True
+            ) as tenant_unit:
+                artifact = await tenant_unit.session.scalar(
+                    select(ArtifactModel).where(
+                        ArtifactModel.tenant_id == grant.tenant_id,
+                        ArtifactModel.id == grant.artifact_id,
+                        ArtifactModel.status == "AVAILABLE",
+                        ArtifactModel.expires_at > now,
+                    )
+                )
+                if artifact is None or artifact.owner_user_id != grant.owner_user_id:
+                    return None
+                return ArtifactDownloadGrantRecord(
+                    id=grant.id,
+                    tenant_id=grant.tenant_id,
+                    artifact_id=grant.artifact_id,
+                    owner_user_id=grant.owner_user_id,
+                    token_hash=grant.token_hash,
+                    expires_at=grant.expires_at,
+                    revoked_at=grant.revoked_at,
+                    artifact=_artifact_record(artifact),
+                )
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Artifact Store is unavailable.") from error
+
+    async def record_download_open(
+        self,
+        context: TenantContext,
+        *,
+        grant_id: UUID,
+        artifact_id: UUID,
+        metadata: RequestMetadata,
+        now: datetime,
+    ) -> bool:
+        tenant_id = UUID(context.tenant_id)
+        try:
+            async with TenantUnitOfWork(self._session_factory, context) as unit:
+                grant = await unit.session.scalar(
+                    select(ArtifactDownloadGrantModel)
+                    .where(
+                        ArtifactDownloadGrantModel.tenant_id == tenant_id,
+                        ArtifactDownloadGrantModel.id == grant_id,
+                        ArtifactDownloadGrantModel.artifact_id == artifact_id,
+                    )
+                    .with_for_update()
+                )
+                if (
+                    grant is None
+                    or grant.revoked_at is not None
+                    or grant.expires_at <= now
+                ):
+                    return False
+                artifact = await unit.session.scalar(
+                    select(ArtifactModel).where(
+                        ArtifactModel.tenant_id == tenant_id,
+                        ArtifactModel.id == artifact_id,
+                        ArtifactModel.status == "AVAILABLE",
+                        ArtifactModel.expires_at > now,
+                    )
+                )
+                if artifact is None:
+                    return False
+                await _audit(
+                    unit.session,
+                    context,
+                    action="artifact.download.open",
+                    artifact_id=artifact_id,
+                    result="SUCCESS",
+                    reason_codes=[],
+                    metadata={"grant_id": str(grant_id)},
+                    occurred_at=max(now, artifact.updated_at),
+                )
+                return True
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Artifact Store is unavailable.") from error
+
+    async def is_download_grant_active(
+        self,
+        context: TenantContext,
+        *,
+        grant_id: UUID,
+        artifact_id: UUID,
+        now: datetime,
+    ) -> bool:
+        tenant_id = UUID(context.tenant_id)
+        try:
+            async with TenantUnitOfWork(
+                self._session_factory, context, read_only=True
+            ) as unit:
+                grant = await unit.session.scalar(
+                    select(ArtifactDownloadGrantModel).where(
+                        ArtifactDownloadGrantModel.tenant_id == tenant_id,
+                        ArtifactDownloadGrantModel.id == grant_id,
+                        ArtifactDownloadGrantModel.artifact_id == artifact_id,
+                        ArtifactDownloadGrantModel.revoked_at.is_(None),
+                        ArtifactDownloadGrantModel.expires_at > now,
+                    )
+                )
+                if grant is None:
+                    return False
+                artifact = await unit.session.scalar(
+                    select(ArtifactModel).where(
+                        ArtifactModel.tenant_id == tenant_id,
+                        ArtifactModel.id == artifact_id,
+                        ArtifactModel.owner_user_id == grant.owner_user_id,
+                        ArtifactModel.status == "AVAILABLE",
+                        ArtifactModel.expires_at > now,
+                    )
+                )
+                return artifact is not None
         except SQLAlchemyError as error:
             raise dependency_unavailable("Artifact Store is unavailable.") from error
 
@@ -811,6 +1011,29 @@ class SqlAlchemyArtifactStore:
                 )
         except SQLAlchemyError as error:
             raise dependency_unavailable("Artifact Store is unavailable.") from error
+
+
+async def _revoke_download_grants(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    artifact_id: UUID,
+    now: datetime,
+) -> tuple[UUID, ...]:
+    grants = (
+        await session.scalars(
+            select(ArtifactDownloadGrantModel)
+            .where(
+                ArtifactDownloadGrantModel.tenant_id == tenant_id,
+                ArtifactDownloadGrantModel.artifact_id == artifact_id,
+                ArtifactDownloadGrantModel.revoked_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).all()
+    for grant in grants:
+        grant.revoked_at = max(now, grant.created_at)
+    return tuple(grant.id for grant in grants)
 
 
 async def _owned_artifact(

@@ -44,6 +44,7 @@ export const operationIds = [
   'deleteArtifact',
   'completeArtifactUpload',
   'createArtifactDownload',
+  'downloadArtifactContent',
   'getOperation',
   'appendRunEventCandidates',
 ] as const;
@@ -772,6 +773,28 @@ export class CoreApiClient {
     return await this.transport.request<Models.ArtifactDownload>({
       method: 'GET',
       path,
+      signal: input.signal,
+    });
+  }
+
+  async downloadArtifactContent(
+    input: {
+      readonly grantId: Models.DownloadArtifactContentGrantId;
+      readonly token: Models.DownloadArtifactContentToken;
+      readonly range?: Models.DownloadArtifactContentRange;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Response> {
+    const path = '/api/v1/artifact-downloads/{grant_id}'.replace('{grant_id}', encodeURIComponent(String(input.grantId)));
+    return await this.transport.openStream({
+      method: 'GET',
+      path,
+      query: {
+        'token': input.token,
+      },
+      headers: {
+        'Range': input.range === undefined ? undefined : String(input.range),
+      },
       signal: input.signal,
     });
   }

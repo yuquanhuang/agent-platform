@@ -69,6 +69,7 @@ class Stub:
         self.decisions: list[dict[str, object]] = []
         self.signals: list[object] = []
         self.signal_failures = 0
+        self.signal_markers: list[UUID] = []
         self.ticket: ExecutionTicketRecord | None = None
 
     async def resolve_tenant_access(
@@ -167,6 +168,13 @@ class Stub:
             self.signal_failures -= 1
             raise dependency_unavailable("Temporal is temporarily unavailable.")
 
+    async def mark_workflow_signal_sent(
+        self, context: TenantContext, *, approval_id: UUID, sent_at: datetime
+    ) -> bool:
+        del context, sent_at
+        self.signal_markers.append(approval_id)
+        return True
+
 
 def principal() -> AuthenticatedPrincipal:
     return AuthenticatedPrincipal(
@@ -240,6 +248,7 @@ async def test_approved_decision_issues_ticket_and_signals_only_safe_reference()
         cast(ApprovalStore, stub),
         workflow_control=stub,
         execution_ticket_issuer=issuer,
+        signal_delivery_store=stub,
     )
 
     await service.decide_approval(
@@ -262,6 +271,7 @@ async def test_approved_decision_issues_ticket_and_signals_only_safe_reference()
         ).nonce.get_secret_value()
         not in signal.ticket_ref
     )
+    assert stub.signal_markers == [APPROVAL_ID]
 
 
 @pytest.mark.asyncio
@@ -328,6 +338,7 @@ async def test_idempotent_retry_redelivers_signal_after_durable_decision() -> No
 
     assert first_attempt.value.code == "DEPENDENCY_UNAVAILABLE"
     assert stub.current.status == "REJECTED"
+    assert stub.signal_markers == []
     retried = await service.decide_approval(
         principal(),
         approval_id=str(APPROVAL_ID),

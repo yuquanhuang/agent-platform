@@ -56,6 +56,7 @@ class ApprovalRequestInput:
     deployment_id: UUID
     expires_at: datetime
     self_approval_allowed: bool = False
+    runtime_checkpoint_ref: str | None = None
 
 
 class ApprovalAccessResolver(Protocol):
@@ -138,6 +139,16 @@ class ApprovalWorkflowControl(Protocol):
     ) -> None: ...
 
 
+class ApprovalSignalDeliveryStore(Protocol):
+    async def mark_workflow_signal_sent(
+        self,
+        context: TenantContext,
+        *,
+        approval_id: UUID,
+        sent_at: datetime,
+    ) -> bool: ...
+
+
 class ApprovalManagementService:
     """Map the frozen Approval API to tenant-scoped durable facts."""
 
@@ -147,11 +158,13 @@ class ApprovalManagementService:
         store: ApprovalStore,
         workflow_control: ApprovalWorkflowControl | None = None,
         execution_ticket_issuer: ExecutionTicketIssuer | None = None,
+        signal_delivery_store: ApprovalSignalDeliveryStore | None = None,
     ):
         self._access_resolver = access_resolver
         self._store = store
         self._workflow_control = workflow_control
         self._execution_ticket_issuer = execution_ticket_issuer
+        self._signal_delivery_store = signal_delivery_store
 
     async def list_approvals(
         self,
@@ -292,6 +305,12 @@ class ApprovalManagementService:
                 decided_at=decision.created_at,
             ),
         )
+        if self._signal_delivery_store is not None:
+            await self._signal_delivery_store.mark_workflow_signal_sent(
+                access.context,
+                approval_id=parsed_id,
+                sent_at=datetime.now(UTC),
+            )
         return approval
 
     async def _access(
@@ -313,9 +332,11 @@ class ApprovalCoordinator:
         self,
         store: ApprovalStore,
         workflow_control: ApprovalWorkflowControl | None = None,
+        signal_delivery_store: ApprovalSignalDeliveryStore | None = None,
     ) -> None:
         self._store = store
         self._workflow_control = workflow_control
+        self._signal_delivery_store = signal_delivery_store
 
     async def request_approval(
         self,
@@ -372,6 +393,12 @@ class ApprovalCoordinator:
                     decided_at=decided_at,
                 ),
             )
+            if self._signal_delivery_store is not None:
+                await self._signal_delivery_store.mark_workflow_signal_sent(
+                    context,
+                    approval_id=record.id,
+                    sent_at=decided_at,
+                )
         return expired
 
 

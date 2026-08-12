@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-platform-event-worker
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/name: agent-platform-event-worker
+    app.kubernetes.io/part-of: agent-platform
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-platform-event-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-platform-event-worker
+        app.kubernetes.io/part-of: agent-platform
+    spec:
+      serviceAccountName: agent-platform-event-worker
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: event-worker
+          # CI/overlay must replace this tag with the verified Registry digest.
+          image: agent-platform-backend:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.event_worker.main"]
+          envFrom:
+            - configMapRef:
+                name: agent-platform-event-worker
+          env:
+            - name: AP_SERVICE_SUBJECT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: agent-platform-runtime-identities
+                  key: event_worker_subject_id
+            - name: AP_SECRET_DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-runtime-secrets
+                  key: AP_SECRET_DATABASE_DSN
+            - name: AP_SECRET_REDIS_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-runtime-secrets
+                  key: AP_SECRET_REDIS_DSN
+            - name: AP_SECRET_OBJECT_STORAGE_CREDENTIALS
+              valueFrom:
+                secretKeyRef:
+                  name: agent-platform-runtime-secrets
+                  key: AP_SECRET_OBJECT_STORAGE_CREDENTIALS
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-platform-runtime-identities
+  namespace: agent-platform
+data:
+  # Stable service subject registered in platform IAM/bootstrap data.
+  event_worker_subject_id: 00000000-0000-4000-8000-000000000001
+  reconciliation_worker_subject_id: 00000000-0000-4000-8000-000000000002

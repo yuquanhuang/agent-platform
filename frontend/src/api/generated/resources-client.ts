@@ -86,6 +86,13 @@ export const operationIds = [
   'updateTenant',
   'disableTenant',
   'enableTenant',
+  'listQuotaPolicies',
+  'createQuotaPolicy',
+  'getQuotaPolicy',
+  'updateQuotaPolicy',
+  'disableQuotaPolicy',
+  'enableQuotaPolicy',
+  'listQuotaPolicyVersions',
   'listMembers',
   'createMember',
   'getMember',
@@ -1695,6 +1702,142 @@ export class ResourcesApiClient {
         'If-Match': String(input.ifMatch),
       },
       body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async listQuotaPolicies(
+    input: {
+      readonly limit?: Models.ListQuotaPoliciesLimit;
+      readonly cursor?: Models.ListQuotaPoliciesCursor;
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<Models.QuotaPolicyPage> {
+    const path = '/api/v1/quota-policies';
+    return await this.transport.request<Models.QuotaPolicyPage>({
+      method: 'GET',
+      path,
+      query: {
+        'limit': input.limit,
+        'cursor': input.cursor,
+      },
+      signal: input.signal,
+    });
+  }
+
+  async createQuotaPolicy(
+    input: {
+      readonly idempotencyKey: Models.CreateQuotaPolicyIdempotencyKey;
+      readonly body: Models.QuotaPolicyCreateRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.QuotaPolicy> {
+    const path = '/api/v1/quota-policies';
+    return await this.transport.request<Models.QuotaPolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async getQuotaPolicy(
+    input: {
+      readonly quotaPolicyId: Models.GetQuotaPolicyQuotaPolicyId;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.QuotaPolicy> {
+    const path = '/api/v1/quota-policies/{quota_policy_id}'.replace('{quota_policy_id}', encodeURIComponent(String(input.quotaPolicyId)));
+    return await this.transport.request<Models.QuotaPolicy>({
+      method: 'GET',
+      path,
+      signal: input.signal,
+    });
+  }
+
+  async updateQuotaPolicy(
+    input: {
+      readonly quotaPolicyId: Models.UpdateQuotaPolicyQuotaPolicyId;
+      readonly ifMatch: Models.UpdateQuotaPolicyIfMatch;
+      readonly body: Models.QuotaPolicyUpdateRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.QuotaPolicy> {
+    const path = '/api/v1/quota-policies/{quota_policy_id}'.replace('{quota_policy_id}', encodeURIComponent(String(input.quotaPolicyId)));
+    return await this.transport.request<Models.QuotaPolicy>({
+      method: 'PATCH',
+      path,
+      headers: {
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async disableQuotaPolicy(
+    input: {
+      readonly quotaPolicyId: Models.DisableQuotaPolicyQuotaPolicyId;
+      readonly idempotencyKey: Models.DisableQuotaPolicyIdempotencyKey;
+      readonly ifMatch: Models.DisableQuotaPolicyIfMatch;
+      readonly body?: Models.ActionRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.QuotaPolicy> {
+    const path = '/api/v1/quota-policies/{quota_policy_id}/disable'.replace('{quota_policy_id}', encodeURIComponent(String(input.quotaPolicyId)));
+    return await this.transport.request<Models.QuotaPolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async enableQuotaPolicy(
+    input: {
+      readonly quotaPolicyId: Models.EnableQuotaPolicyQuotaPolicyId;
+      readonly idempotencyKey: Models.EnableQuotaPolicyIdempotencyKey;
+      readonly ifMatch: Models.EnableQuotaPolicyIfMatch;
+      readonly body?: Models.ActionRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.QuotaPolicy> {
+    const path = '/api/v1/quota-policies/{quota_policy_id}/enable'.replace('{quota_policy_id}', encodeURIComponent(String(input.quotaPolicyId)));
+    return await this.transport.request<Models.QuotaPolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async listQuotaPolicyVersions(
+    input: {
+      readonly quotaPolicyId: Models.ListQuotaPolicyVersionsQuotaPolicyId;
+      readonly limit?: Models.ListQuotaPolicyVersionsLimit;
+      readonly cursor?: Models.ListQuotaPolicyVersionsCursor;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.QuotaPolicyVersionPage> {
+    const path = '/api/v1/quota-policies/{quota_policy_id}/versions'.replace('{quota_policy_id}', encodeURIComponent(String(input.quotaPolicyId)));
+    return await this.transport.request<Models.QuotaPolicyVersionPage>({
+      method: 'GET',
+      path,
+      query: {
+        'limit': input.limit,
+        'cursor': input.cursor,
+      },
       signal: input.signal,
     });
   }

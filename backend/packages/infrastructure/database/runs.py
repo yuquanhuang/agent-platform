@@ -8,7 +8,7 @@ from typing import Literal, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import JsonValue
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,7 +17,11 @@ from packages.application.outbox import PermanentOutboxError, RetryableOutboxErr
 from packages.application.outbox.run import WorkflowStartOutcome
 from packages.application.policy import (
     AdmissionDenied,
+    CapacityAdmissionDenied,
+    RunCapacityFacts,
+    RunCapacityPolicy,
     RuntimeBundleAdmissionFacts,
+    admit_run_capacity,
     admit_runtime_bundle,
 )
 from packages.application.reconciliation import RunReconciliationCandidate
@@ -33,6 +37,7 @@ from packages.contracts.generated.core_models import (
 )
 from packages.contracts.public import (
     TenantContext,
+    rate_limited,
     resource_state_conflict,
     run_already_active,
     validation_error,
@@ -75,14 +80,44 @@ from packages.infrastructure.database.models import (
     RuntimeBundleModel,
 )
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxWriter
+from packages.infrastructure.database.quota_policies import (
+    load_active_run_capacity_policy,
+)
 from packages.infrastructure.database.uow import TenantUnitOfWork
 
 
 class SqlAlchemyRunStore:
     """Persist immutable Run inputs and current lifecycle materialization."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        run_capacity_policy: RunCapacityPolicy | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._run_capacity_policy = run_capacity_policy or RunCapacityPolicy()
+
+    async def _record_capacity_denial(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        resource_id: UUID | None,
+        operation: Literal["create", "retry"],
+        denial: CapacityAdmissionDenied,
+        metadata: RequestMetadata,
+    ) -> None:
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            _capacity_denial_audit(
+                unit_of_work.session,
+                tenant_id=UUID(context.tenant_id),
+                actor_id=actor_id,
+                resource_id=resource_id,
+                operation=operation,
+                denial=denial,
+                metadata=metadata,
+            )
 
     async def record_workflow_start(
         self,
@@ -125,6 +160,18 @@ class SqlAlchemyRunStore:
                 run.temporal_run_id = temporal_run_id
                 run.workflow_start_outcome = outcome
                 run.workflow_started_at = started_at
+                _reconciliation_audit(
+                    unit_of_work.session,
+                    context=context,
+                    run_id=run.id,
+                    action="run.workflow.mapping.recorded",
+                    change={
+                        "workflow_id": workflow_id,
+                        "temporal_run_id": temporal_run_id,
+                        "outcome": outcome,
+                    },
+                    occurred_at=started_at,
+                )
                 await unit_of_work.session.flush()
                 return True
         except PermanentOutboxError:
@@ -233,6 +280,14 @@ class SqlAlchemyRunStore:
                     published_at=None,
                 )
                 session.add(event)
+                _reconciliation_audit(
+                    session,
+                    context=context,
+                    run_id=run.id,
+                    action="run.reconcile.request_requeued",
+                    change={"outbox_recreated": True},
+                    occurred_at=now,
+                )
                 await session.flush()
                 return True
             if (
@@ -249,8 +304,44 @@ class SqlAlchemyRunStore:
             event.attempts = 0
             event.next_attempt_at = now
             event.published_at = None
+            _reconciliation_audit(
+                session,
+                context=context,
+                run_id=run.id,
+                action="run.reconcile.request_requeued",
+                change={"outbox_recreated": False},
+                occurred_at=now,
+            )
             await session.flush()
             return True
+
+    async def record_cancel_signal_delivery(
+        self,
+        context: TenantContext,
+        *,
+        run_id: UUID,
+        signal_id: str,
+        now: datetime,
+    ) -> None:
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            run_exists = await unit_of_work.session.scalar(
+                select(AgentRunModel.id).where(
+                    AgentRunModel.tenant_id == tenant_id,
+                    AgentRunModel.id == run_id,
+                )
+            )
+            if run_exists is None:
+                raise PermanentOutboxError("The reconciled Run is unavailable")
+            _reconciliation_audit(
+                unit_of_work.session,
+                context=context,
+                run_id=run_id,
+                action="run.reconcile.cancel_signal_sent",
+                change={"signal_id": signal_id},
+                occurred_at=now,
+            )
+            await unit_of_work.session.flush()
 
     async def list_session_runs(
         self,
@@ -389,6 +480,30 @@ class SqlAlchemyRunStore:
                         else None
                     ),
                 )
+                try:
+                    await _admit_run_capacity(
+                        session,
+                        policy=self._run_capacity_policy,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        agent_id=chat_session.agent_id,
+                        deployment=deployment,
+                    )
+                except CapacityAdmissionDenied as denial:
+                    await self._record_capacity_denial(
+                        context,
+                        actor_id=user_id,
+                        resource_id=None,
+                        operation="create",
+                        denial=denial,
+                        metadata=metadata,
+                    )
+                    raise rate_limited(
+                        details={
+                            "scope": denial.scope,
+                            "reason_code": denial.reason_code,
+                        }
+                    ) from denial
                 now = datetime.now(UTC)
                 user_message = ChatMessageModel(
                     tenant_id=tenant_id,
@@ -683,6 +798,30 @@ class SqlAlchemyRunStore:
                     source=source,
                     policy=request.deployment_policy,
                 )
+                try:
+                    await _admit_run_capacity(
+                        session,
+                        policy=self._run_capacity_policy,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        agent_id=source.agent_id,
+                        deployment=deployment,
+                    )
+                except CapacityAdmissionDenied as denial:
+                    await self._record_capacity_denial(
+                        context,
+                        actor_id=user_id,
+                        resource_id=source.id,
+                        operation="retry",
+                        denial=denial,
+                        metadata=metadata,
+                    )
+                    raise rate_limited(
+                        details={
+                            "scope": denial.scope,
+                            "reason_code": denial.reason_code,
+                        }
+                    ) from denial
                 message = await session.scalar(
                     select(ChatMessageModel).where(
                         ChatMessageModel.tenant_id == tenant_id,
@@ -1538,6 +1677,97 @@ class SqlAlchemyRunStore:
             raise resource_state_conflict(f"{error.code}: {error}") from error
 
 
+async def _admit_run_capacity(
+    session: AsyncSession,
+    *,
+    policy: RunCapacityPolicy,
+    tenant_id: UUID,
+    user_id: UUID,
+    agent_id: UUID,
+    deployment: DeploymentModel,
+) -> None:
+    tenant_policy = await load_active_run_capacity_policy(session, tenant_id)
+    effective_policy = (
+        policy.narrowed_by(tenant_policy) if tenant_policy is not None else policy
+    )
+    if not effective_policy.enabled:
+        return
+    runtime_type_value = await session.scalar(
+        select(RuntimeBundleModel.runtime_type).where(
+            RuntimeBundleModel.tenant_id == tenant_id,
+            RuntimeBundleModel.id == deployment.bundle_id,
+            RuntimeBundleModel.snapshot_id == deployment.snapshot_id,
+        )
+    )
+    if runtime_type_value not in {"agentscope", "codex"}:
+        raise resource_state_conflict(
+            "The Deployment Runtime type is unavailable for capacity admission."
+        )
+    runtime_type = cast(Literal["agentscope", "codex"], runtime_type_value)
+    lock_keys: list[str] = []
+    if effective_policy.max_nonterminal_runs_per_tenant is not None:
+        lock_keys.append(f"run-capacity:tenant:{tenant_id}")
+    if effective_policy.max_nonterminal_runs_per_user is not None:
+        lock_keys.append(f"run-capacity:user:{tenant_id}:{user_id}")
+    if effective_policy.max_nonterminal_runs_per_agent is not None:
+        lock_keys.append(f"run-capacity:agent:{tenant_id}:{agent_id}")
+    if effective_policy.runtime_limit(runtime_type) is not None:
+        lock_keys.append(f"run-capacity:runtime:{tenant_id}:{runtime_type}")
+    for lock_key in sorted(lock_keys):
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": lock_key},
+        )
+
+    base = (
+        AgentRunModel.tenant_id == tenant_id,
+        AgentRunModel.status.in_(NON_TERMINAL_RUN_STATUSES),
+    )
+    tenant_count = await session.scalar(
+        select(func.count(AgentRunModel.id)).where(*base)
+    )
+    user_count = await session.scalar(
+        select(func.count(AgentRunModel.id)).where(
+            *base, AgentRunModel.created_by == user_id
+        )
+    )
+    agent_count = await session.scalar(
+        select(func.count(AgentRunModel.id)).where(
+            *base, AgentRunModel.agent_id == agent_id
+        )
+    )
+    runtime_count = await session.scalar(
+        select(func.count(AgentRunModel.id))
+        .select_from(AgentRunModel)
+        .join(
+            DeploymentModel,
+            and_(
+                DeploymentModel.tenant_id == AgentRunModel.tenant_id,
+                DeploymentModel.id == AgentRunModel.deployment_id,
+            ),
+        )
+        .join(
+            RuntimeBundleModel,
+            and_(
+                RuntimeBundleModel.tenant_id == DeploymentModel.tenant_id,
+                RuntimeBundleModel.id == DeploymentModel.bundle_id,
+                RuntimeBundleModel.snapshot_id == DeploymentModel.snapshot_id,
+            ),
+        )
+        .where(*base, RuntimeBundleModel.runtime_type == runtime_type)
+    )
+    admit_run_capacity(
+        effective_policy,
+        RunCapacityFacts(
+            tenant_nonterminal_runs=int(tenant_count or 0),
+            user_nonterminal_runs=int(user_count or 0),
+            agent_nonterminal_runs=int(agent_count or 0),
+            runtime_nonterminal_runs=int(runtime_count or 0),
+            runtime_type=runtime_type,
+        ),
+    )
+
+
 def _resource_id(value: str) -> UUID:
     try:
         return UUID(value)
@@ -1672,5 +1902,70 @@ async def _audit(
             request_id=metadata.request_id,
             trace_id=metadata.trace_id,
             metadata_json=change,
+        )
+    )
+
+
+def _capacity_denial_audit(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    actor_id: UUID,
+    resource_id: UUID | None,
+    operation: Literal["create", "retry"],
+    denial: CapacityAdmissionDenied,
+    metadata: RequestMetadata,
+) -> None:
+    change = {
+        "operation": operation,
+        "scope": denial.scope,
+        "reason_code": denial.reason_code,
+        "current": denial.current,
+        "limit": denial.limit,
+    }
+    canonical = json.dumps(change, sort_keys=True, separators=(",", ":")).encode()
+    session.add(
+        AuditLogModel(
+            tenant_id=tenant_id,
+            actor_type="user",
+            actor_id=actor_id,
+            action=f"run.{operation}.admission_deny",
+            resource_type="run",
+            resource_id=resource_id,
+            result="DENIED",
+            reason_codes=["RATE_LIMITED", denial.reason_code],
+            change_digest=f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+            request_id=metadata.request_id,
+            trace_id=metadata.trace_id,
+            metadata_json=change,
+        )
+    )
+
+
+def _reconciliation_audit(
+    session: AsyncSession,
+    *,
+    context: TenantContext,
+    run_id: UUID,
+    action: str,
+    change: dict[str, object],
+    occurred_at: datetime,
+) -> None:
+    canonical = json.dumps(change, sort_keys=True, separators=(",", ":")).encode()
+    session.add(
+        AuditLogModel(
+            tenant_id=UUID(context.tenant_id),
+            actor_type=context.subject_type.value,
+            actor_id=UUID(context.subject_id),
+            action=action,
+            resource_type="run",
+            resource_id=run_id,
+            result="SUCCESS",
+            reason_codes=[],
+            change_digest=f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+            request_id=context.request_id,
+            trace_id=context.trace_id,
+            metadata_json=change,
+            created_at=occurred_at,
         )
     )

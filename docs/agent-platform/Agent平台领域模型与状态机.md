@@ -1,6 +1,6 @@
 # Agent 平台领域模型与状态机
 
-> 文档版本：V1.3
+> 文档版本：V1.4
 > 文档状态：开发输入基线  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
 > 接口契约：[Agent平台核心接口与事件契约](./Agent平台核心接口与事件契约.md)
@@ -131,11 +131,14 @@ Hash 变化时禁止复用。
 
 | 实体 | 关键字段 | 说明 |
 |---|---|---|
-| QuotaPolicy | tenant/user/agent 范围, concurrency, storage, rate | 准入限制 |
+| QuotaPolicy | tenant, status, current_version, resource_version | 租户 Run 准入策略；每租户最多一个 |
+| QuotaPolicyVersion | tenant/user/agent/runtime Run concurrency, content_hash | 不可变并发限制版本 |
 | BudgetPolicy | token, cost, period, hard_or_soft | 模型费用限制 |
 | BudgetReservation | run_id, reserved, consumed, released | 并发预算预占 |
 
 硬预算超限阻止新调用；软预算超限产生告警。取消和失败后释放未消费预占，已产生费用不回退。
+
+QuotaPolicy 创建即 ACTIVE；配置更新创建新 Version 并原子切换 `current_version`；`ACTIVE <-> DISABLED` 使用 ETag/CAS。租户版本只能收紧部署硬上限，Run 创建和重试在同一 PostgreSQL 事务读取有效版本、获取 advisory lock、计数并写入事实。
 
 ### 3.8 知识库与评测
 

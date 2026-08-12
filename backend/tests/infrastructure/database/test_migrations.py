@@ -40,6 +40,8 @@ def test_offline_upgrade_contains_foundation_tables_and_extensions() -> None:
         "approval_request",
         "approval_decision",
         "execution_ticket",
+        "quota_policy",
+        "quota_policy_version",
         "agent_run",
         "run_attempt",
         "run_event",
@@ -113,17 +115,21 @@ def test_offline_upgrade_enables_and_forces_rls_with_write_checks() -> None:
         "sandbox_lease",
         "workspace",
         "artifact",
+        "artifact_download_grant",
+        "runtime_checkpoint",
         "audit_log",
         "skill_supply_chain_scan",
         "mcp_capability_discovery",
         "execution_ticket",
+        "quota_policy",
+        "quota_policy_version",
     ):
         assert f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY" in sql
         assert f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY" in sql
         assert f"CREATE POLICY tenant_isolation ON {table_name}" in sql
 
-    assert sql.count("WITH CHECK") == 35
-    assert sql.count("current_setting('app.current_tenant_id', true)") == 70
+    assert sql.count("WITH CHECK") == 39
+    assert sql.count("current_setting('app.current_tenant_id', true)") == 78
 
 
 def test_offline_upgrade_contains_approval_state_guards_and_permissions() -> None:

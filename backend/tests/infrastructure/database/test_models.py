@@ -57,6 +57,8 @@ def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
         "role_permission",
         "tenant",
         "tenant_member",
+        "quota_policy",
+        "quota_policy_version",
     } <= set(Base.metadata.tables)
 
 
@@ -96,12 +98,17 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         "sandbox_lease": "uq_sandbox_lease__tenant_id_id",
         "workspace": "uq_workspace__tenant_id_id",
         "artifact": "ix_artifact__tenant_owner_created_at",
+        "artifact_download_grant": (
+            "ix_artifact_download_grant__tenant_artifact_expires_at"
+        ),
         "approval_request": "ix_approval_request__tenant_status_expires_at",
         "approval_decision": "uq_approval_decision__tenant_id_id",
         "execution_ticket": "ix_execution_ticket__tenant_run_expires_at",
         "skill_supply_chain_scan": (
             "ix_skill_supply_chain_scan__tenant_definition_scanned_at"
         ),
+        "quota_policy": "uq_quota_policy__tenant_id",
+        "quota_policy_version": "ix_quota_policy_version__tenant_policy_created",
     }
 
     for table_name, expected_index in expected_tenant_indexes.items():
@@ -140,6 +147,27 @@ def test_execution_ticket_freezes_bindings_and_single_use_state() -> None:
         "fk_execution_ticket__tenant_requester__tenant_member",
         "fk_execution_ticket__tenant_deployment__deployment",
     } <= constraint_names("execution_ticket", ForeignKeyConstraint)
+
+
+def test_artifact_download_grant_freezes_bearer_bindings_and_revocation() -> None:
+    table = Base.metadata.tables["artifact_download_grant"]
+
+    assert {
+        "tenant_id",
+        "artifact_id",
+        "owner_user_id",
+        "token_hash",
+        "expires_at",
+        "revoked_at",
+        "created_at",
+    } <= set(table.c.keys())
+    assert "uq_artifact_download_grant__token_hash" in constraint_names(
+        "artifact_download_grant", UniqueConstraint
+    )
+    assert {
+        "fk_artifact_download_grant__tenant_artifact__artifact",
+        "fk_artifact_download_grant__tenant_owner__tenant_member",
+    } <= constraint_names("artifact_download_grant", ForeignKeyConstraint)
 
 
 def test_model_usage_metadata_has_normalized_usage_fields_and_indexes() -> None:

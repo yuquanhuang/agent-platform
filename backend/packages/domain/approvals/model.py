@@ -48,6 +48,7 @@ class ApprovalRequestRecord:
     self_approval_allowed: bool
     created_at: datetime
     updated_at: datetime
+    runtime_checkpoint_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

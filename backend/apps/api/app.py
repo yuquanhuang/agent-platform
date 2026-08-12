@@ -15,6 +15,7 @@ from apps.api.routes.mcp import create_mcp_router
 from apps.api.routes.metrics import create_metrics_router
 from apps.api.routes.models import create_model_router
 from apps.api.routes.prompts import create_prompt_router
+from apps.api.routes.quota_policies import create_quota_policy_router
 from apps.api.routes.releases import create_release_router
 from apps.api.routes.runs import create_run_router
 from apps.api.routes.sessions import create_session_router
@@ -27,6 +28,7 @@ from packages.application.event_service import (
 from packages.application.public import (
     AgentManagementService,
     ApprovalManagementService,
+    ArtifactDownloadGatewayService,
     ArtifactManagementService,
     AuditManagementService,
     CurrentIdentityService,
@@ -39,6 +41,7 @@ from packages.application.public import (
     ModelManagementService,
     PromptManagementService,
     PublicationQueryService,
+    QuotaPolicyManagementService,
     ReleaseManagementService,
     RunManagementService,
     SessionManagementService,
@@ -59,6 +62,7 @@ def create_app(
     agent_service: AgentManagementService | None = None,
     model_service: ModelManagementService | None = None,
     prompt_service: PromptManagementService | None = None,
+    quota_policy_service: QuotaPolicyManagementService | None = None,
     skill_service: SkillManagementService | None = None,
     mcp_service: McpManagementService | None = None,
     release_service: ReleaseManagementService | None = None,
@@ -70,6 +74,7 @@ def create_app(
     run_event_query_service: RunEventQueryService | None = None,
     run_event_stream_service: RunEventStreamService | None = None,
     artifact_service: ArtifactManagementService | None = None,
+    artifact_download_gateway: ArtifactDownloadGatewayService | None = None,
     approval_service: ApprovalManagementService | None = None,
     audit_service: AuditManagementService | None = None,
     internal_service_identity_provider: InternalServiceIdentityProvider | None = None,
@@ -103,6 +108,9 @@ def create_app(
     )
     application.include_router(
         create_iam_router(resolved_identity_provider, iam_service)
+    )
+    application.include_router(
+        create_quota_policy_router(resolved_identity_provider, quota_policy_service)
     )
     application.include_router(
         create_agent_router(resolved_identity_provider, agent_service)
@@ -142,7 +150,11 @@ def create_app(
         )
     )
     application.include_router(
-        create_artifact_router(resolved_identity_provider, artifact_service)
+        create_artifact_router(
+            resolved_identity_provider,
+            artifact_service,
+            artifact_download_gateway,
+        )
     )
     application.include_router(
         create_approval_router(resolved_identity_provider, approval_service)

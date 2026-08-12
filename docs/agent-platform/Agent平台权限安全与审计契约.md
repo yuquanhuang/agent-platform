@@ -1,6 +1,6 @@
 # Agent 平台权限、安全与审计契约
 
-> 文档版本：V1.2  
+> 文档版本：V1.6
 > 文档状态：开发输入基线
 
 ## 1. 安全模型
@@ -28,7 +28,8 @@
 - V1 前端直接与 IdP 完成 Authorization Code + PKCE，API 使用 audience 受限的短期 Bearer Access Token；平台 API 不保存 IdP Refresh Token，不实现第二套密码登录。
 - `GET /api/v1/me` 是当前平台用户、租户成员、角色和 `membership_version` 的权威查询入口。
 - 退出时前端清理本地 Token 并使用 IdP End Session Endpoint；如后续启用 Cookie/BFF 模式，必须通过 ADR 启用 HttpOnly/Secure/SameSite 和 CSRF 防护。
-- 内部服务使用 mTLS、SPIFFE/Workload Identity 或等价短期身份。
+- 内部服务使用 Kubernetes ServiceAccount 工作负载边界和 audience 受限短期 Service Token；具备 Service Mesh 时叠加 mTLS/SPIFFE。Sandbox Manager V1 使用 Ed25519 JWT，租户只能来自验签 Claim，禁止信任 `X-Tenant-ID`。
+- Service Token 必须限制 `iss/sub/aud/tenant_id/permissions/exp/jti`，默认 60 秒、最大 300 秒；签名私钥仅进入授权调用方，验证方只持有公钥，并通过 `kid` 支持受控轮换。
 - Sandbox 和 Runtime 使用 audience 受限的一次性能力票据。
 - 禁止内部服务共享管理员 Token。
 
@@ -105,6 +106,9 @@ knowledge, schedule, evaluation
 | 下载 Artifact | artifact:download | 当前仍有来源 Run/Session 权限 |
 | 查看 Audit | audit:list | 审计范围过滤 |
 | 管理 Secret Ref | secret:manage | 只能管理引用和轮换，不能普通读取明文 |
+| 管理 Run 配额 | quota_policy:create/read/list/update/disable | 仅租户管理员；不得超过部署硬上限 |
+
+QuotaPolicy 创建、更新、启用和禁用必须记录不可变 Audit，仅记录限制、版本号、Hash、状态和原因是否存在，不记录凭证或环境敏感配置。Run 超限审计继续使用 `RATE_LIMITED + reason_code + current + limit`。
 
 ## 7. Policy Service
 
@@ -189,9 +193,11 @@ expires_at, single_use
 ## 12. Artifact 与数据访问
 
 - Artifact 权限从 tenant、owner、Session、Run、来源资源和当前成员状态共同判断。
-- 预签名 URL 短期有效、绑定单对象和响应 Header。
-- URL 生成时重新鉴权，不因为曾经生成过而永久授权。
-- 用户或成员停用后，新下载立即失败；已签 URL 应尽可能通过代理或短 TTL 降低风险。
+- 上传预签名 URL 短期有效、绑定单对象和响应 Header；下载不直接暴露对象存储预签名 URL。
+- 下载 URL 指向平台 Download Gateway，携带一次返回的高熵 Bearer Token；数据库只保存 Token Hash，应用日志和审计不得记录 URL 或 Token。
+- Gateway 每次读取重新校验 Grant、Artifact 状态和有效期，再访问私有对象；Artifact 删除必须在同一事务先撤销全部 Grant。单 Range 不得扩大授权对象或绕过长度校验；已建立连接通过 Redis 撤销通知加 PostgreSQL 周期复核在受控窗口内终止。
+- Gateway、Ingress、Service Mesh、Trace 和访问日志不得记录下载 query token 或完整下载 URL；生产限流同时约束全局、租户和单主体并发，带宽整形由受控代理执行。
+- 用户或成员停用后，新授权立即失败；已签发 Gateway Grant 依赖短 TTL 和显式撤销收敛风险。
 
 ## 13. 审计事件
 

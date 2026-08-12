@@ -1,6 +1,6 @@
 # Agent 平台开发执行计划
 
-> 文档版本：V1.7
+> 文档版本：V1.9
 > 文档状态：开发输入计划
 > 适用范围：当前 `docs/agent-platform` 需求、架构、契约和测试文档
 
@@ -212,6 +212,10 @@ Epic 是阶段里程碑，不作为一次 AI Coding 的任务粒度。单个任�
 1. `AP-E7-001`：Reconciliation 规则和状态修复。
 2. `AP-E7-002`：API、Worker、Temporal、Redis、S3 故障恢复。
 3. `AP-E7-003`：配额、预算、限流和背压。
+   - 子阶段 A：配置驱动 Run 并发硬限制和 PostgreSQL 原子准入。
+   - 子阶段 B：durable QuotaPolicy 管理 API、不可变版本、RLS/RBAC/Audit，并接入 Run 创建/重试；已完成。
+   - 子阶段 C：周期 BudgetPolicy、Token/费用聚合与可信费用表。
+   - 子阶段 D：有界队列、存储配额、Event/SSE 背压和容量指标。
 4. `AP-E7-004`：SLO、指标、告警和 Trace 关联。
 5. `AP-E7-005`：容量、耐久和资源池隔离测试。
 6. `AP-E7-006`：安全阻断项、供应链和生产 Sandbox 验收。
@@ -246,7 +250,7 @@ Epic 9 每项能力必须使用独立 Feature Flag，并继续拆成“契约/�
 ```yaml
 task_id: AP-E0-001
 title: 实现契约完整性与校验门禁
-baseline: agent-platform-v1-dev-baseline-2026-08-r10
+baseline: agent-platform-v1-dev-baseline-2026-08-r11
 scope:
   includes:
     - scripts/
