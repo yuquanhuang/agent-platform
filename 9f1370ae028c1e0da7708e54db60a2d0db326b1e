@@ -1,0 +1,71 @@
+backend/packages/application/approvals/service.py
+  6649ce4c4db213b0 142-151,161,167,308-313,335,339,396-401
+  6172cfb388c1554b 59
+backend/packages/application/reconciliation/approvals.py
+  6649ce4c4db213b0 1-17,19-92,94-104,106-155,162
+  6172cfb388c1554b 18,93,105,156-161
+backend/packages/application/approvals/__init__.py
+  6649ce4c4db213b0 8,19
+backend/packages/infrastructure/database/models.py
+  6827b99650edadf8 2312-2361
+  6172cfb388c1554b 104-260,1789-1863,1913-1917,1967-1968,2427-2434
+  6649ce4c4db213b0 1931-1937,1976-1977
+backend/migrations/versions/0030_approval_signal_reconciliation.py
+  6649ce4c4db213b0 1-53,55-151
+  6172cfb388c1554b 54
+backend/packages/application/reconciliation/__init__.py
+  6649ce4c4db213b0 3-8,30-33
+  6172cfb388c1554b 9-12,21-26,34-35,42-46
+backend/packages/infrastructure/database/approvals.py
+  6649ce4c4db213b0 12,18,327-368,376-386,389-392,406-410,413-453,480,482-492,494-551,743,764
+  6172cfb388c1554b 8,130,369-375,387-388,393-405,411-412,454-479,481,493,769-771,831,854
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "9f1370ae028c1e0da7708e54db60a2d0db326b1e",
+  "prompts": {
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 336,
+      "total_deletions": 42,
+      "accepted_lines": 336,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/a495ad16def76fc2a81f3f30eff280dea4add5324bc50e8f72a504e9f070af00"
+    },
+    "6649ce4c4db213b0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feed0-5810-7d63-91ac-13d13a036118",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 569,
+      "total_deletions": 2,
+      "accepted_lines": 528,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/33109f925bbf968866e7d18232c386f3680b6abc397311edd1965ad874b7447a"
+    },
+    "6827b99650edadf8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fefa6-917b-7d03-8dbd-49000958188c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 50,
+      "total_deletions": 0,
+      "accepted_lines": 50,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/15240e85d4c44f1ec34c565f5aa9e74a0baf75eba33ac57b92e3c0b6e4a201b8"
+    }
+  }
+}
