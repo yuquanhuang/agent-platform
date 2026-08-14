@@ -1,0 +1,214 @@
+backend/packages/domain/public.py
+  83e2a82931c65dd2 77-81
+  955e47c33c55a36d 138,141,144,147,151,189,193,283,287,327
+  659bc5f5194e162d 86-89,303-306
+  6172cfb388c1554b 220-224
+backend/packages/application/public.py
+  c2090362750476f2 44-46,257-259
+  6172cfb388c1554b 121,265,273-274
+  83e2a82931c65dd2 122-123
+  659bc5f5194e162d 128,365
+backend/apps/api/routes/budget_policies.py
+  83e2a82931c65dd2 1-162,169-191,198-232
+  6172cfb388c1554b 163-168,192-197
+backend/migrations/versions/0035_budget_policy.py
+  83e2a82931c65dd2 1-199,203-215,227-297,303-339
+  6172cfb388c1554b 200-202,216-226,298-302
+frontend/src/api/generated/resources-client.ts
+  659bc5f5194e162d 103-109,1985-2120
+  83e2a82931c65dd2 96-102,1859-1984
+backend/packages/contracts/generated/resources_client.py
+  659bc5f5194e162d 110-116,2150-2296
+  83e2a82931c65dd2 103-109,2004-2149
+backend/packages/contracts/generated/resources_models.py
+  08f24ad5e87a7580 386,388,398,400,411,413-414,1669-1692,1795-1797
+  659bc5f5194e162d 453-526,1434-1463,1745-1751
+  83e2a82931c65dd2 379-385,387,389-397,399,401-410,412,415-448,1405-1433,1739-1744
+docs/agent-platform/agent-platform-openapi-resources-v1.yaml
+  83e2a82931c65dd2 20,611-659,1059,1129-1138,1499-1506,1508,1518-1525,1527,1537-1545,1547,1558-1588
+  6172cfb388c1554b 4
+  659bc5f5194e162d 21,660-708,1060,1139-1148,1589-1656
+  08f24ad5e87a7580 1507,1509-1517,1526,1528-1536,1546,1548-1557
+frontend/src/api/generated/resources-models.ts
+  659bc5f5194e162d 319-371,1140-1169
+  83e2a82931c65dd2 263-266,268,270-275,277,279-285,287,290-314,1111-1139
+  08f24ad5e87a7580 267,269,276,278,286,288-289,1371-1383
+backend/packages/domain/policy/__init__.py
+  83e2a82931c65dd2 17-21,35-39
+  659bc5f5194e162d 26-29,52-55
+backend/packages/application/policy/__init__.py
+  83e2a82931c65dd2 18-20
+  659bc5f5194e162d 11-12,16,26-29,43-46,50
+  6172cfb388c1554b 5-6,13,33-36,47
+backend/packages/infrastructure/database/budget_policies.py
+  08f24ad5e87a7580 6-7,18,20,130-131,219,237-246,436-441,445-456,464,466-467,524-532,552-559,567-577
+  83e2a82931c65dd2 1-5,8-17,19,21-110,112-114,117-129,132-164,168-218,220-226,247-350,352-355,358-435,442-444,457-463,465,468-523,533-551,560-566,578-613
+  6172cfb388c1554b 111,115-116,165-167,227-236,351,356-357
+backend/packages/domain/iam/permissions.py
+  659bc5f5194e162d 33,119-123
+  83e2a82931c65dd2 32,114-118
+backend/packages/application/policy/budgets.py
+  08f24ad5e87a7580 267,269,271-276
+  a5816771f86bafcc 4,18,268,270
+  83e2a82931c65dd2 1-3,5-17,19-266,277-325
+backend/packages/domain/policy/model.py
+  83e2a82931c65dd2 5,10,12,48-74
+  659bc5f5194e162d 11,75-107
+  08f24ad5e87a7580 13
+backend/packages/infrastructure/database/models.py
+  c2090362750476f2 2344,2394,2419-2520
+  e72885ab9abed2d9 3035-3042,3063-3068,3108-3109,3116-3162
+  83e2a82931c65dd2 68,270-316,461-492,494-502,504-530,534-542,1144-1153
+  6172cfb388c1554b 50-56,531-533,909-921,925-930,951-957,962-980,983-1007,1011,1013-1017,1019-1062,1064-1068,1072,1096-1105,1107-1116,1121-1128,3058-3062,3069
+  659bc5f5194e162d 69,317-460
+  08f24ad5e87a7580 493,503,1205-1207,1291,1294-1295,3877-3890
+  955e47c33c55a36d 2321-2343,2345-2393,2395-2418
+  8e1e986bc4981f52 981-982,1008-1010,1018,1157-1169,1182-1204,1208-1229,1232,1235-1246,1249-1250,1252,1254-1258,1263-1264,1267,1270,1276-1278,1280-1281,1285-1290,1297,3927-3936
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "a1e3b75e3ccce4fabaa31090bf2741ede192dcf4",
+  "prompts": {
+    "08f24ad5e87a7580": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff901-a0fc-7fe3-b4e7-2f6289a87caa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 191,
+      "total_deletions": 31,
+      "accepted_lines": 188,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/11978dd5c6d2df826834394d167a7e31d2de60aa67f43c13a54add4efa99f219"
+    },
+    "135bf0b06ce275e5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff8f8-a56c-7183-96c8-1b89ec42ee80",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/b623f4eaf02faa49c7295df4b2069269cfd7c0f161791aa504b88440692e0c43"
+    },
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 251,
+      "total_deletions": 56,
+      "accepted_lines": 247,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/529456324823ec66a79635c8531ce36e5af419a0c410f54b160bc70c3e0b389d"
+    },
+    "659bc5f5194e162d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5d9-b3d4-7c01-ac0c-fa8605b2fbb4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 835,
+      "total_deletions": 0,
+      "accepted_lines": 835,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/cfe545fd6a6b38b2137145e553fb3bb30e2c9d83cbfc2459edff5069efc1180d"
+    },
+    "83e2a82931c65dd2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff419-ec26-7521-aaf3-e999731dc563",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 2249,
+      "total_deletions": 1,
+      "accepted_lines": 2171,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/557d518640b6ec43c48100b08490c9b572ae4d0e7e2fa31b22c314616413e2cd"
+    },
+    "8e1e986bc4981f52": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff8fe-fb96-7373-af83-145dd96d3e64",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 140,
+      "total_deletions": 1,
+      "accepted_lines": 137,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/0398c3e2459b62a6b1c2ece82d3aba0c91400f5cd6814db8415d2e3576a04f8c"
+    },
+    "955e47c33c55a36d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff578-cb98-77b0-9a50-497139e7be3a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 108,
+      "total_deletions": 0,
+      "accepted_lines": 106,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/ed123941dd2b0c2d0f046829f88b73c068828541559a8894368df255af63b5fe"
+    },
+    "a5816771f86bafcc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff90f-cfc2-78b1-8ab1-7cc2989f6b99",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 4,
+      "accepted_lines": 4,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/ce44539a3fbec86bf8d42a28ffe2874473c109aa3e8fb14e137dd7c9a5ca7c99"
+    },
+    "c2090362750476f2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff8df-7003-7d53-b2d1-6b8b89d30691",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 110,
+      "total_deletions": 14,
+      "accepted_lines": 110,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/a13316adb3ffe22e35e003cb15600ee8a2d7b57f90bd5c846627fe8a3c16deb3"
+    },
+    "e72885ab9abed2d9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff8ea-3d91-70d3-b4e7-dfede57a313e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 80,
+      "total_deletions": 0,
+      "accepted_lines": 68,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/c490a3295ec6c8f4d47462b10e95a6ad2cd0388d311d1423fffcda26b5355278"
+    }
+  }
+}
