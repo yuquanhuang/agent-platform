@@ -1,0 +1,17 @@
+plan_id: ap-e7-005-codex
+scenario: codex_runs
+dry_run: true
+request:
+  base_url: https://agent-platform.example.invalid
+  auth_token_env: AP_CAPACITY_AUTH_TOKEN
+run:
+  session_ids:
+    - replace-with-session-id-01
+  deployment_id: replace-with-codex-deployment-id
+  total_runs: 1
+  concurrency: 1
+  input_text: AP-E7-005 Codex workspace validation
+  timeout_seconds: 1800
+metadata:
+  environment: isolated-capacity
+  workload: codex-run-independent-pool

@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-platform-sandbox
+  namespace: agent-platform
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: agent-platform-sandbox-example
+  namespace: agent-platform
+  labels:
+    agent-platform.io/sandbox: "true"
+  annotations:
+    agent-platform.io/policy-hash: sha256:4444444444444444444444444444444444444444444444444444444444444444
+    agent-platform.io/pids-limit: "64"
+    agent-platform.io/timeout-seconds: "600"
+spec:
+  runtimeClassName: gvisor
+  serviceAccountName: agent-platform-sandbox
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  hostNetwork: false
+  hostPID: false
+  hostIPC: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 10
+  nodeSelector:
+    agent-platform.io/sandbox-node: "true"
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: runtime
+      image: registry.example.invalid/agent-platform/runtime-agentscope@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      command:
+        - /opt/agent-platform/.venv/bin/python
+        - -m
+        - apps.runtime_worker_agentscope.main
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        privileged: false
+        appArmorProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: "1"
+          memory: 512Mi
+          ephemeral-storage: 1Gi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+          ephemeral-storage: 1Gi
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: workspace
+      emptyDir:
+        sizeLimit: 1Gi
+    - name: tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Mi

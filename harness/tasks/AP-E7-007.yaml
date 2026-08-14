@@ -1,0 +1,66 @@
+task_id: AP-E7-007
+title: Runbook、灾备和恢复演练与生产准入
+status: in_progress
+baseline: agent-platform-v1-dev-baseline-2026-08-r22
+scope:
+  includes:
+    - PostgreSQL、Object Storage、Redis、Temporal 的冻结 RPO/RTO 目标和不可变恢复证据
+    - PostgreSQL 备份恢复与 Snapshot/Run/RunEvent/Outbox/Lease/Audit 完整性核对
+    - Redis 通知丢失后的 SSE 数据库补齐、Worker/Temporal 滚动重启和 Sandbox 节点故障恢复
+    - Object Storage 暂时不可用、Model Gateway 限流/供应商故障、Outbox Dead Letter 原事件重放和状态对账
+    - 季度恢复演练、RPO/RTO 记录、问题闭环和生产准入证据静态校验
+    - 生产准入对契约、迁移恢复、Runtime/事件 Replay、安全、容量、供应链、可观测性、保留策略和已知风险的求交
+    - backend Python 验收 CLI、infra/recovery/ap-e7-007 计划/证据模板和 Runbook；本任务不新增 frontend 业务代码
+  excludes:
+    - 在当前环境真实创建备份、恢复数据库、清空 Redis、停止生产 Worker 或调用生产依赖
+    - 用 dry-run、Fake、估算 RPO/RTO 或局部手工调用宣称灾备/生产准入通过
+    - 修改公共 OpenAPI、RunEvent Schema、Temporal Workflow Definition 或数据库迁移
+decisions:
+  - 冻结目标沿用非功能基线：PostgreSQL 5m/60m、Object Storage 15m/4h、Redis 只允许丢通知且 RTO 30m、Temporal RTO 60m
+  - Redis 不是业务事实源；Redis 丢失只能丢通知，SSE 必须从 PostgreSQL 补历史，业务事件不得丢失
+  - Outbox/DLQ 只能按原 event ID 幂等重放，不创建替代事件、不直接写终态、不 blanket replay
+  - 生产证据必须使用不可变 URI+SHA-256、真实隔离环境、责任人与审批人；占位、NOT_RUN、过期证据 fail-closed
+  - 季度演练窗口最大 92 天，生产 `plan.as_of` 必须在验收时钟五分钟内，避免陈旧计划绕过准入
+  - 只在环境 overlay 启用已验证组件；不因恢复演练临时放宽 Secret、NetworkPolicy、Tenant 或 Sandbox 安全边界
+compatibility:
+  - 不修改公共 OpenAPI、RunEvent、Temporal、数据库迁移、前端生成代码或现有 Worker 业务行为
+  - 复用现有 Pydantic、PyYAML 和报告基础设施，不新增 Python/Node 运行时依赖
+  - 与 AP-E7-002 的 Worker/Redis/MinIO/Checkpoint 恢复边界、AP-E7-003 的配额/Lease、AP-E7-004 的告警/Runbook、AP-E7-005 的容量报告和 AP-E7-006 的供应链/Sandbox 证据协同
+verification:
+  planned:
+    - recovery_acceptance 配置、UTC 时间、路径边界、证据 URI、RPO/RTO、场景和准入项单元测试
+    - dry-run CLI JSON/Markdown 报告生成验证
+    - make backend-check
+    - make frontend-check
+    - make contract-check
+    - make check
+    - 隔离环境真实备份恢复、Redis 丢通知、滚动重启、Sandbox 节点、Object Storage、Model Gateway 和 Outbox/DLQ 演练
+  results:
+    - 新增 recovery_acceptance 配置/证据模型、fail-closed evaluator、JSON/Markdown 报告和 CLI
+    - 新增 4 项服务 RPO/RTO、7 项恢复场景和 10 项生产准入清单的静态求交校验
+    - 定向测试：8 passed；Black、Ruff、Pyright、compile/import 和 git diff --check 通过
+    - 示例 dry-run CLI 成功生成报告，状态为 dry_run，并明确列出 NOT_RUN、证据缺失和审批缺失阻断
+    - make backend-check：816 passed、20 skipped；Black、Ruff、Pyright 通过
+    - make frontend-check：26 个测试文件、85 passed；格式、Lint、类型检查和生产构建通过
+    - make contract-check：R22 的 31 个完整性文件、190 个 operationId、7 个 Schema、184 个引用、4 个 Golden 和 17 个生成文件零漂移
+    - make check：后端 816 passed、20 skipped；前端 85 passed 并完成生产构建
+    - 真实备份恢复、故障注入、季度演练和生产 sign-off 尚未执行，不记为通过
+acceptance:
+  - 所有服务达到冻结 RPO/RTO；完整性检查、原事件重放和跨组件状态对账均 PASS
+  - 7 个必需恢复场景和 10 个生产准入项均 PASS，并附不可变证据
+  - 生产证据无占位、无 NOT_RUN、无过期演练、无未关闭高风险问题或 open question
+  - 季度演练记录实际 RPO/RTO、故障时间线、责任人、告警、恢复动作和整改闭环
+  - 任一真实依赖、演练或 sign-off 缺失时任务保持 in_progress/failed-closed
+blockers:
+  - 当前环境无隔离灾备集群、真实 PostgreSQL 备份恢复目标和生产级对象存储/Temporal 恢复环境
+  - AP-E7-005 真实容量/耐久/资源池验收尚未完成，不能将容量准入项记为 PASS
+  - AP-E7-006 真实 Registry/SBOM/签名/provenance、Sandbox Provider 和动态安全测试尚未完成
+  - AgentScope Runtime Worker、Sandbox Manager Provider、真实 OIDC/JWKS 和部分生产 overlay 仍缺组合
+  - Alertmanager/receiver/排班、备份责任人和生产 sign-off 尚未由部署方提供
+follow_up:
+  - 在隔离环境按 Runbook 执行全部 7 个场景，保存备份、恢复、完整性、指标、日志和审批证据
+  - 回填真实 RPO/RTO、备份保留/删除策略、恢复目标版本和问题闭环记录
+  - 完成 AP-E7-005 容量报告、AP-E7-006 生产安全证据及 AP-E7-002/Runtime/Sandbox 生产组合后重新运行准入
+  - 配置真实告警 receiver、通知 Secret、升级路径和季度演练排班；未配置时不得声称闭环
+  - 由平台、安全、数据和业务责任人共同签署生产准入；任一签字缺失保持阻断
+open_questions: []

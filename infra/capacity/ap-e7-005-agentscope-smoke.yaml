@@ -1,0 +1,15 @@
+plan_id: ap-e7-005-agentscope-smoke
+scenario: agentscope_runs
+dry_run: true
+request:
+  base_url: https://agent-platform.example.invalid
+  auth_token_env: AP_CAPACITY_AUTH_TOKEN
+run:
+  session_ids:
+    - replace-with-session-id
+  total_runs: 1
+  concurrency: 1
+  input_text: AP-E7-005 smoke validation
+metadata:
+  environment: isolated-capacity
+  workload: agentscope-text-run

@@ -1,0 +1,11 @@
+plan_id: ap-e7-006-security-baseline
+mode: dry_run
+expected_runtime_class: gvisor
+expected_network_mode: none
+sandbox_manifest: sandbox-workload.example.yaml
+network_policy_manifest: sandbox-network-policy.example.yaml
+supply_chain_evidence:
+  - runtime-agentscope-evidence.example.yaml
+metadata:
+  environment: isolated-security
+  purpose: static-contract-validation

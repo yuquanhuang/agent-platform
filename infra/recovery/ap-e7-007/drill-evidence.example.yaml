@@ -1,0 +1,128 @@
+drill_id: ap-e7-007-template
+environment: isolated-recovery-lab
+started_at: 2026-08-13T00:00:00Z
+ended_at: 2026-08-13T00:30:00Z
+conducted_by:
+  - pending-operator
+approved_by: pending-approver
+services:
+  - service: postgresql
+    status: NOT_RUN
+    started_at: 2026-08-13T00:00:00Z
+    ended_at: 2026-08-13T00:05:00Z
+    observed_rpo_seconds: null
+    observed_rto_seconds: null
+    data_loss_scope: none
+    evidence: []
+    integrity_checks: []
+  - service: object_storage
+    status: NOT_RUN
+    started_at: 2026-08-13T00:05:00Z
+    ended_at: 2026-08-13T00:10:00Z
+    observed_rpo_seconds: null
+    observed_rto_seconds: null
+    data_loss_scope: none
+    evidence: []
+    integrity_checks: []
+  - service: redis
+    status: NOT_RUN
+    started_at: 2026-08-13T00:10:00Z
+    ended_at: 2026-08-13T00:15:00Z
+    observed_rpo_seconds: null
+    observed_rto_seconds: null
+    data_loss_scope: notification_only
+    evidence: []
+    integrity_checks: []
+  - service: temporal
+    status: NOT_RUN
+    started_at: 2026-08-13T00:15:00Z
+    ended_at: 2026-08-13T00:20:00Z
+    observed_rpo_seconds: null
+    observed_rto_seconds: null
+    data_loss_scope: none
+    evidence: []
+    integrity_checks: []
+scenarios:
+  - scenario_id: postgresql_restore_and_integrity
+    status: NOT_RUN
+    started_at: 2026-08-13T00:00:00Z
+    ended_at: 2026-08-13T00:01:00Z
+    evidence: []
+    notes: Restore a backup into an isolated target and compare Snapshot, Run and RunEvent facts.
+  - scenario_id: redis_loss_sse_database_recovery
+    status: NOT_RUN
+    started_at: 2026-08-13T00:01:00Z
+    ended_at: 2026-08-13T00:02:00Z
+    evidence: []
+    notes: Clear Redis notifications and prove SSE history recovery from PostgreSQL.
+  - scenario_id: worker_temporal_rolling_restart
+    status: NOT_RUN
+    started_at: 2026-08-13T00:02:00Z
+    ended_at: 2026-08-13T00:03:00Z
+    evidence: []
+    notes: Restart API, Runtime Worker and Temporal Worker without duplicate side effects.
+  - scenario_id: sandbox_node_failure_credential_revoke
+    status: NOT_RUN
+    started_at: 2026-08-13T00:03:00Z
+    ended_at: 2026-08-13T00:04:00Z
+    evidence: []
+    notes: Fail a Sandbox node and verify cleanup plus instance credential revocation.
+  - scenario_id: object_storage_outage_artifact_retry
+    status: NOT_RUN
+    started_at: 2026-08-13T00:04:00Z
+    ended_at: 2026-08-13T00:05:00Z
+    evidence: []
+    notes: Interrupt object storage and verify Artifact retry and durable state convergence.
+  - scenario_id: model_gateway_limit_provider_failure
+    status: NOT_RUN
+    started_at: 2026-08-13T00:05:00Z
+    ended_at: 2026-08-13T00:06:00Z
+    evidence: []
+    notes: Exercise provider throttling/outage, budget behavior and explicit user-visible errors.
+  - scenario_id: outbox_dead_letter_replay_reconciliation
+    status: NOT_RUN
+    started_at: 2026-08-13T00:06:00Z
+    ended_at: 2026-08-13T00:07:00Z
+    evidence: []
+    notes: Replay only by original event ID and verify reconciliation without falsifying terminal facts.
+readiness:
+  - item_id: contracts_and_generated_clients
+    status: NOT_RUN
+    evidence: []
+    notes: Verify OpenAPI, Schema, Golden and generated clients are current.
+  - item_id: database_migrations_and_restore
+    status: NOT_RUN
+    evidence: []
+    notes: Verify migration order, rollback policy and isolated restore evidence.
+  - item_id: runtime_event_workflow_replay
+    status: NOT_RUN
+    evidence: []
+    notes: Verify Temporal Replay, RunEvent fencing and idempotent Outbox handling.
+  - item_id: security_acceptance
+    status: NOT_RUN
+    evidence: []
+    notes: Attach AP-E7-006 production security evidence and dynamic test report.
+  - item_id: capacity_acceptance
+    status: NOT_RUN
+    evidence: []
+    notes: Attach AP-E7-005 real capacity, durability and isolation report.
+  - item_id: supply_chain_evidence
+    status: NOT_RUN
+    evidence: []
+    notes: Attach real Registry digest, SBOM, scans, signature and provenance.
+  - item_id: observability_alerting_runbooks
+    status: NOT_RUN
+    evidence: []
+    notes: Verify scrape, alert receiver, escalation and recovery semantics.
+  - item_id: data_retention_backup_policy
+    status: NOT_RUN
+    evidence: []
+    notes: Verify backup retention, deletion policy and restore ownership.
+  - item_id: production_runtime_composition
+    status: NOT_RUN
+    evidence: []
+    notes: Verify Runtime, Sandbox Manager, Temporal, Redis and Object Storage production wiring.
+  - item_id: known_risks_closed
+    status: NOT_RUN
+    evidence: []
+    notes: No unresolved production-blocking risk or open question may remain.

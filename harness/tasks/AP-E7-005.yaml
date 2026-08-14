@@ -1,0 +1,72 @@
+task_id: AP-E7-005
+title: 容量、耐久和 AgentScope/Codex 资源池隔离验收
+status: in_progress
+baseline: agent-platform-v1-dev-baseline-2026-08-r22
+scope:
+  includes:
+    - 标准 AgentScope 文本 Run 工作负载：100 个并发 Run/tenant、30 秒平均持续时间和 120 秒 P95 目标输入
+    - AgentScope 工具 Run、SSE 在线连接/突发/断线重连和慢消费者工作负载计划
+    - Event Store 2,000 events/s 持续写入、批量延迟、失败批次和序号/重复校验报告
+    - Codex 20 个并发 Run/cluster 独立资源池测量，不用 AgentScope 指标代替
+    - 30% 生产容量余量计算、硬件/版本/数据分布/资源峰值/瓶颈/错误报告
+    - 标准、尖峰、慢消费者、依赖降速、耐久、资源耗尽和资源池隔离执行记录
+    - 可复现、配置驱动、环境变量引用 Secret 的容量 runner 和 JSON/Markdown 报告
+  excludes:
+    - 用 Fake、单元测试、dry-run、估算或局部手工调用宣称容量/SLO 达标
+    - 自动替换 AgentScope Runtime、Codex Runtime、Temporal、PostgreSQL、Redis、Object Storage 或 Sandbox 真实依赖
+    - 未经确认冻结 Event 写入侧有限缓冲、Delta 合并、终态优先和失败关闭的业务语义
+    - AP-E7-007 灾备恢复演练和最终生产准入
+decisions:
+  - 后端容量代码位于 backend，计划模板和部署说明位于 infra/capacity；本任务不新增前端业务代码
+  - runner 默认 dry_run=true，仅校验配置和报告格式；真实流量必须由操作者显式切换并提供隔离环境事实
+  - Secret 只能通过环境变量名引用；报告不写入 Token、Cookie、Authorization 或 fencing token 明文
+  - 30% 余量的工具默认计算为 required = target * (1 + headroom_ratio)，最终生产口径仍需在容量报告中确认
+  - Event Store 以真实内部批量 API 为入口，PostgreSQL 仍是唯一事实源；Redis/Prometheus 不参与业务状态判断
+  - Prometheus 采样仅作为资源证据，不能替代 API/RunEvent/SSE/Runtime 的成功与正确性校验
+  - 受测环境必须显式提供 session/run/fencing facts、真实 Workload Identity 和对应生产组合；缺失时报告 blocked
+compatibility:
+  - 未修改 OpenAPI、RunEvent Schema、Temporal Workflow Definition、数据库迁移或前端生成代码
+  - 未新增 Python/Node 运行时依赖，复用现有 httpx、PyYAML、Pydantic
+  - 不改变现有 API、SSE、Event Store、Runtime 和容量准入公共行为
+verification:
+  planned:
+    - 容量计划 schema、Secret 引用、边界和有界统计单元测试
+    - dry-run CLI 与 JSON/Markdown 报告生成验证
+    - 独立环境真实 AgentScope、Codex、Event Store、SSE 和故障/耐久工作负载
+    - Prometheus 资源峰值、PostgreSQL/Redis/Temporal/Object Storage/Sandbox 版本与硬件快照
+    - make backend-check
+    - make frontend-check
+    - make contract-check
+    - make check（若沙箱 SyncManager 限制复现，按组成门禁记录，不虚报统一通过）
+  results:
+    - 新增配置驱动 runner：AgentScope/Codex Run、Event Store、SSE/慢消费者四类工作负载
+    - 新增 4 个无凭证计划模板（AgentScope、Codex、Event Store、SSE）和 `infra/capacity/README.md`
+    - 定向容量 runner 测试：7 passed；Black、Ruff、Pyright、compileall 和 git diff --check 通过
+    - 三个模板均以 dry_run=true 执行并生成 JSON/Markdown 报告；未产生网络流量
+    - 真实生产容量、耐久、尖峰、依赖降速、资源耗尽和资源池隔离尚未执行，不记为通过
+    - make backend-check：799 passed、20 skipped；Black、Ruff、Pyright 通过
+    - make frontend-check：26 个测试文件、85 passed；格式、Lint、类型检查和生产构建通过
+    - make contract-check：R22 的 31 个完整性文件、190 个 operationId、7 个 Schema、184 个引用、4 个 Golden、17 个生成文件零漂移
+    - make check：后端 799 passed、20 skipped；前端 85 passed 并完成生产构建
+acceptance:
+  - AgentScope 真实独立环境达到 100 并发且按 30% 余量口径满足报告阈值
+  - SSE 真实集群达到 1,000 连接，含突发、5%/分钟重连和慢消费者不阻塞 Writer
+  - Event Store 真实持续写入达到 2,000 events/s，序号无重复/永久缺口且失败批次可解释
+  - Codex 真实独立资源池达到 20 并发，并单独记录进程、内存、磁盘和取消耗时
+  - 标准、尖峰、依赖降速、耐久、资源耗尽和隔离报告包含可复现输入、结果、瓶颈和余量
+  - 任一真实依赖未组合、关键事实缺失、失败率/正确性不满足或无资源证据时保持未通过
+blockers:
+  - AgentScope Runtime Worker 当前仍为 fail-closed unavailable_process，缺生产 SessionFactory、RunSpec/Bundle Loader、Tool Binding、Gateway/Executor 和完整 Temporal Activity 组合
+  - API、Temporal、Sandbox、Runtime 的生产 metrics scrape overlay 和持久 Queue/Outbox backlog、Lease saturation Gauge 尚未全部接入
+  - Event 写入侧功能性有限缓冲、Delta 合并、终态优先和恢复阈值失败关闭语义尚未冻结实现
+  - RunEvent 当前仍为非分区表；达到生产容量阈值前需实施全局唯一登记表 + recorded_at 月分区事件表
+  - 当前环境未提供可用于真实容量验收的独立 Kubernetes 生产组合、凭证、活动 Run 和受信 fencing facts
+follow_up:
+  - 先冻结并实现 Event Writer 的缓冲/合并/终态优先/失败关闭契约，再执行 Event Store 生产容量验收
+  - 将 API/Temporal/Sandbox/Runtime 纳入受控 metrics ServiceMonitor/NetworkPolicy，并补齐持久 backlog/oldest age/Lease saturation Gauge
+  - 完成 RunEvent 全局登记表与月分区迁移、归档、回滚和容量阈值演练
+  - 在独立环境分别执行 agentscope_runs、codex_runs、event_store、sse 的标准/尖峰/慢消费者/耐久/故障计划
+  - 回填硬件、依赖版本、Runtime/模型/Sandbox、数据分布、Prometheus 峰值和瓶颈后的正式容量报告
+  - 真实容量报告通过后，才将本任务状态改为 completed，并将生产配置中的容量值回填为实测值
+open_questions:
+  - 生产最终容量余量是否采用工具当前的 target * 1.30 口径，由容量评审在真实报告中确认

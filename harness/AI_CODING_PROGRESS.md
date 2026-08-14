@@ -975,3 +975,41 @@
 - [x] 统一 `make check` 的契约步骤通过，但编排在 Black 启动阶段因沙箱禁止 multiprocessing SyncManager 本地 socket 中止；设置 `BLACK_NUM_WORKERS=1` 仍复现。未将统一编排命令记为通过，三个组成门禁已分别完成。
 - [x] 发现并记录协同边界：当前 Kustomize base 仅抓取已进入组合的 Event/Reconciliation Worker，API `/metrics` 尚无 base Service/ServiceMonitor；`outbox_claimed` 只是最新有界 poll 数，不代表持久 backlog；Queue depth/oldest wait、active Lease/configured slots/saturation Gauge、完整控制面/运行面 SLO、Model Gateway/容量告警和跨进程 OTel Span Context 仍需后续补齐。
 - 未完整实现与后续待办：Event 写入侧功能性有限缓冲、Delta 合并、终态优先与恢复阈值失败关闭在 AP-E7-005 前另行冻结；生产 Alertmanager receiver/排班/通知 Secret；RunEvent 全局唯一登记表 + `recorded_at` 月分区；API/Temporal/Sandbox/Runtime metrics overlay；真实容量/耐久/慢消费者和资源池隔离报告。
+
+### 2026-08-14 — AP-E7-005 容量、耐久和资源池隔离测试启动
+
+- [x] 建立 `harness/tasks/AP-E7-005.yaml`，基线保持 `agent-platform-v1-dev-baseline-2026-08-r22`；未修改公共 OpenAPI、RunEvent、Temporal 或前端契约。
+- [x] 新增 `backend/packages/capacity_testing` 配置驱动 runner，覆盖 AgentScope/Codex Run 并发、Event Store 持续批写、SSE 在线连接/重连/慢消费者和可选 Prometheus 采样。
+- [x] 新增 `backend/apps/capacity_runner` CLI、4 个无凭证计划模板（AgentScope、Codex、Event Store、SSE）和 `infra/capacity/README.md`；Secret 只通过环境变量名引用，报告不输出敏感值。
+- [x] runner 具备有界样本统计、超时、并发上限、失败汇总、JSON/Markdown 报告和 30% 余量计算；dry-run 只校验配置，不产生网络流量。
+- [x] SSE runner 以同时打开连接峰值判定连接容量，并按配置默认 5%/分钟错峰重连；累计重连次数不计入容量峰值。
+- [x] 定向验证：容量 runner `7 passed`；Black、Ruff、Pyright、compileall、`git diff --check` 通过；4 个模板 dry-run 均生成报告。
+- [x] 全仓协同门禁：`make backend-check` 为 `799 passed, 20 skipped`；`make frontend-check` 为 26 个测试文件、`85 passed` 并完成生产构建；R22 契约 31 个完整性文件、190 个 operationId、7 个 Schema、184 个引用、4 个 Golden、17 个生成文件零漂移；统一 `make check` 通过。
+- [ ] 真实 100 AgentScope Run、1,000 SSE、2,000 events/s、20 Codex Run、30% 余量、耐久、尖峰、慢消费者、依赖降速、资源耗尽和资源池隔离尚未执行，不记为通过。
+- 未完整实现与后续待办：AgentScope Runtime 仍 fail-closed；Event Writer 缓冲/Delta 合并/终态优先/失败关闭、RunEvent 全局登记表+月分区、完整生产 metrics overlay、持久 backlog/Lease Gauge、真实 Kubernetes 组合和正式资源快照均保留为阻塞项。
+
+### 2026-08-14 — AP-E7-006 供应链与 Sandbox 安全验收工具
+
+- [x] 建立 `harness/tasks/AP-E7-006.yaml`，状态保持 `in_progress`，基线沿用 R22；未修改公共 OpenAPI、RunEvent、Temporal、数据库迁移或前端业务契约。
+- [x] 新增 `backend/packages/security_acceptance` 与 CLI：验证 subject/source digest、SBOM、漏洞/许可证/Secret/恶意代码扫描、签名、provenance、审核人、限时风险例外，并生成 JSON/Markdown 报告。
+- [x] 生产模式 fail-closed：拒绝 `example.invalid`/`replace-with-*` 占位证据、未验证签名/provenance、未覆盖高危漏洞；Evidence URI 禁止内嵌凭证、query 和 fragment。
+- [x] 新增 Kubernetes Sandbox/NetworkPolicy 静态安全门禁：gVisor、非 root、RuntimeDefault seccomp/AppArmor、只读根、drop ALL、禁 privileged/host namespace/hostPath/PVC/Secret env/运行时 socket、不变镜像 digest、CPU/内存/临时磁盘、PID/超时注解和默认拒绝网络。
+- [x] 交付前安全审查补齐镜像 digest 与供应链证据的强绑定、同 namespace 独立 ServiceAccount 清单、Pod 生命周期约束，并拒绝空 selector 形成的代理全放行；路径穿越在读取任一文件前失败关闭。定向测试 `8 passed`，Black、Ruff、Pyright、compileall 和 `git diff --check` 通过。
+- [x] `infra/security/ap-e7-006` 提供无真实凭证的 dry-run 计划、供应链证据和 Sandbox/NetworkPolicy 示例；CLI 成功生成报告，状态严格为 `dry_run`，静态检查 PASS 不作为生产证据。
+- [x] 全仓协同门禁通过：`make backend-check` 为 `807 passed, 20 skipped`；`make frontend-check` 为 26 个测试文件、`85 passed` 并完成生产构建；R22 契约 31 个完整性文件、190 个 operationId、7 个 Schema、184 个引用、4 个 Golden、17 个生成文件零漂移；统一 `make check` 通过。
+- [ ] 生产安全验收尚未完成：现有 CI/制品仓库未回填真实 Registry digest、SBOM、扫描、签名和 provenance；Sandbox Manager 缺真实 Kubernetes Provider/RuntimeClass/Workload Identity/egress proxy；AgentScope Runtime Worker 仍缺生产组合。
+- [ ] 真实容器逃逸、fork bomb、资源耗尽、SSRF/DNS rebinding、Secret 泄漏和 Prompt Injection 越权测试必须在隔离 Kubernetes 安全环境执行，本地静态 dry-run 不记为通过。
+- [x] 安全策略已确认并落实：生产禁止 critical/high/known-exploitable 漏洞的任何限时风险例外；证据包含 `risk_exceptions` 时直接 fail-closed，且漏洞计数不会因例外放行。例外字段仅保留用于 dry-run 或历史证据记录，不能作为生产准入依据。策略回归测试后定向 `9 passed`，`make backend-check` 为 `808 passed, 20 skipped`；本次未修改共享契约或前端代码。
+- 跨任务待办继续保留：AP-E7-005 真实容量/耐久验收、RunEvent 全局唯一登记表+月分区事件表、生产 OIDC/JWKS、外部 Scanner、AJV standalone、Run Attachment、Audit 归档和可信 Workflow 终态物化。
+
+### 2026-08-14 — AP-E7-007 Runbook、灾备和恢复验收工具
+
+- [x] 建立 `harness/tasks/AP-E7-007.yaml`，状态保持 `in_progress`，基线沿用 R22；未修改公共 OpenAPI、RunEvent、Temporal、数据库迁移或前端业务契约。
+- [x] 新增 `backend/packages/recovery_acceptance` 与 CLI，校验 PostgreSQL/Object Storage/Redis/Temporal 的冻结 RPO/RTO、数据丢失范围、完整性检查、不可变证据 URI+SHA-256 和演练新鲜度。
+- [x] 覆盖 7 个恢复场景：数据库恢复、Redis 丢通知后 SSE 补齐、Worker/Temporal 滚动重启、Sandbox 节点故障、Object Storage 故障、Model Gateway 限流/供应商故障、Outbox/DLQ 原事件重放与对账。
+- [x] 覆盖 10 个生产准入项：契约生成、迁移恢复、Runtime/事件 Replay、安全、容量、供应链、可观测性、保留/备份、生产组合和已知风险；生产模式对 NOT_RUN、过期/陈旧计划、占位证据和未达标 RPO/RTO fail-closed。
+- [x] 新增 `infra/recovery/ap-e7-007/plan.yaml`、证据模板、README 和 Runbook；dry-run 只做静态校验，模板明确输出未执行项和阻断项，不创建备份、停止依赖或伪造恢复事实。
+- [x] 定向测试 `8 passed`；Black、Ruff、Pyright、compile/import 和 `git diff --check` 通过；dry-run CLI 成功生成 JSON/Markdown 报告，状态严格为 `dry_run`。
+- [x] 全仓协同门禁通过：`make backend-check` 为 `816 passed, 20 skipped`；`make frontend-check` 为 26 个测试文件、`85 passed` 并完成生产构建；R22 契约 31 个完整性文件、190 个 operationId、7 个 Schema、184 个引用、4 个 Golden、17 个生成文件零漂移；统一 `make check` 通过。
+- [ ] 真实 PostgreSQL/MinIO/Redis/Temporal/Sandbox/Runtime 灾备环境、故障注入、季度演练、实际 RPO/RTO 和生产 sign-off 尚未执行，不记为通过。
+- [ ] 协同阻断继续保留：AP-E7-005 真实容量报告、AP-E7-006 真实供应链/Sandbox 动态安全证据、AgentScope Runtime/Sandbox Manager Provider、真实 OIDC/JWKS、告警 receiver/排班和备份责任人。

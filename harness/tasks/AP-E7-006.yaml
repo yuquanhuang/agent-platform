@@ -1,0 +1,62 @@
+task_id: AP-E7-006
+title: 供应链与 Sandbox 安全验收
+status: in_progress
+baseline: agent-platform-v1-dev-baseline-2026-08-r22
+scope:
+  includes:
+    - 供应链证据模型：镜像/Bundle/Skill/MCP/依赖 digest、SBOM、漏洞/许可证/Secret/恶意代码扫描、签名、provenance、审核人和风险例外
+    - 生产模式 fail-closed 校验，拒绝占位 URI、占位身份、未验证签名/provenance 和未被有效例外覆盖的高危发现
+    - Kubernetes Sandbox Pod 静态安全契约：gVisor RuntimeClass、非 root、RuntimeDefault seccomp、只读根文件系统、drop ALL、资源/PID/生命周期限制和不可变镜像 digest
+    - Sandbox 禁止 privileged、host namespace、hostPath/PVC、ServiceAccount token、Secret/env capability 注入、容器运行时 socket、Bidirectional mount 和不受控 shell
+    - Kubernetes NetworkPolicy 静态契约：默认拒绝 ingress；network_mode=none 默认拒绝 egress；proxy_allowlist 仅允许 selector 定位受控代理
+    - JSON/Markdown 验收报告和 dry-run CLI，供后续真实 CI/Registry/Kubernetes 证据回填
+  excludes:
+    - 真实 Registry、签名服务、SBOM/漏洞数据库或外部扫描器调用
+    - 真实 Kubernetes Sandbox Provider、RuntimeClass 创建和动态 Pod 生命周期
+    - 容器逃逸、fork bomb、磁盘/内存/PID 耗尽、SSRF/DNS rebinding、Secret 泄漏和 Prompt Injection 动态攻击测试
+    - AP-E7-007 灾备恢复演练和最终生产准入
+decisions:
+  - 后端 Python 代码位于 backend，安全计划、示例清单和部署说明位于 infra/security/ap-e7-006；本任务不新增前端业务代码
+  - 示例计划固定 mode=dry_run；静态 PASS 只表示契约可检查，不表示生产安全验收通过
+  - 生产证据必须由现有 CI/制品仓库构建后回填真实 Registry digest、SBOM、扫描、签名和 provenance；不接受 replace-with-* 或 example.invalid
+  - 生产不允许 critical/high/known-exploitable 漏洞风险例外；任何 risk_exceptions 均直接阻断，不提供配置开关绕过
+  - 计划内所有输入路径先做目录边界校验，越界路径 fail-closed，避免文件读取错误掩盖安全拒绝
+  - 未配置真实 Sandbox Provider、RuntimeClass、egress proxy 和生产 workload identity 时保持阻断，不用 Stub、replicas=0 或 dry-run 代替
+compatibility:
+  - 不修改公共 OpenAPI、RunEvent Schema、Temporal Workflow Definition、数据库迁移或前端生成代码
+  - 复用现有 Pydantic、PyYAML 和报告基础设施，不新增运行时依赖
+  - 不改变 AP-E7-005 容量 runner 和既有 Event/Runtime/Sandbox 业务行为
+verification:
+  planned:
+    - security_acceptance 配置、证据模型、路径边界、风险例外和静态 Kubernetes 规则单元测试
+    - dry-run CLI JSON/Markdown 报告生成验证
+    - make backend-check
+    - make frontend-check
+    - make contract-check
+    - make check
+  results:
+    - 定向 security_acceptance 测试：9 passed；覆盖 dry-run、生产占位/风险例外阻断、宿主 namespace 阻断、证据与镜像 digest 绑定、代理选择器收紧、路径越界优先拒绝和证据 URI 凭证拒绝
+    - Black、Ruff、Pyright 和 compile/import 检查通过
+    - 示例 dry-run CLI 成功生成 JSON/Markdown 报告，状态为 dry_run，静态检查无 blocker
+    - make backend-check：808 passed、20 skipped；Black、Ruff、Pyright 通过
+    - make frontend-check：26 个测试文件、85 passed；格式、Lint、类型检查和生产构建通过
+    - make contract-check：R22 的 31 个完整性文件、190 个 operationId、7 个 Schema、184 个引用、4 个 Golden 和 17 个生成文件零漂移
+    - make check：后端 807 passed、20 skipped；前端 85 passed 并完成生产构建
+    - 真实 Registry/Kubernetes/攻击性动态验收尚未执行，不记为通过
+acceptance:
+  - 生产模式只接受真实、可追溯且未过期的 digest、SBOM、扫描、签名和 provenance 证据
+  - Sandbox 清单满足非 root、gVisor、只读根、drop ALL、资源限制、独立 ServiceAccount 和默认拒绝网络契约
+  - 真实动态安全测试覆盖逃逸、资源耗尽、SSRF/DNS rebinding、Secret 泄漏和 Prompt Injection 越权
+  - 任一真实依赖、证据或动态阻断测试缺失时任务保持 in_progress/failed-closed
+blockers:
+  - AgentScope Runtime Worker 仍缺生产 SessionFactory、RunSpec/Bundle Loader、Tool Gateway/Executor 和完整 Temporal Activity 组合
+  - Sandbox Manager 尚无真实 Kubernetes Provider、RuntimeClass/Workload Identity 和生产 egress proxy 组合
+  - 外部 CI/制品仓库尚未回填 Registry digest、SBOM、扫描、签名和 provenance
+  - 当前环境无可执行真实容器逃逸、资源耗尽、SSRF/DNS rebinding、Secret 泄漏和 Prompt Injection 的隔离 Kubernetes 安全环境
+follow_up:
+  - 由现有 CI/制品仓库构建并回填 Runtime/相关依赖的真实 digest、SBOM、扫描报告、签名和 provenance
+  - 完成 Sandbox Manager 真实 Provider、gVisor/等价 RuntimeClass、Workload Identity、NetworkPolicy 和受控 egress proxy 组合
+  - 在隔离 Kubernetes 环境执行动态安全阻断测试并附带可复现输入、集群版本和审计证据
+  - 生产禁止 critical/high/known-exploitable 漏洞风险例外；证据包含 risk_exceptions 时直接 fail-closed，相关字段仅用于 dry-run 或历史证据记录
+  - 与 AP-E7-005 容量验收协同记录 Sandbox CPU/内存/PID 限制、镜像 digest 和资源峰值，不以静态报告替代容量结论
+open_questions: []

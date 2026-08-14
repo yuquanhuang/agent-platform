@@ -1,0 +1,15 @@
+plan_id: ap-e7-005-sse
+scenario: sse
+dry_run: true
+request:
+  base_url: https://agent-platform.example.invalid
+  auth_token_env: AP_CAPACITY_AUTH_TOKEN
+sse:
+  run_ids:
+    - replace-with-active-run-id
+  connections: 1000
+  duration_seconds: 300
+  reconnect_ratio_per_minute: 0.05
+metadata:
+  environment: isolated-capacity
+  workload: sse-connections-and-slow-consumers

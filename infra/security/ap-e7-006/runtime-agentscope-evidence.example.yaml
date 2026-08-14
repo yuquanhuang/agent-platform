@@ -1,0 +1,60 @@
+subject_name: runtime-agentscope
+subject_type: image
+subject_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+source:
+  uri: https://example.invalid/agent-platform/source
+  digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+builder: replace-with-ci-builder
+compiler_version: replace-with-build-version
+built_at: 2026-08-14T00:00:00Z
+sbom:
+  uri: https://example.invalid/agent-platform/sbom.spdx.json
+  digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+vulnerability_scan:
+  scanner: replace-with-vulnerability-scanner
+  scanner_version: replace-with-version
+  status: PASSED
+  report:
+    uri: https://example.invalid/agent-platform/vulnerability-report.json
+    digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  critical_count: 0
+  high_count: 0
+  known_exploitable_count: 0
+license_scan:
+  scanner: replace-with-license-scanner
+  scanner_version: replace-with-version
+  status: PASSED
+  report:
+    uri: https://example.invalid/agent-platform/license-report.json
+    digest: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+secret_scan:
+  scanner: replace-with-secret-scanner
+  scanner_version: replace-with-version
+  status: PASSED
+  report:
+    uri: https://example.invalid/agent-platform/secret-report.json
+    digest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+malicious_code_scan:
+  scanner: replace-with-malware-scanner
+  scanner_version: replace-with-version
+  status: PASSED
+  report:
+    uri: https://example.invalid/agent-platform/malware-report.json
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+signature:
+  status: VERIFIED
+  verifier: replace-with-signature-verifier
+  identity: replace-with-signing-identity
+  evidence:
+    uri: https://example.invalid/agent-platform/signature.json
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+provenance:
+  status: VERIFIED
+  verifier: replace-with-provenance-verifier
+  identity: replace-with-builder-identity
+  evidence:
+    uri: https://example.invalid/agent-platform/provenance.json
+    digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+reviewed_by: replace-with-security-reviewer
+reviewed_at: 2026-08-14T00:10:00Z
+risk_exceptions: []

@@ -1,0 +1,18 @@
+plan_id: ap-e7-005-event-store
+scenario: event_store
+dry_run: true
+request:
+  base_url: https://agent-platform.example.invalid
+  secret_headers_env:
+    X-Workload-Identity: AP_CAPACITY_WORKLOAD_IDENTITY
+event_store:
+  targets:
+    - run_id: replace-with-active-run-id
+      execution_attempt: 1
+      fencing_token_env: AP_CAPACITY_FENCING_TOKEN_1
+  events_per_second: 2000
+  batch_size: 50
+  duration_seconds: 900
+metadata:
+  environment: isolated-capacity
+  workload: event-store-sustained-write
