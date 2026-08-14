@@ -1,0 +1,26 @@
+harness/AI_CODING_PROGRESS.md
+  6172cfb388c1554b 978-1015
+harness/tasks/AP-E7-005.yaml
+  6172cfb388c1554b 1-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "9ceffcffaeebeb781aa6888d6d7f819b372db40f",
+  "prompts": {
+    "6172cfb388c1554b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc11-abf9-7ad0-8950-7baa0e85b822",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "kis <yuquan.huang@xinfei.cn>",
+      "messages": [],
+      "total_additions": 111,
+      "total_deletions": 1,
+      "accepted_lines": 110,
+      "overriden_lines": 0,
+      "messages_url": "https://codeaiapi.xinfei-inc.cn/cas/d7217330010c3029ebc1a8772ecebc81817b76567245f5dc0b5f4075f58b0584"
+    }
+  }
+}
