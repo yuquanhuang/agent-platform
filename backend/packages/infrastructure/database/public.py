@@ -5,6 +5,7 @@ from packages.infrastructure.database.approvals import SqlAlchemyApprovalStore
 from packages.infrastructure.database.artifacts import SqlAlchemyArtifactStore
 from packages.infrastructure.database.audit import SqlAlchemyAuditQueryStore
 from packages.infrastructure.database.base import NAMING_CONVENTION, Base
+from packages.infrastructure.database.budget_policies import SqlAlchemyBudgetPolicyStore
 from packages.infrastructure.database.bundles import SqlAlchemyBundleInputReader
 from packages.infrastructure.database.deployments import SqlAlchemyDeploymentStore
 from packages.infrastructure.database.events import (
@@ -30,8 +31,11 @@ from packages.infrastructure.database.models import (
     ApprovalRequestModel,
     AppUserModel,
     ArtifactDownloadGrantModel,
+    ArtifactLegalHoldModel,
     ArtifactModel,
     AuditLogModel,
+    BudgetPolicyModel,
+    BudgetPolicyVersionModel,
     BudgetReservationModel,
     ChatMessageModel,
     ChatSessionModel,
@@ -44,6 +48,8 @@ from packages.infrastructure.database.models import (
     ModelUsageModel,
     OperationRecordModel,
     OutboxEventModel,
+    PriceCatalogRateModel,
+    PriceCatalogVersionModel,
     QuotaPolicyModel,
     QuotaPolicyVersionModel,
     ReleaseModel,
@@ -52,7 +58,10 @@ from packages.infrastructure.database.models import (
     RoleBindingModel,
     RoleModel,
     RolePermissionModel,
+    RunAdmissionQueueModel,
     RunAttemptModel,
+    RunCapacityDomainModel,
+    RunCapacityLeaseModel,
     RunEventCounterModel,
     RunEventModel,
     RuntimeBundleModel,
@@ -60,6 +69,8 @@ from packages.infrastructure.database.models import (
     SandboxInstanceModel,
     SandboxLeaseModel,
     SkillSupplyChainScanModel,
+    StoragePolicyModel,
+    StoragePolicyVersionModel,
     TenantMemberModel,
     TenantModel,
     WorkspaceModel,
@@ -89,6 +100,9 @@ from packages.infrastructure.database.skills import (
     SqlAlchemySkillArtifactReader,
     SqlAlchemySkillScanStore,
 )
+from packages.infrastructure.database.storage_policies import (
+    SqlAlchemyStoragePolicyStore,
+)
 from packages.infrastructure.database.tenant import (
     TENANT_SETTING_NAME,
     bind_tenant_context,
@@ -111,9 +125,12 @@ __all__ = [
     "ApprovalDecisionModel",
     "ApprovalRequestModel",
     "ArtifactDownloadGrantModel",
+    "ArtifactLegalHoldModel",
     "ArtifactModel",
     "AuditLogModel",
     "Base",
+    "BudgetPolicyModel",
+    "BudgetPolicyVersionModel",
     "BudgetReservationModel",
     "ChatMessageModel",
     "ChatSessionModel",
@@ -127,6 +144,8 @@ __all__ = [
     "OperationRecordModel",
     "OutboxEventModel",
     "PlatformUnitOfWork",
+    "PriceCatalogRateModel",
+    "PriceCatalogVersionModel",
     "QuotaPolicyModel",
     "QuotaPolicyVersionModel",
     "ReleaseModel",
@@ -135,7 +154,10 @@ __all__ = [
     "RoleBindingModel",
     "RoleModel",
     "RolePermissionModel",
+    "RunAdmissionQueueModel",
     "RunAttemptModel",
+    "RunCapacityDomainModel",
+    "RunCapacityLeaseModel",
     "RunEventCounterModel",
     "RunEventModel",
     "RuntimeBundleModel",
@@ -149,6 +171,7 @@ __all__ = [
     "SqlAlchemyApprovalStore",
     "SqlAlchemyArtifactStore",
     "SqlAlchemyAuditQueryStore",
+    "SqlAlchemyBudgetPolicyStore",
     "SqlAlchemyBundleInputReader",
     "SqlAlchemyDeploymentStore",
     "SqlAlchemyExecutionTicketStore",
@@ -170,9 +193,12 @@ __all__ = [
     "SqlAlchemySkillArtifactReader",
     "SqlAlchemySkillScanStore",
     "SqlAlchemySnapshotCompilationStore",
+    "SqlAlchemyStoragePolicyStore",
     "SqlAlchemyTenantContextSource",
     "SqlAlchemyToolAuthorizationResolver",
     "SqlAlchemyWorkspaceStore",
+    "StoragePolicyModel",
+    "StoragePolicyVersionModel",
     "TenantMemberModel",
     "TenantModel",
     "TenantUnitOfWork",

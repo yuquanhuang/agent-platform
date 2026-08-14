@@ -308,6 +308,55 @@ class OpenAICompatibleProviderAdapter:
         stream: bool,
     ) -> dict[str, object]:
         parameters = {**route.default_parameters, **request.parameters}
+        if route.max_output_tokens is not None:
+            requested_cap = parameters.get("max_completion_tokens")
+            if requested_cap is None:
+                requested_cap = parameters.get("max_tokens")
+            if requested_cap is not None and (
+                not isinstance(requested_cap, int)
+                or isinstance(requested_cap, bool)
+                or requested_cap < 1
+                or requested_cap > route.max_output_tokens
+            ):
+                raise ProviderError(
+                    code="INVALID_REQUEST",
+                    message="The requested output limit exceeds the frozen model binding.",
+                    retryable=False,
+                    submission_state="not_submitted",
+                )
+            output_parameter = (
+                "max_completion_tokens"
+                if self._profile.provider == "openai"
+                else "max_tokens"
+            )
+            parameters.pop("max_tokens", None)
+            parameters.pop("max_completion_tokens", None)
+            parameters[output_parameter] = requested_cap or route.max_output_tokens
+        if route.max_reasoning_tokens is not None:
+            if self._profile.provider != "qwen":
+                raise ProviderError(
+                    code="COST_BOUND_UNAVAILABLE",
+                    message="The provider cannot enforce the frozen reasoning limit.",
+                    retryable=False,
+                    submission_state="not_submitted",
+                )
+            reasoning_parameter = "thinking_budget"
+            requested_reasoning = parameters.get(reasoning_parameter)
+            if requested_reasoning is not None and (
+                not isinstance(requested_reasoning, int)
+                or isinstance(requested_reasoning, bool)
+                or requested_reasoning < 1
+                or requested_reasoning > route.max_reasoning_tokens
+            ):
+                raise ProviderError(
+                    code="INVALID_REQUEST",
+                    message="The requested reasoning limit exceeds the frozen model binding.",
+                    retryable=False,
+                    submission_state="not_submitted",
+                )
+            parameters[reasoning_parameter] = (
+                requested_reasoning or route.max_reasoning_tokens
+            )
         unsupported = set(parameters) - self._profile.allowed_parameters
         if unsupported:
             raise ProviderError(

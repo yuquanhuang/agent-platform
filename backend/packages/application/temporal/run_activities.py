@@ -673,7 +673,7 @@ class AgentRunWorkflowActivities:
 def _execution_attempt(
     source: RunSpecCompilationSource, input: AgentRunWorkflowInput
 ) -> int:
-    if source.status == "CREATED":
+    if source.status in {"CREATED", "QUEUED"}:
         if source.current_attempt != 0:
             raise RunStageError(
                 "RUN_ATTEMPT_INCONSISTENT",

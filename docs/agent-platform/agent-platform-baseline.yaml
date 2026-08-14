@@ -1,48 +1,79 @@
-baseline_id: agent-platform-v1-dev-baseline-2026-08-r14
+baseline_id: agent-platform-v1-dev-baseline-2026-08-r22
 status: frozen-development-input
-frozen_at: "2026-08-12"
+frozen_at: '2026-08-14'
 integrity_algorithm: sha256
 integrity_excludes:
-  - agent-platform-baseline.yaml
+- agent-platform-baseline.yaml
 change_summary:
-  - 冻结 durable QuotaPolicy 管理 API、不可变版本、RLS/RBAC/Audit，并将 ACTIVE 租户策略接入 Run 创建/重试原子准入
-  - 部署 Run capacity 配置保持平台硬上限，租户策略只能收紧；禁用策略回退部署限制，周期 BudgetPolicy 留后续子阶段
-  - Reconciliation Worker 冻结 Kubernetes ServiceAccount + Ed25519 短期 Service Token，tenant 只来自验签 Claim，并激活受信 HTTP Sandbox Cleanup 组合
-  - Download Gateway 冻结单 Range 200/206/416，长连接以 Redis 唤醒和 PostgreSQL 周期事实复核收敛撤销
-  - Kubernetes 采用 EnvSecretBackend 注入 AP_SECRET_*，Vault 保留失败关闭 Adapter 边界；生产对象存储采用 MinIO
-  - AgentScope checkpoint 使用 PostgreSQL 不可变元数据、MinIO AES-256-GCM 密文并固化 Approval runtime_checkpoint_ref
+- AP-E7-004 冻结低基数私有 Registry 指标、Event/SSE/Outbox/Reconciliation/Queue/Lease/Model Gateway 观测输入；补齐 Temporal RPC 失败、RunEvent 批次失败和 SSE 降级告警；Worker metrics 受控 Service/NetworkPolicy/PrometheusRule/Runbook 已静态校验
+- AP-E7-004 明确当前 Kubernetes base 只抓取已进入受控组合的 Worker；API metrics 及未进入 base 的独立进程需在部署 overlay 接入后才可生产告警；队列深度/Lease 饱和持久 Gauge、完整跨进程 OTel context propagation、完整控制面/运行面 SLO 指标和真实 receiver 继续后置
+- AP-E7-003 完成 Artifact retention/Legal Hold、Capacity Domain/Lease 与 C2b Cost Budget 代码和契约收口
+- AVAILABLE 使用创建时冻结的 expires_at（默认 30 天）；FAILED/REJECTED/EXPIRED 使用状态进入时冻结的 retention_delete_after（默认 7 天）
+- Capacity Domain 以 runtime_target_id 为键，显式 slots、跨租户 quantum 和 durable Lease 防止全局超配；0041 升降级回填期间对称管理 Queue 不可变 Guard
+- BudgetPolicy 扩展 HARD/SOFT 与可选 USD/CNY cost_limit；调用前可信上界使用冻结 Route cap、Counter 版本/Hash、billing semantics 和 PUBLISHED PriceCatalog，fallback
+  取最大 Route 上界
+- append-only cost ledger 与 Provider attempt 固化预留、释放、结算、未知及 submitted/unknown 尝试；不换汇且可信事实或币种不一致时失败关闭
+- 生产仍需官方 Counter Golden、Model Gateway Counter/Planner/Attempt Store 组合、durable PriceCatalog 管理入口、SOFT 通知和 Capacity 真实 PostgreSQL
+  专项验收
+- F1 冻结 durable StoragePolicy 管理 API：每租户单策略、ACTIVE/DISABLED、不可变版本、ETag/CAS、幂等、RLS/RBAC 和 Audit
+- Workspace 与 Artifact 使用分离的四维预留额度；ACTIVE 租户策略只能收紧部署硬上限，DISABLED/不存在时回退部署配置
+- Artifact 上传与 Workspace 创建在 PostgreSQL 租户事务锁内读取 ACTIVE 版本、统计 DELETED 以外预留并原子准入；成功/拒绝审计固化不可变策略版本 ID
+- Workspace 继续按 FrozenSandboxPolicy 的 quota_bytes 预留，既有 Run Workspace 不因策略更新漂移；开发默认租户上限为 10 GiB/100 个 Workspace
+- F1 不包含 Retention、软阈值告警或对象存储事实对账；后续顺序调整为 Artifact retention、Capacity Domain/Lease、C2b Cost Budget
+- E1 冻结 PostgreSQL durable Run admission queue：create/retry 原子 WAITING，priority/FIFO、deadline 和容量求交后 ADMITTED，再写确定性 Run start
+  Outbox 并启动 Temporal
+- WAITING 取消/超时不创建 Workflow、Attempt、Sandbox 或 Run start Outbox；队列长度、最大等待、批次和轮询周期均配置化并提供默认值
+- Reconciliation Worker 使用独立低延迟 Run admission 循环，完整 Run/Approval/Sandbox 对账保持原周期；Workflow 未新增 Queue Signal/Timer，Temporal
+  Replay 契约不变
+- AP-E7-003 实施顺序为 durable StoragePolicy、Artifact retention、Capacity Domain/Lease、C2b Cost Budget；C2b 仅支持 USD/CNY、不换汇、币种不一致失败关闭
+- D2 冻结过期 UPLOADING 主动回收：FOR UPDATE SKIP LOCKED 并发认领，FAILED/DELETING、Operation、Audit 和既有删除 Outbox 原子持久化，DELETED 后释放容量
+- D2 未扩展公共 API/事件或依赖；FAILED/REJECTED/EXPIRED 自动删除保留期、联合 durable Policy 和对象存储事实对账继续保留
+- D1 冻结部署级 Artifact 租户预留字节/数量硬上限、PostgreSQL 原子准入、RATE_LIMITED 和拒绝审计；联合 durable 存储 Policy 留后续
+- 启用 Artifact 对象存储的 staging/production 必须显式配置两项容量阈值；local/test 未配置保持兼容
+- 修复后端启动常量 R10、Kubernetes ConfigMap R13 与冻结文档 R16 的历史漂移，运行时和部署输入统一升级至 R17
+- C2a 冻结不可变 PriceCatalog Version/Rate、RLS、UTC 生效时间选择、Decimal 调用后费用归因及 model_usage provenance；C2b 在其上扩展可信调用前上界、台账和 SOFT 阈值事实
+- 冻结 durable BudgetPolicy 管理 API、不可变版本、RLS/RBAC/Audit，以及 UTC 日/月 HARD/SOFT Token/Cost 周期准入
+- Model Gateway 对 Run token_budget 与 ACTIVE 租户周期余额原子求交并固化 Policy/Version/周期快照；DISABLED 回退 Run 预算
+- C2b Cost Budget、费用聚合和 SOFT 阈值事实已完成；生产通知渠道、官方 Counter Golden、durable PriceCatalog 管理与组合仍留后续
+- 冻结 durable QuotaPolicy 管理 API、不可变版本、RLS/RBAC/Audit，并将 ACTIVE 租户策略接入 Run 创建/重试原子准入
+- 部署 Run capacity 配置保持平台硬上限，租户策略只能收紧；禁用策略回退部署限制，周期 BudgetPolicy 留后续子阶段
+- Reconciliation Worker 冻结 Kubernetes ServiceAccount + Ed25519 短期 Service Token，tenant 只来自验签 Claim，并激活受信 HTTP Sandbox Cleanup
+  组合
+- Download Gateway 冻结单 Range 200/206/416，长连接以 Redis 唤醒和 PostgreSQL 周期事实复核收敛撤销
+- Kubernetes 采用 EnvSecretBackend 注入 AP_SECRET_*，Vault 保留失败关闭 Adapter 边界；生产对象存储采用 MinIO
+- AgentScope checkpoint 使用 PostgreSQL 不可变元数据、MinIO AES-256-GCM 密文并固化 Approval runtime_checkpoint_ref
 product:
   name: agent-platform
   description: Python 原生、可私有化部署的通用 Agent 开发与运行平台
   implementation_language: python
-  python_version: "3.12"
+  python_version: '3.12'
   migration_source: null
 scope:
   requirements: MVP and V1 incremental capability contracts
   implementation_order: Epic 0 through Epic 9
   feature_flags_required_for_incremental_capabilities: true
 contracts:
-  document_index: Agent平台开发文档索引.md@2.4
-  execution_plan: Agent平台开发执行计划.md@1.9
+  document_index: Agent平台开发文档索引.md@2.10
+  execution_plan: Agent平台开发执行计划.md@2.6
   requirements: Agent平台需求规格说明书.md@1.4
   architecture: Agent平台架构与流程设计.md@2.0
-  api_and_events: Agent平台核心接口与事件契约.md@1.8
-  domain_model: Agent平台领域模型与状态机.md@1.4
-  non_functional: Agent平台非功能与验收基线.md@1.2
-  traceability: Agent平台需求追踪矩阵.md@2.1
-  ai_coding_guide: Agent平台AI Coding开发总纲.md@2.1
-  engineering: Agent平台工程技术与配置基线.md@1.5
-  database: Agent平台数据库详细设计.md@1.7
+  api_and_events: Agent平台核心接口与事件契约.md@2.2
+  domain_model: Agent平台领域模型与状态机.md@1.8
+  non_functional: Agent平台非功能与验收基线.md@1.3
+  traceability: Agent平台需求追踪矩阵.md@2.5
+  ai_coding_guide: Agent平台AI Coding开发总纲.md@2.7
+  engineering: Agent平台工程技术与配置基线.md@2.0
+  database: Agent平台数据库详细设计.md@2.3
   temporal: Agent平台Temporal工作流与活动契约.md@1.4
   sandbox: Agent平台Sandbox与Workspace服务契约.md@1.4
   frontend: Agent平台前端页面与交互契约.md@1.5
   frontend_framework_adr: ADR-001-前端框架采用Vue3.md@1.3
   frontend_ui_adr: ADR-002-前端UI组件库采用ElementPlus.md@1.1
-  security: Agent平台权限安全与审计契约.md@1.6
-  testing: Agent平台测试验收与AI任务包.md@2.1
+  security: Agent平台权限安全与审计契约.md@1.9
+  testing: Agent平台测试验收与AI任务包.md@2.2
 machine_readable:
   openapi_core: agent-platform-openapi-v1.yaml@1.6.0
-  openapi_resources: agent-platform-openapi-resources-v1.yaml@1.2.0
+  openapi_resources: agent-platform-openapi-resources-v1.yaml@1.5.0
   run_spec: schemas/run-spec-v1.schema.json
   run_event: schemas/run-event-v1.schema.json
   skill_manifest: schemas/skill-manifest-v1.schema.json
@@ -56,49 +87,48 @@ examples:
   skill_manifest: examples/skill-manifest-v1.example.yaml
   bundle_manifest: examples/bundle-manifest-v1.example.json
 precedence:
-  - approved_adr_and_security_policy
-  - machine_readable_schema_and_core_contract
-  - domain_model_and_state_machine
-  - frozen_requirement_and_business_rule
-  - architecture_and_flow
-  - example_and_ui_copy
+- approved_adr_and_security_policy
+- machine_readable_schema_and_core_contract
+- domain_model_and_state_machine
+- frozen_requirement_and_business_rule
+- architecture_and_flow
+- example_and_ui_copy
 rules:
-  - 任何冲突必须先修正文档和基线清单，禁止 AI 自行选择。
-  - 未列入本清单的草稿、示例和外部项目代码不得作为生产契约。
-  - 公共契约变更必须同步更新 Schema、Golden File、追踪矩阵和兼容性说明。
-  - 所有 Run 和发布从首次生产实现开始使用 Temporal，不允许建立旁路任务系统。
-  - Runtime 只消费已发布 Snapshot 和不可变 Bundle。
-  - RuntimeAdapter 输出 RuntimeEventCandidate，RunEvent 由 Event Service 生成。
-  - V1 前端固定使用 Vue 3、TypeScript、Vite、Vue Router 4、Pinia 和 @tanstack/vue-query。
-  - V1 前端 UI 组件库固定使用 Element Plus。
-  - local/test 身份使用服务端 Mock OIDC；staging/production 禁止 Mock。
-  - Model Gateway 必须支持 OpenAI、Qwen 和 DeepSeek Provider Adapter。
-  - AgentScope 版本范围固定为 2.0.x，精确 patch 由锁文件和镜像 Digest 固定。
-  - AI Coding 任务使用 AP-E<epic>-NNN 编号；Epic 是里程碑，不作为单次任务粒度。
-  - 首个开发任务固定为 AP-E0-001 契约完整性与校验门禁。
-  - 每个 AI Coding 任务必须校验本清单 integrity 中的 SHA-256，不一致时立即停止。
-  - 本基线冻结期间不新增平行需求或契约文件；新能力修改现有权威文件并重新冻结。
-
+- 任何冲突必须先修正文档和基线清单，禁止 AI 自行选择。
+- 未列入本清单的草稿、示例和外部项目代码不得作为生产契约。
+- 公共契约变更必须同步更新 Schema、Golden File、追踪矩阵和兼容性说明。
+- 所有 Run 和发布从首次生产实现开始使用 Temporal，不允许建立旁路任务系统。
+- Runtime 只消费已发布 Snapshot 和不可变 Bundle。
+- RuntimeAdapter 输出 RuntimeEventCandidate，RunEvent 由 Event Service 生成。
+- V1 前端固定使用 Vue 3、TypeScript、Vite、Vue Router 4、Pinia 和 @tanstack/vue-query。
+- V1 前端 UI 组件库固定使用 Element Plus。
+- local/test 身份使用服务端 Mock OIDC；staging/production 禁止 Mock。
+- Model Gateway 必须支持 OpenAI、Qwen 和 DeepSeek Provider Adapter。
+- AgentScope 版本范围固定为 2.0.x，精确 patch 由锁文件和镜像 Digest 固定。
+- AI Coding 任务使用 AP-E<epic>-NNN 编号；Epic 是里程碑，不作为单次任务粒度。
+- 首个开发任务固定为 AP-E0-001 契约完整性与校验门禁。
+- 每个 AI Coding 任务必须校验本清单 integrity 中的 SHA-256，不一致时立即停止。
+- 本基线冻结期间不新增平行需求或契约文件；新能力修改现有权威文件并重新冻结。
 integrity:
-  "ADR-001-前端框架采用Vue3.md": 58249d77f013b15832f21efed4a125f48def143e7ddea380cbb8b16ebb85e0e8
-  "ADR-002-前端UI组件库采用ElementPlus.md": 2cf582740a1b926b150fb8781cf7dceafae23c16e2245c4dab75e6b1af00be26
-  "Agent平台AI Coding开发总纲.md": 701038734acfdeb0ef77d7f8a83c3714f08927432b9c6d2cd109dfa4b1ea9f4a
-  "Agent平台Sandbox与Workspace服务契约.md": 45930694d2a6b6cbd7618bdfca42558437f6354153517426fdb9431741dcd9dc
-  "Agent平台Temporal工作流与活动契约.md": 54b5df557d7d0a3118114b1061b4d4009de9a48edf063c8705e25f0b93c9e580
-  "Agent平台前端页面与交互契约.md": 219912ff31134f644be1efa91fdd856c27b88338b20b2c4ba6ec993f5704124e
-  "Agent平台工程技术与配置基线.md": 7f854597531e65fdb44474bcd36408a288c3da0c961c3e6aaa18b6118316d97f
-  "Agent平台开发文档索引.md": 9b3305de5b9479c826e214a2570c2dd65b261cf5d1db5678d01dc8688bff215f
-  "Agent平台数据库详细设计.md": 753388b0b42a7dbfa0a013654f8ef61171ffedf540a6457825f79e69f8e7faa7
-  "Agent平台权限安全与审计契约.md": 058ab11bffcd67b2109fd050dcbac83265d9428ac856ef24130fbdcfd395789e
-  "Agent平台架构与流程设计.md": 63cc1f3aa03cd52eac696b8451d100fa9f560fdd60ad23437ec00a1eed5eeee3
-  "Agent平台核心接口与事件契约.md": e020d40d199605444ff2bbec93c86ca402466b00f3dae957644b527da1f70f83
-  "Agent平台测试验收与AI任务包.md": 4a43f97a9d4c9be5d94e2b607370811e6879cc3ceac9c14a731033614364d6c8
-  "Agent平台需求规格说明书.md": eee93344c348ed0ac7d7df1332920e010b481382eb33eadaff991bd53d579b35
-  "Agent平台需求追踪矩阵.md": 87e24de86d29bc5ab77df8c1b198ac4ce3561392708c605d81d3d952108ef753
-  "Agent平台非功能与验收基线.md": c718c1ad1dbb90dc26da8948c37646193d1aa8c6fdac5dd2c7de98b133d205ca
-  "Agent平台领域模型与状态机.md": 6bf4ae50d27a748d4040b2de9cad303321ba44a477e70567d1c0b45cfe723854
-  "Agent平台开发执行计划.md": c24e2efd54d01fd9868d3cfc8ae4234a2527f2047637d7f84fb92202b85fe947
-  agent-platform-openapi-resources-v1.yaml: 706f5200cb2e4d75e8ca4762f1c1895660f806c0f5c2eb03993b2a8dee6f77de
+  ADR-001-前端框架采用Vue3.md: 58249d77f013b15832f21efed4a125f48def143e7ddea380cbb8b16ebb85e0e8
+  ADR-002-前端UI组件库采用ElementPlus.md: 2cf582740a1b926b150fb8781cf7dceafae23c16e2245c4dab75e6b1af00be26
+  Agent平台AI Coding开发总纲.md: 1971c90befdcc3194fa2962312eb2a1aa978529fe0fbac3eacd1a6d32204ea86
+  Agent平台Sandbox与Workspace服务契约.md: 45930694d2a6b6cbd7618bdfca42558437f6354153517426fdb9431741dcd9dc
+  Agent平台Temporal工作流与活动契约.md: 54b5df557d7d0a3118114b1061b4d4009de9a48edf063c8705e25f0b93c9e580
+  Agent平台前端页面与交互契约.md: 219912ff31134f644be1efa91fdd856c27b88338b20b2c4ba6ec993f5704124e
+  Agent平台工程技术与配置基线.md: 714779c3ac061d10f8369fba073feabbaa4fb180cf1d8b8e2e5157297f04e5f0
+  Agent平台开发文档索引.md: 5ec0d53a01efe8b98def756bf38ff1fc27c2f9115bedeb153010d0b4c83d140b
+  Agent平台数据库详细设计.md: cc8a4442250a52027b3274e0443deadc89ddb50e2c0903ed67c9d5edf520c0e7
+  Agent平台权限安全与审计契约.md: 9c18c26f54cb6d9a2245afc1d91bb9e9aa794f91e47f2c17c0f4348d57714630
+  Agent平台架构与流程设计.md: 63cc1f3aa03cd52eac696b8451d100fa9f560fdd60ad23437ec00a1eed5eeee3
+  Agent平台核心接口与事件契约.md: 7130bb84413e031f5a21f5731652d89242368b705c5df3fb90bcdf535386c315
+  Agent平台测试验收与AI任务包.md: 33c9a060ab3b973d0e3e1b240712e7e359b8a81cd6efab261c3b8834456951e4
+  Agent平台需求规格说明书.md: eee93344c348ed0ac7d7df1332920e010b481382eb33eadaff991bd53d579b35
+  Agent平台需求追踪矩阵.md: d7fc8a8db4d26952427aeb935c8126b64deaa3b45aa895379b987432f0e821ee
+  Agent平台非功能与验收基线.md: 3bd09ef1da3ceaf9dae922a3419a01642718a98747998b61af7c078ea30a8afd
+  Agent平台领域模型与状态机.md: f887d4759618ccc7f19fa3d37f775323116d4280aab8d9b52191301f364d89ce
+  Agent平台开发执行计划.md: ed594a86c134e1be91b0a3858c0fad5c72d80e2df93587062f1e06c628eae8c7
+  agent-platform-openapi-resources-v1.yaml: 3f934f8a1ff797e76dbfc146dc228643e242636bc1e9dcaf0ad30ef47154fb42
   agent-platform-openapi-v1.yaml: fd58b9622d48032547528d30021eef4eb01e161ec754238023b09fc57a5e04ac
   examples/bundle-manifest-v1.example.json: 9aabe8f628a11ae1060b79cf5136a26ea8223297caaa97586fe5145c8d867739
   examples/run-event-text-delta-v1.example.json: 5d830234319120ddb7882ce33c0ec05e66859e2b211c1eaaef1515cb91b8cfc7
@@ -106,7 +136,7 @@ integrity:
   examples/skill-manifest-v1.example.yaml: 7e484d2d960849f4d8802b93b94cdbd6cbbe1236282216564858ea9a0a73fe15
   schemas/bundle-manifest-v1.schema.json: e2f254d884b1e3478fb143e634c4efb13b6d98729330d7c7ae81611c6fd769ea
   schemas/model-gateway-v1.schema.json: 10b13786425495368ac4ce8a0476b812bc538f6edfad830ac8fda89068e9d159
-  schemas/resource-content-v1.schema.json: c60ad559a86e2d81c9e99ec765692d3b530097a665cda70b567e39fced51ff43
+  schemas/resource-content-v1.schema.json: 1acfe34df1d9d71ca3de6060c2cf5b1886b5e339c38e7312dd844dd7dcf890ea
   schemas/run-event-v1.schema.json: 6f1fcefed181e7493b705d141ae5ff89ce0f1f858d7b6fb6f3be9d1cdd4b061a
   schemas/run-spec-v1.schema.json: f898678f445008d5f5f2a82b5f49952664beeff3887db6548a4052993b77e6c5
   schemas/sandbox-policy-v1.schema.json: 7fbd352d6e2b6171fc500cc2916fe6031c234e006129537037669ef4ec23e52e

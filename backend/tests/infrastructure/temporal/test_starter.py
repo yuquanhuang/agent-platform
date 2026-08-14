@@ -5,8 +5,10 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from prometheus_client import generate_latest
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.service import RPCError, RPCStatusCode
 
 from packages.contracts.temporal import (
     AgentRunWorkflowInput,
@@ -130,8 +132,9 @@ class FakeHandle:
 
 
 class FakeClient:
-    def __init__(self, *, duplicate: bool = False) -> None:
+    def __init__(self, *, duplicate: bool = False, rpc_error: bool = False) -> None:
         self.duplicate = duplicate
+        self.rpc_error = rpc_error
         self.positional_arguments: tuple[object, ...] = ()
         self.arguments: dict[str, Any] = {}
 
@@ -144,6 +147,8 @@ class FakeClient:
                 "PlatformProbeWorkflow",
                 run_id="run-existing",
             )
+        if self.rpc_error:
+            raise RPCError("unavailable", RPCStatusCode.UNAVAILABLE, b"")
         return FakeHandle()
 
 
@@ -171,6 +176,21 @@ async def test_starter_treats_duplicate_workflow_id_as_success() -> None:
 
     assert result.already_exists is True
     assert result.run_id == "run-existing"
+
+
+@pytest.mark.asyncio
+async def test_starter_records_rpc_error_before_retrying_outbox() -> None:
+    metrics = PlatformMetrics()
+    starter = TemporalProbeStarter(cast(Client, FakeClient(rpc_error=True)), metrics)
+
+    with pytest.raises(RuntimeError, match="Temporal start RPC failed"):
+        await starter.start(event())
+
+    payload = generate_latest(metrics.registry).decode()
+    assert (
+        'agent_platform_temporal_workflow_starts_total{outcome="rpc_error",'
+        'worker_kind="run"} 1.0' in payload
+    )
 
 
 @pytest.mark.asyncio

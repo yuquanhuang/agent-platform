@@ -1,6 +1,6 @@
 # Agent 平台开发执行计划
 
-> 文档版本：V1.9
+> 文档版本：V2.6
 > 文档状态：开发输入计划
 > 适用范围：当前 `docs/agent-platform` 需求、架构、契约和测试文档
 
@@ -214,10 +214,26 @@ Epic 是阶段里程碑，不作为一次 AI Coding 的任务粒度。单个任�
 3. `AP-E7-003`：配额、预算、限流和背压。
    - 子阶段 A：配置驱动 Run 并发硬限制和 PostgreSQL 原子准入。
    - 子阶段 B：durable QuotaPolicy 管理 API、不可变版本、RLS/RBAC/Audit，并接入 Run 创建/重试；已完成。
-   - 子阶段 C：周期 BudgetPolicy、Token/费用聚合与可信费用表。
+   - 子阶段 C1：durable 周期 BudgetPolicy、UTC 日/月 HARD Token 准入、Run/租户余额求交；已完成。
+   - 子阶段 C2a：可信不可变 PriceCatalog、Decimal 调用后费用事实和 provenance；已完成内部持久化/读取与 Gateway 归因，未开放正式价格录入 API。
+   - 子阶段 C2b：已完成 BudgetPolicy HARD/SOFT 与 USD/CNY `cost_limit`、调用前可信费用上界、append-only ledger、Provider attempt 事实及受控内存 PriceCatalog draft/publish/rollback；不换汇，币种不一致失败关闭。生产官方 Counter/Golden、Planner/Attempt Store 组合、durable 目录管理入口和 SOFT 通知渠道转后续生产准入任务。
    - 子阶段 D：有界队列、存储配额、Event/SSE 背压和容量指标。
+   - 子阶段 D1：部署级 Artifact 租户预留字节/数量硬上限与上传原子准入；不扩展公共 API，联合 Workspace/Artifact durable Policy 留后续。
+   - 子阶段 D2：Event Worker 主动回收上传窗口已过期的 `UPLOADING`，按 `FAILED -> DELETING -> DELETED` 复用 Operation/Outbox 删除链路并释放容量；已完成。FAILED/REJECTED/EXPIRED 的 7 天取证期自动删除由 G1 完成。
+   - 子阶段 E1：PostgreSQL durable Run admission queue、配置化等待上限/队列长度/批次/轮询、WAITING 取消与超时、准入后确定性 Outbox/Temporal 启动及 Replay 兼容；已完成。
+   - 子阶段 F1：durable StoragePolicy 管理 API、Workspace/Artifact 分离额度、不可变版本、RLS/RBAC/Audit、部署上限求交及两条运行时原子准入；已完成。
+   - 子阶段 G1：Artifact retention/取证窗口、多 Legal Hold、删除失败恢复；已完成。AVAILABLE 在创建时冻结 `expires_at`（默认 30 天），取证状态冻结 `retention_delete_after`（默认 7 天），恢复间隔 1 小时且最多 3 次 Operation。
+   - 子阶段 G2：以 runtime_target_id 为域的 Capacity Domain/Lease、全局跨租户公平调度和续租/释放对账；已完成，生产 slots 必须显式配置。
+   - 任务状态：AP-E7-003 代码与契约已完成。数值项均保留配置默认值，生产组合、官方计数/Golden、持久化价目入口、SOFT 通知、真实 PostgreSQL Capacity 专项和容量/合规验收按记录后续补齐。
 4. `AP-E7-004`：SLO、指标、告警和 Trace 关联。
+   - 保持每进程私有 Prometheus Registry 和低基数标签，补齐 Event/SSE、Outbox、Reconciliation、Run Queue、Capacity Lease 和 Model Gateway 的 SLI 观测输入。
+   - 独立 Worker 指标只在受控内网暴露；`trace_id`、Run/Workflow 等高基数标识用于 Trace/Log 关联，不进入长期 Metric Label。
+   - 告警必须具有 owner、severity、阈值、持续时间、恢复条件和真实 Runbook 链接；生产 receiver/排班渠道上线前配置。
+   - 本任务不用合成数据声称 SLO 或容量达标，不改变 PostgreSQL 事实源、SSE 恢复和 Temporal Workflow 契约。
+   - 当前已完成最小代码与静态部署规则；API/其他进程生产 scrape、持久 Queue/Outbox backlog 和 Capacity saturation Gauge、完整跨进程 OTel context、其余 SLO/Model Gateway/容量告警按待办在生产组合与 AP-E7-005 前补齐。
 5. `AP-E7-005`：容量、耐久和资源池隔离测试。
+   - 在独立环境验证 100 个 AgentScope Run/tenant、1,000 个 SSE/cluster、2,000 events/s、20 个 Codex Run/cluster 和 30% 容量安全余量，并输出可复现报告。
+   - Event 写入侧功能性有限缓冲、Delta 合并、终态优先和超过恢复阈值的失败关闭语义，必须在本任务容量验收前另行冻结并完成，不由 AP-E7-004 的指标冒充。
 6. `AP-E7-006`：安全阻断项、供应链和生产 Sandbox 验收。
 7. `AP-E7-007`：Runbook、灾备和恢复演练，完成生产准入。
 

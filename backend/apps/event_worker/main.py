@@ -3,6 +3,8 @@
 import asyncio
 from typing import cast
 
+from prometheus_client import start_http_server
+
 from apps.event_worker.composition import (
     build_artifact_download_revocation_dispatcher,
     build_artifact_lifecycle_dispatcher,
@@ -68,6 +70,11 @@ async def run(settings: AppSettings) -> None:
         session_factory = create_session_factory(engine)
         temporal_client = await connect_temporal_client(settings)
         metrics = PlatformMetrics()
+        start_http_server(
+            settings.worker_metrics_port,
+            addr=settings.worker_metrics_host,
+            registry=metrics.registry,
+        )
         objects = MinioArtifactObjectStore.from_secret(
             endpoint_url=str(settings.object_storage_endpoint),
             bucket=settings.object_storage_bucket,

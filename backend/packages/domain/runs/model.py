@@ -40,13 +40,16 @@ RUN_STATUSES = frozenset(
 )
 TERMINAL_RUN_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT"})
 NON_TERMINAL_RUN_STATUSES = RUN_STATUSES - TERMINAL_RUN_STATUSES
+EXECUTION_CAPACITY_RUN_STATUSES = frozenset(
+    {"PREPARING", "RUNNING", "WAITING_APPROVAL", "CANCELLING"}
+)
 RUN_ATTEMPT_STATUSES = frozenset(
     {"ALLOCATED", "STARTING", "RUNNING", "COMPLETED", "LOST", "CANCELLED"}
 )
 
 _RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     "CREATED": frozenset({"QUEUED", "CANCELLING", "FAILED"}),
-    "QUEUED": frozenset({"PREPARING", "CANCELLING", "TIMEOUT"}),
+    "QUEUED": frozenset({"PREPARING", "FAILED", "CANCELLED", "CANCELLING", "TIMEOUT"}),
     "PREPARING": frozenset({"RUNNING", "CANCELLING", "FAILED", "TIMEOUT"}),
     "RUNNING": frozenset(
         {"WAITING_APPROVAL", "CANCELLING", "SUCCEEDED", "FAILED", "TIMEOUT"}
@@ -126,3 +129,41 @@ def ensure_run_attempt_transition(
 ) -> None:
     if target not in _ATTEMPT_TRANSITIONS[current]:
         raise ValueError(f"RunAttempt transition {current} -> {target} is not allowed")
+
+
+RUN_QUEUE_STATUSES = frozenset({"WAITING", "ADMITTED", "CANCELLED", "TIMED_OUT"})
+RunQueueStatus = Literal["WAITING", "ADMITTED", "CANCELLED", "TIMED_OUT"]
+
+
+@dataclass(frozen=True, slots=True)
+class RunAdmissionQueueRecord:
+    """Durable admission facts kept separate from Run execution state."""
+
+    id: UUID
+    tenant_id: UUID
+    run_id: UUID
+    priority: Literal["NORMAL", "HIGH"]
+    capacity_domain: str
+    status: RunQueueStatus
+    queued_at: datetime
+    deadline_at: datetime
+    admitted_at: datetime | None
+    cancelled_at: datetime | None
+    quota_policy_version_id: UUID | None
+    capacity_snapshot: dict[str, JsonValue] | None
+    resource_version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+def ensure_run_queue_transition(
+    current: RunQueueStatus, target: RunQueueStatus
+) -> None:
+    allowed: dict[RunQueueStatus, frozenset[RunQueueStatus]] = {
+        "WAITING": frozenset({"ADMITTED", "CANCELLED", "TIMED_OUT"}),
+        "ADMITTED": frozenset(),
+        "CANCELLED": frozenset(),
+        "TIMED_OUT": frozenset(),
+    }
+    if target not in allowed[current]:
+        raise ValueError(f"Run queue transition {current} -> {target} is not allowed")

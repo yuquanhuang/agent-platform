@@ -1,6 +1,6 @@
 # Agent 平台 AI Coding 开发总纲
 
-> 文档版本：V2.1
+> 文档版本：V2.7
 > 文档状态：开发输入基线  
 > 基线清单：[agent-platform-baseline.yaml](./agent-platform-baseline.yaml)
 
@@ -9,6 +9,18 @@
 本文把需求、架构和契约转换为可交给 AI Coding 工具执行的工程规则，目标是减少隐含假设、重复返工和跨模块契约漂移。
 
 平台定位为使用 Python 3.12 从零建设的通用 Agent 平台，不迁移、不重构、不兼容任何既有平台。任何外部项目只能作为非权威技术参考，不能改变本基线的实体、接口、状态和安全边界。
+
+AP-E7-003 的 BudgetPolicy 使用 UTC 日历 DAILY/MONTHLY、HARD/SOFT、Token limit 和可选 USD/CNY `cost_limit`。Model Gateway 已实现调用前可信费用上界：使用冻结的 Route 输出/推理上限、Counter 版本/Hash、billing semantics 和 PUBLISHED PriceCatalog，fallback 取路由上界最大值而非求和。HARD 在提交前阻断超限，SOFT 保留调用并写入确定性 Outbox/Audit 阈值事实；append-only cost ledger 和不可变 Provider attempt 记录预留、释放、结算及 submitted/unknown 尝试。C2a 的调用后 Decimal 归因与 `model_usage` provenance 保留。不内置 OpenAI、Qwen 或 DeepSeek 价格，不换汇，币种或任一可信事实不完整时失败关闭。受控内存 PriceCatalog DRAFT/PUBLISHED/rollback 仅是本地/测试边界；生产仍需组合官方锁版 Counter/Planner/Attempt Store、Golden 对账、durable 目录管理入口和 SOFT 通知渠道。
+
+AP-E7-003 D1 增加 Artifact 部署级租户硬上限：仅在对象存储启用时要求 `AP_ARTIFACT_MAX_RESERVED_BYTES_PER_TENANT` 与 `AP_ARTIFACT_MAX_RESERVED_COUNT_PER_TENANT`，上传预留按租户事务锁原子核算；超限复用 `RATE_LIMITED` 并写拒绝审计。D2 由 Event Worker 使用 `FOR UPDATE SKIP LOCKED` 主动回收上传窗口已过期的 `UPLOADING`：同一事务按 `FAILED -> DELETING` 创建 Operation 和既有删除 Outbox，物理删除完成后释放容量。两个切片均不扩展公共 API，也不把部署阈值冒充租户 durable Workspace/Artifact Policy。
+
+AP-E7-003 E1 使用 PostgreSQL durable `run_admission_queue`：Run create/retry 原子进入 `QUEUED/WAITING`，独立低延迟 Scheduler 在容量可用时固化 `ADMITTED` 快照并写确定性 `agent.run_requested.v1` Outbox，之后才启动 Temporal。等待项支持无 Workflow/Attempt/Sandbox 副作用的取消和 deadline 超时；队列长度、最大等待、批次和轮询周期均为配置项并有开发默认值。Workflow 定义未引入队列 Signal/Timer，历史 Replay 契约保持兼容。
+
+AP-E7-003 F1 使用每租户单一 durable StoragePolicy 管理 Workspace/Artifact 分离额度。ACTIVE 版本与部署硬上限逐维取最小值，DISABLED/不存在时回退部署配置；Artifact 上传和 Workspace 新建在事务锁内读取策略、统计 `DELETED` 以外预留并原子准入，成功/拒绝 Audit 固化不可变版本 ID。Workspace 仍按 FrozenSandboxPolicy 的 `quota_bytes` 预留，已有 Run Workspace 不追溯漂移。Retention、软阈值和对象存储事实对账不在 F1。
+
+AP-E7-003 Retention 在 Artifact 创建时固化 AVAILABLE 可下载期限 `expires_at`，默认 30 天；进入 FAILED/REJECTED/EXPIRED 时再固化取证期 `retention_delete_after`，默认 7 天。多个活动 Legal Hold 可按 `case_ref` 并存，任一 Hold 阻断自动与手动删除；解除后恢复原 deadline。Event Worker 按“过期上传→AVAILABLE 到期→Retention purge→失败删除恢复→删除 Outbox”处理，恢复默认间隔 1 小时、最多 3 个 Operation。Legal Hold 为审计的内部控制面，不扩展公共 API。
+
+AP-E7-003 Capacity Domain 以 Deployment `runtime_target_id` 为稳定键，由 Reconciliation Worker 使用显式 slots 配置执行全局跨租户公平 Scheduler。Lease 与 Queue ADMITTED、Outbox、Audit 同事务写入；WAITING 取消/超时不占槽，运行中过期 Lease 续租或失败关闭，终态/孤儿 Lease 才释放。默认 TTL 300 秒、tenant quantum 1；Redis 不作为 Lease 事实源。
 
 ## 2. 开发目标
 

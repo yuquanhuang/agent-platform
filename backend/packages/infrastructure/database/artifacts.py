@@ -10,7 +10,7 @@ from typing import Literal, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import JsonValue
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -19,13 +19,22 @@ from packages.application.artifacts import (
     ARTIFACT_DOWNLOADS_REVOKED_EVENT,
     ARTIFACT_SCAN_REQUESTED_EVENT,
     ArtifactDownloadGrantRecord,
+    ArtifactLegalHoldRecord,
+    ArtifactRetentionPolicy,
 )
 from packages.application.metadata import RequestMetadata
+from packages.application.policy import (
+    ArtifactStorageAdmissionDenied,
+    ArtifactStoragePolicy,
+    TenantStoragePolicy,
+    admit_artifact_storage,
+)
 from packages.contracts.generated.core_models import ArtifactUploadCreateRequest
 from packages.contracts.public import (
     SubjectType,
     TenantContext,
     dependency_unavailable,
+    rate_limited,
     resource_state_conflict,
 )
 from packages.domain.public import (
@@ -46,20 +55,40 @@ from packages.infrastructure.database.idempotency import (
 from packages.infrastructure.database.models import (
     AgentRunModel,
     ArtifactDownloadGrantModel,
+    ArtifactLegalHoldModel,
     ArtifactModel,
     AuditLogModel,
     ChatSessionModel,
     OperationRecordModel,
 )
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxWriter
+from packages.infrastructure.database.storage_policies import (
+    load_active_storage_policy_version,
+)
 from packages.infrastructure.database.uow import PlatformUnitOfWork, TenantUnitOfWork
 
 
 class SqlAlchemyArtifactStore:
     """Persist Artifact state with owner scoping and atomic scan publication."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        storage_policy: ArtifactStoragePolicy | None = None,
+        retention_policy: ArtifactRetentionPolicy | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._storage_policy = storage_policy or ArtifactStoragePolicy()
+        self._deployment_storage_policy = TenantStoragePolicy(
+            max_reserved_artifact_bytes=(
+                self._storage_policy.max_reserved_bytes_per_tenant
+            ),
+            max_reserved_artifacts=(
+                self._storage_policy.max_reserved_artifacts_per_tenant
+            ),
+        )
+        self._retention_policy = retention_policy or ArtifactRetentionPolicy()
 
     async def create_upload(
         self,
@@ -76,6 +105,7 @@ class SqlAlchemyArtifactStore:
         metadata: RequestMetadata,
     ) -> ArtifactRecord:
         tenant_id = UUID(context.tenant_id)
+        storage_policy_version_id: UUID | None = None
         try:
             async with TenantUnitOfWork(self._session_factory, context) as unit:
                 session = unit.session
@@ -100,6 +130,48 @@ class SqlAlchemyArtifactStore:
                         )
                     return _artifact_record(existing)
 
+                await session.execute(
+                    text(
+                        "SELECT pg_advisory_xact_lock("
+                        "hashtextextended(:lock_key, 0))"
+                    ),
+                    {"lock_key": f"storage-policy:{tenant_id}"},
+                )
+                storage_policy_version_id, tenant_storage_policy = (
+                    await load_active_storage_policy_version(session, tenant_id)
+                )
+                effective_storage_policy = self._deployment_storage_policy
+                if tenant_storage_policy is not None:
+                    effective_storage_policy = effective_storage_policy.narrowed_by(
+                        tenant_storage_policy
+                    )
+                artifact_storage_policy = effective_storage_policy.artifact_policy()
+                if artifact_storage_policy.enabled:
+                    await session.execute(
+                        text(
+                            "SELECT pg_advisory_xact_lock("
+                            "hashtextextended(:lock_key, 0))"
+                        ),
+                        {"lock_key": f"artifact-storage:{tenant_id}"},
+                    )
+                    reserved_bytes, reserved_artifacts = (
+                        await session.execute(
+                            select(
+                                func.coalesce(func.sum(ArtifactModel.size_bytes), 0),
+                                func.count(ArtifactModel.id),
+                            ).where(
+                                ArtifactModel.tenant_id == tenant_id,
+                                ArtifactModel.status != "DELETED",
+                            )
+                        )
+                    ).one()
+                    admit_artifact_storage(
+                        artifact_storage_policy,
+                        reserved_bytes=int(reserved_bytes or 0),
+                        reserved_artifacts=int(reserved_artifacts or 0),
+                        requested_bytes=request.size,
+                    )
+
                 now = datetime.now(UTC)
                 model = ArtifactModel(
                     id=artifact_id,
@@ -120,6 +192,7 @@ class SqlAlchemyArtifactStore:
                     created_at=now,
                     updated_at=now,
                     expires_at=expires_at,
+                    retention_delete_after=None,
                     deleted_at=None,
                 )
                 session.add(model)
@@ -135,6 +208,11 @@ class SqlAlchemyArtifactStore:
                     metadata={
                         "content_type": request.content_type,
                         "size_bytes": request.size,
+                        "storage_policy_version_id": (
+                            str(storage_policy_version_id)
+                            if storage_policy_version_id is not None
+                            else None
+                        ),
                     },
                     occurred_at=now,
                 )
@@ -147,8 +225,67 @@ class SqlAlchemyArtifactStore:
                     response_ref=str(artifact_id),
                 )
                 return record
+        except ArtifactStorageAdmissionDenied as denial:
+            await self._record_storage_denial(
+                context,
+                actor_id=owner_user_id,
+                artifact_id=artifact_id,
+                denial=denial,
+                metadata=metadata,
+                storage_policy_version_id=storage_policy_version_id,
+            )
+            raise rate_limited(
+                details={
+                    "scope": "tenant",
+                    "reason_code": denial.reason_code,
+                }
+            ) from denial
         except SQLAlchemyError as error:
             raise dependency_unavailable("Artifact Store is unavailable.") from error
+
+    async def _record_storage_denial(
+        self,
+        context: TenantContext,
+        *,
+        actor_id: UUID,
+        artifact_id: UUID,
+        denial: ArtifactStorageAdmissionDenied,
+        metadata: RequestMetadata,
+        storage_policy_version_id: UUID | None,
+    ) -> None:
+        change = {
+            "scope": "tenant",
+            "dimension": denial.dimension,
+            "reason_code": denial.reason_code,
+            "current": denial.current,
+            "requested": denial.requested,
+            "limit": denial.limit,
+            "storage_policy_version_id": (
+                str(storage_policy_version_id)
+                if storage_policy_version_id is not None
+                else None
+            ),
+        }
+        canonical = json.dumps(change, sort_keys=True, separators=(",", ":"))
+        async with TenantUnitOfWork(self._session_factory, context) as unit:
+            unit.session.add(
+                AuditLogModel(
+                    tenant_id=UUID(context.tenant_id),
+                    actor_type="user",
+                    actor_id=actor_id,
+                    action="artifact.upload.admission_deny",
+                    resource_type="artifact",
+                    resource_id=artifact_id,
+                    result="DENIED",
+                    reason_codes=["RATE_LIMITED", denial.reason_code],
+                    change_digest=(
+                        "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+                    ),
+                    request_id=metadata.request_id,
+                    trace_id=metadata.trace_id,
+                    metadata_json=change,
+                )
+            )
 
     async def get_owned(
         self,
@@ -283,6 +420,9 @@ class SqlAlchemyArtifactStore:
                 ensure_artifact_transition("UPLOADING", "FAILED")
                 model.status = "FAILED"
                 model.scan_result_json = _failure_result(code, effective_now)
+                model.retention_delete_after = (
+                    effective_now + self._retention_policy.forensic_retention
+                )
                 model.updated_at = effective_now
                 await _audit(
                     unit.session,
@@ -329,6 +469,9 @@ class SqlAlchemyArtifactStore:
                     effective_now = max(now, model.updated_at)
                     ensure_artifact_transition("AVAILABLE", "EXPIRED")
                     model.status = "EXPIRED"
+                    model.retention_delete_after = (
+                        effective_now + self._retention_policy.forensic_retention
+                    )
                     model.updated_at = effective_now
                     await _audit(
                         unit.session,
@@ -395,6 +538,12 @@ class SqlAlchemyArtifactStore:
                 if model.status in {"UPLOADING", "SCANNING"}:
                     raise resource_state_conflict(
                         "Artifact upload or scanning must finish before deletion."
+                    )
+                if await _has_active_legal_hold(
+                    session, tenant_id=tenant_id, artifact_id=artifact_id
+                ):
+                    raise resource_state_conflict(
+                        "The Artifact is protected by an active legal hold."
                     )
 
                 operation = existing_operation
@@ -775,6 +924,11 @@ class SqlAlchemyArtifactStore:
                 model.status = status
                 model.object_uri = object_uri
                 model.scan_result_json = cast(dict[str, object], scan_result)
+                model.retention_delete_after = (
+                    effective_now + self._retention_policy.forensic_retention
+                    if status == "REJECTED"
+                    else None
+                )
                 model.updated_at = effective_now
                 await _audit(
                     unit.session,
@@ -813,6 +967,9 @@ class SqlAlchemyArtifactStore:
                 model.status = "FAILED"
                 model.object_uri = None
                 model.scan_result_json = _failure_result(code, effective_now)
+                model.retention_delete_after = (
+                    effective_now + self._retention_policy.forensic_retention
+                )
                 model.updated_at = effective_now
                 await _audit(
                     unit.session,
@@ -858,6 +1015,9 @@ class SqlAlchemyArtifactStore:
                     effective_now = max(now, model.updated_at)
                     ensure_artifact_transition("AVAILABLE", "EXPIRED")
                     model.status = "EXPIRED"
+                    model.retention_delete_after = (
+                        effective_now + self._retention_policy.forensic_retention
+                    )
                     model.updated_at = effective_now
                     await _audit(
                         unit.session,
@@ -870,6 +1030,262 @@ class SqlAlchemyArtifactStore:
                         occurred_at=effective_now,
                     )
                 return len(models)
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Artifact Store is unavailable.") from error
+
+    async def reclaim_expired_uploads(
+        self,
+        context: TenantContext,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> int:
+        """Atomically convert abandoned uploads into asynchronous deletion work."""
+
+        if limit < 1:
+            raise ValueError("Artifact upload reclamation limit must be positive")
+        tenant_id = UUID(context.tenant_id)
+        try:
+            async with TenantUnitOfWork(self._session_factory, context) as unit:
+                session = unit.session
+                models = list(
+                    (
+                        await session.scalars(
+                            select(ArtifactModel)
+                            .where(
+                                ArtifactModel.tenant_id == tenant_id,
+                                ArtifactModel.status == "UPLOADING",
+                                ArtifactModel.upload_expires_at <= now,
+                            )
+                            .order_by(ArtifactModel.upload_expires_at, ArtifactModel.id)
+                            .limit(limit)
+                            .with_for_update(skip_locked=True)
+                        )
+                    ).all()
+                )
+                for model in models:
+                    effective_now = max(now, model.updated_at)
+                    ensure_artifact_transition("UPLOADING", "FAILED")
+                    model.status = "FAILED"
+                    model.scan_result_json = _failure_result(
+                        "ARTIFACT_UPLOAD_EXPIRED", effective_now
+                    )
+                    model.retention_delete_after = effective_now
+                    model.updated_at = effective_now
+                    await _audit(
+                        session,
+                        context,
+                        action="artifact.upload.expired",
+                        artifact_id=model.id,
+                        result="FAILED",
+                        reason_codes=["ARTIFACT_UPLOAD_EXPIRED"],
+                        metadata={
+                            "failure_code": "ARTIFACT_UPLOAD_EXPIRED",
+                            "upload_expires_at": model.upload_expires_at.isoformat(),
+                            "automatic_reclamation": True,
+                        },
+                        occurred_at=effective_now,
+                    )
+                    # The database guard validates each persisted state transition.
+                    await session.flush()
+
+                    ensure_artifact_transition("FAILED", "DELETING")
+                    model.status = "DELETING"
+                    model.updated_at = effective_now
+                    operation = _new_delete_operation(
+                        tenant_id,
+                        model.owner_user_id,
+                        model.id,
+                        status="ACCEPTED",
+                        now=effective_now,
+                    )
+                    session.add(operation)
+                    await session.flush()
+                    SqlAlchemyOutboxWriter(session, context).add(
+                        OutboxEvent(
+                            id=uuid5(
+                                NAMESPACE_URL,
+                                f"artifact-delete-outbox/{tenant_id}/{operation.id}",
+                            ),
+                            tenant_id=tenant_id,
+                            aggregate_type="artifact",
+                            aggregate_id=model.id,
+                            event_type=ARTIFACT_DELETE_REQUESTED_EVENT,
+                            payload={
+                                "artifact_id": str(model.id),
+                                "operation_id": str(operation.id),
+                            },
+                            payload_schema_version=1,
+                            status=OutboxStatus.PENDING,
+                            attempts=0,
+                            next_attempt_at=effective_now,
+                            created_at=effective_now,
+                        )
+                    )
+                    await _audit(
+                        session,
+                        context,
+                        action="artifact.delete.request",
+                        artifact_id=model.id,
+                        result="SUCCESS",
+                        reason_codes=["ARTIFACT_UPLOAD_EXPIRED"],
+                        metadata={
+                            "operation_id": str(operation.id),
+                            "status": "DELETING",
+                            "downloads_revoked": True,
+                            "revoked_grant_count": 0,
+                            "automatic_reclamation": True,
+                            "trigger": "upload_window_expired",
+                        },
+                        occurred_at=effective_now,
+                    )
+                return len(models)
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Artifact Store is unavailable.") from error
+
+    async def purge_retention_due(
+        self,
+        context: TenantContext,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> int:
+        """Claim forensic windows that elapsed and enqueue idempotent deletion."""
+
+        if limit < 1:
+            raise ValueError("Artifact retention purge limit must be positive")
+        tenant_id = UUID(context.tenant_id)
+        try:
+            async with TenantUnitOfWork(self._session_factory, context) as unit:
+                session = unit.session
+                models = list(
+                    (
+                        await session.scalars(
+                            select(ArtifactModel)
+                            .where(
+                                ArtifactModel.tenant_id == tenant_id,
+                                ArtifactModel.status.in_(
+                                    ("FAILED", "REJECTED", "EXPIRED")
+                                ),
+                                ArtifactModel.retention_delete_after.is_not(None),
+                                ArtifactModel.retention_delete_after <= now,
+                                ~select(ArtifactLegalHoldModel.id)
+                                .where(
+                                    ArtifactLegalHoldModel.tenant_id == tenant_id,
+                                    ArtifactLegalHoldModel.artifact_id
+                                    == ArtifactModel.id,
+                                    ArtifactLegalHoldModel.released_at.is_(None),
+                                )
+                                .exists(),
+                            )
+                            .order_by(
+                                ArtifactModel.retention_delete_after, ArtifactModel.id
+                            )
+                            .limit(limit)
+                            .with_for_update(skip_locked=True)
+                        )
+                    ).all()
+                )
+                purged = 0
+                for model in models:
+                    effective_now = max(now, model.updated_at)
+                    await _enqueue_delete(
+                        session,
+                        context,
+                        model=model,
+                        actor_id=model.owner_user_id,
+                        now=effective_now,
+                        reason_codes=["RETENTION_DELETE_DUE"],
+                        metadata={
+                            "automatic_reclamation": True,
+                            "trigger": "retention_delete_after",
+                            "retention_delete_after": (
+                                model.retention_delete_after.isoformat()
+                                if model.retention_delete_after is not None
+                                else None
+                            ),
+                        },
+                    )
+                    purged += 1
+                return purged
+        except SQLAlchemyError as error:
+            raise dependency_unavailable("Artifact Store is unavailable.") from error
+
+    async def recover_failed_deletes(
+        self,
+        context: TenantContext,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> int:
+        """Boundedly replace failed delete Operations after a cooldown."""
+
+        if limit < 1:
+            raise ValueError("Artifact delete recovery limit must be positive")
+        tenant_id = UUID(context.tenant_id)
+        try:
+            async with TenantUnitOfWork(self._session_factory, context) as unit:
+                models = list(
+                    (
+                        await unit.session.scalars(
+                            select(ArtifactModel)
+                            .where(
+                                ArtifactModel.tenant_id == tenant_id,
+                                ArtifactModel.status == "DELETING",
+                            )
+                            .order_by(ArtifactModel.updated_at, ArtifactModel.id)
+                            .limit(limit)
+                            .with_for_update(skip_locked=True)
+                        )
+                    ).all()
+                )
+                recovered = 0
+                for model in models:
+                    operation = await _latest_delete_operation(
+                        unit.session, tenant_id=tenant_id, artifact_id=model.id
+                    )
+                    if (
+                        operation is None
+                        or operation.status != "FAILED"
+                        or operation.finished_at is None
+                        or operation.finished_at
+                        + self._retention_policy.delete_recovery_delay
+                        > now
+                    ):
+                        continue
+                    operation_count = int(
+                        await unit.session.scalar(
+                            select(func.count(OperationRecordModel.id)).where(
+                                OperationRecordModel.tenant_id == tenant_id,
+                                OperationRecordModel.operation_type
+                                == "artifact.delete",
+                                OperationRecordModel.resource_type == "artifact",
+                                OperationRecordModel.resource_id == model.id,
+                            )
+                        )
+                        or 0
+                    )
+                    if (
+                        operation_count
+                        >= self._retention_policy.delete_recovery_max_operations
+                    ):
+                        continue
+                    await _enqueue_delete(
+                        unit.session,
+                        context,
+                        model=model,
+                        actor_id=model.owner_user_id,
+                        now=max(now, model.updated_at),
+                        reason_codes=["ARTIFACT_DELETE_RECOVERY"],
+                        metadata={
+                            "automatic_recovery": True,
+                            "previous_operation_id": str(operation.id),
+                            "operation_attempt": operation_count + 1,
+                        },
+                        transition=False,
+                    )
+                    recovered += 1
+                return recovered
         except SQLAlchemyError as error:
             raise dependency_unavailable("Artifact Store is unavailable.") from error
 
@@ -1012,6 +1428,149 @@ class SqlAlchemyArtifactStore:
         except SQLAlchemyError as error:
             raise dependency_unavailable("Artifact Store is unavailable.") from error
 
+    async def place_legal_hold(
+        self,
+        context: TenantContext,
+        *,
+        artifact_id: UUID,
+        case_ref: str,
+        reason: str,
+        now: datetime,
+    ) -> ArtifactLegalHoldRecord:
+        tenant_id = UUID(context.tenant_id)
+        actor_id = UUID(context.subject_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit:
+            model = await _artifact_for_update(
+                unit.session, tenant_id=tenant_id, artifact_id=artifact_id
+            )
+            if model is None:
+                raise ValueError("Artifact legal-hold target is unavailable")
+            if model.status in {"DELETING", "DELETED"}:
+                raise ValueError("Artifact deletion has already started")
+            existing = await unit.session.scalar(
+                select(ArtifactLegalHoldModel).where(
+                    ArtifactLegalHoldModel.tenant_id == tenant_id,
+                    ArtifactLegalHoldModel.artifact_id == artifact_id,
+                    ArtifactLegalHoldModel.case_ref == case_ref,
+                    ArtifactLegalHoldModel.released_at.is_(None),
+                )
+            )
+            if existing is not None:
+                return _legal_hold_record(existing)
+            hold = ArtifactLegalHoldModel(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                artifact_id=artifact_id,
+                case_ref=case_ref,
+                reason=reason,
+                placed_by=actor_id,
+                placed_at=now,
+                released_by=None,
+                released_at=None,
+            )
+            unit.session.add(hold)
+            await _audit(
+                unit.session,
+                context,
+                action="artifact.legal_hold.place",
+                artifact_id=artifact_id,
+                result="SUCCESS",
+                reason_codes=["LEGAL_HOLD"],
+                metadata={"case_ref": case_ref, "reason": reason},
+                occurred_at=now,
+            )
+            await unit.session.flush()
+            return _legal_hold_record(hold)
+
+    async def release_legal_hold(
+        self,
+        context: TenantContext,
+        *,
+        artifact_id: UUID,
+        case_ref: str,
+        reason: str,
+        now: datetime,
+    ) -> ArtifactLegalHoldRecord | None:
+        tenant_id = UUID(context.tenant_id)
+        actor_id = UUID(context.subject_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit:
+            model = await _artifact_for_update(
+                unit.session, tenant_id=tenant_id, artifact_id=artifact_id
+            )
+            if model is None:
+                return None
+            hold = await unit.session.scalar(
+                select(ArtifactLegalHoldModel)
+                .where(
+                    ArtifactLegalHoldModel.tenant_id == tenant_id,
+                    ArtifactLegalHoldModel.artifact_id == artifact_id,
+                    ArtifactLegalHoldModel.case_ref == case_ref,
+                    ArtifactLegalHoldModel.released_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if hold is None:
+                return None
+            hold.released_by = actor_id
+            hold.released_at = now
+            await _audit(
+                unit.session,
+                context,
+                action="artifact.legal_hold.release",
+                artifact_id=artifact_id,
+                result="SUCCESS",
+                reason_codes=["LEGAL_HOLD_RELEASED"],
+                metadata={"case_ref": case_ref, "reason": reason},
+                occurred_at=now,
+            )
+            await unit.session.flush()
+            return _legal_hold_record(hold)
+
+    async def retry_failed_delete(
+        self,
+        context: TenantContext,
+        *,
+        artifact_id: UUID,
+        reason: str,
+        now: datetime,
+    ) -> UUID | None:
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit:
+            model = await _artifact_for_update(
+                unit.session, tenant_id=tenant_id, artifact_id=artifact_id
+            )
+            if model is None or model.status != "DELETING":
+                return None
+            latest = await _latest_delete_operation(
+                unit.session, tenant_id=tenant_id, artifact_id=artifact_id
+            )
+            if latest is None or latest.status != "FAILED":
+                return None
+            operation_count = int(
+                await unit.session.scalar(
+                    select(func.count(OperationRecordModel.id)).where(
+                        OperationRecordModel.tenant_id == tenant_id,
+                        OperationRecordModel.operation_type == "artifact.delete",
+                        OperationRecordModel.resource_type == "artifact",
+                        OperationRecordModel.resource_id == artifact_id,
+                    )
+                )
+                or 0
+            )
+            if operation_count >= self._retention_policy.delete_recovery_max_operations:
+                return None
+            operation = await _enqueue_delete(
+                unit.session,
+                context,
+                model=model,
+                actor_id=UUID(context.subject_id),
+                now=max(now, model.updated_at),
+                reason_codes=["ARTIFACT_DELETE_MANUAL_RETRY"],
+                metadata={"reason": reason, "previous_operation_id": str(latest.id)},
+                transition=False,
+            )
+            return operation.id
+
 
 async def _revoke_download_grants(
     session: AsyncSession,
@@ -1034,6 +1593,90 @@ async def _revoke_download_grants(
     for grant in grants:
         grant.revoked_at = max(now, grant.created_at)
     return tuple(grant.id for grant in grants)
+
+
+async def _has_active_legal_hold(
+    session: AsyncSession, *, tenant_id: UUID, artifact_id: UUID
+) -> bool:
+    return (
+        await session.scalar(
+            select(ArtifactLegalHoldModel.id).where(
+                ArtifactLegalHoldModel.tenant_id == tenant_id,
+                ArtifactLegalHoldModel.artifact_id == artifact_id,
+                ArtifactLegalHoldModel.released_at.is_(None),
+            )
+        )
+        is not None
+    )
+
+
+async def _latest_delete_operation(
+    session: AsyncSession, *, tenant_id: UUID, artifact_id: UUID
+) -> OperationRecordModel | None:
+    return await session.scalar(
+        select(OperationRecordModel)
+        .where(
+            OperationRecordModel.tenant_id == tenant_id,
+            OperationRecordModel.operation_type == "artifact.delete",
+            OperationRecordModel.resource_type == "artifact",
+            OperationRecordModel.resource_id == artifact_id,
+        )
+        .order_by(
+            OperationRecordModel.created_at.desc(), OperationRecordModel.id.desc()
+        )
+        .limit(1)
+    )
+
+
+async def _enqueue_delete(
+    session: AsyncSession,
+    context: TenantContext,
+    *,
+    model: ArtifactModel,
+    actor_id: UUID,
+    now: datetime,
+    reason_codes: list[str],
+    metadata: dict[str, object],
+    transition: bool = True,
+) -> OperationRecordModel:
+    if transition:
+        ensure_artifact_transition(cast(ArtifactStatus, model.status), "DELETING")
+        model.status = "DELETING"
+        model.updated_at = now
+    operation = _new_delete_operation(
+        model.tenant_id, actor_id, model.id, status="ACCEPTED", now=now
+    )
+    session.add(operation)
+    await session.flush()
+    SqlAlchemyOutboxWriter(session, context).add(
+        OutboxEvent(
+            id=uuid5(
+                NAMESPACE_URL,
+                f"artifact-delete-outbox/{model.tenant_id}/{operation.id}",
+            ),
+            tenant_id=model.tenant_id,
+            aggregate_type="artifact",
+            aggregate_id=model.id,
+            event_type=ARTIFACT_DELETE_REQUESTED_EVENT,
+            payload={"artifact_id": str(model.id), "operation_id": str(operation.id)},
+            payload_schema_version=1,
+            status=OutboxStatus.PENDING,
+            attempts=0,
+            next_attempt_at=now,
+            created_at=now,
+        )
+    )
+    await _audit(
+        session,
+        context,
+        action="artifact.delete.request",
+        artifact_id=model.id,
+        result="SUCCESS",
+        reason_codes=reason_codes,
+        metadata={"operation_id": str(operation.id), "status": "DELETING", **metadata},
+        occurred_at=now,
+    )
+    return operation
 
 
 async def _owned_artifact(
@@ -1113,7 +1756,22 @@ def _artifact_record(model: ArtifactModel) -> ArtifactRecord:
         created_at=model.created_at,
         updated_at=model.updated_at,
         expires_at=model.expires_at,
+        retention_delete_after=model.retention_delete_after,
         deleted_at=model.deleted_at,
+    )
+
+
+def _legal_hold_record(model: ArtifactLegalHoldModel) -> ArtifactLegalHoldRecord:
+    return ArtifactLegalHoldRecord(
+        id=model.id,
+        tenant_id=model.tenant_id,
+        artifact_id=model.artifact_id,
+        case_ref=model.case_ref,
+        reason=model.reason,
+        placed_by=model.placed_by,
+        placed_at=model.placed_at,
+        released_by=model.released_by,
+        released_at=model.released_at,
     )
 
 

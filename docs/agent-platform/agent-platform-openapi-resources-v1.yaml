@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Agent Platform Resource and Administration API
-  version: 1.2.0
+  version: 1.5.0
   description: Machine-readable contract for versioned resources, administration, Knowledge, Evaluation, Schedule, A2A Client and Audit APIs.
 servers:
   - url: /
@@ -17,6 +17,8 @@ tags:
   - name: SandboxProfiles
   - name: Tenants
   - name: QuotaPolicies
+  - name: BudgetPolicies
+  - name: StoragePolicies
   - name: Members
   - name: Roles
   - name: Knowledge
@@ -606,6 +608,104 @@ paths:
       operationId: listQuotaPolicyVersions
       parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
       responses: { '200': { $ref: '#/components/responses/QuotaPolicyVersionPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/budget-policies:
+    get:
+      tags: [BudgetPolicies]
+      operationId: listBudgetPolicies
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/BudgetPolicyPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [BudgetPolicies]
+      operationId: createBudgetPolicy
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BudgetPolicyCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/BudgetPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/budget-policies/{budget_policy_id}:
+    parameters: [{ $ref: '#/components/parameters/BudgetPolicyId' }]
+    get:
+      tags: [BudgetPolicies]
+      operationId: getBudgetPolicy
+      responses: { '200': { $ref: '#/components/responses/BudgetPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [BudgetPolicies]
+      operationId: updateBudgetPolicy
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/BudgetPolicyUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/BudgetPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/budget-policies/{budget_policy_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/BudgetPolicyId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [BudgetPolicies]
+      operationId: disableBudgetPolicy
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/BudgetPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/budget-policies/{budget_policy_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/BudgetPolicyId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [BudgetPolicies]
+      operationId: enableBudgetPolicy
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/BudgetPolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/budget-policies/{budget_policy_id}/versions:
+    parameters: [{ $ref: '#/components/parameters/BudgetPolicyId' }]
+    get:
+      tags: [BudgetPolicies]
+      operationId: listBudgetPolicyVersions
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/BudgetPolicyVersionPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/storage-policies:
+    get:
+      tags: [StoragePolicies]
+      operationId: listStoragePolicies
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/StoragePolicyPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    post:
+      tags: [StoragePolicies]
+      operationId: createStoragePolicy
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StoragePolicyCreateRequest' } } }
+      responses: { '201': { $ref: '#/components/responses/StoragePolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/storage-policies/{storage_policy_id}:
+    parameters: [{ $ref: '#/components/parameters/StoragePolicyId' }]
+    get:
+      tags: [StoragePolicies]
+      operationId: getStoragePolicy
+      responses: { '200': { $ref: '#/components/responses/StoragePolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+    patch:
+      tags: [StoragePolicies]
+      operationId: updateStoragePolicy
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StoragePolicyUpdateRequest' } } }
+      responses: { '200': { $ref: '#/components/responses/StoragePolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/storage-policies/{storage_policy_id}/disable:
+    parameters: [{ $ref: '#/components/parameters/StoragePolicyId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [StoragePolicies]
+      operationId: disableStoragePolicy
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/StoragePolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/storage-policies/{storage_policy_id}/enable:
+    parameters: [{ $ref: '#/components/parameters/StoragePolicyId' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/IfMatch' }]
+    post:
+      tags: [StoragePolicies]
+      operationId: enableStoragePolicy
+      requestBody: { $ref: '#/components/requestBodies/ActionBody' }
+      responses: { '200': { $ref: '#/components/responses/StoragePolicyResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
+  /api/v1/storage-policies/{storage_policy_id}/versions:
+    parameters: [{ $ref: '#/components/parameters/StoragePolicyId' }]
+    get:
+      tags: [StoragePolicies]
+      operationId: listStoragePolicyVersions
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses: { '200': { $ref: '#/components/responses/StoragePolicyVersionPageResponse' }, default: { $ref: '#/components/responses/ErrorResponse' } }
   /api/v1/members:
     get:
       tags: [Members]
@@ -956,6 +1056,8 @@ components:
     MemberId: { name: member_id, in: path, required: true, schema: { type: string } }
     RoleId: { name: role_id, in: path, required: true, schema: { type: string } }
     QuotaPolicyId: { name: quota_policy_id, in: path, required: true, schema: { type: string } }
+    BudgetPolicyId: { name: budget_policy_id, in: path, required: true, schema: { type: string } }
+    StoragePolicyId: { name: storage_policy_id, in: path, required: true, schema: { type: string } }
     KnowledgeBaseId: { name: knowledge_base_id, in: path, required: true, schema: { type: string } }
     DocumentId: { name: document_id, in: path, required: true, schema: { type: string } }
     EvaluationSetId: { name: evaluation_set_id, in: path, required: true, schema: { type: string } }
@@ -1024,6 +1126,26 @@ components:
     QuotaPolicyVersionPageResponse:
       description: Immutable Run capacity policy version page.
       content: { application/json: { schema: { $ref: '#/components/schemas/QuotaPolicyVersionPage' } } }
+    BudgetPolicyResponse:
+      description: Tenant periodic model budget policy and its active immutable version.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/BudgetPolicy' } } }
+    BudgetPolicyPageResponse:
+      description: Tenant periodic model budget policy page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/BudgetPolicyPage' } } }
+    BudgetPolicyVersionPageResponse:
+      description: Immutable periodic model budget policy version page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/BudgetPolicyVersionPage' } } }
+    StoragePolicyResponse:
+      description: Tenant Workspace and Artifact storage capacity policy and its active immutable version.
+      headers: { ETag: { $ref: '#/components/headers/ETag' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/StoragePolicy' } } }
+    StoragePolicyPageResponse:
+      description: Tenant storage capacity policy page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/StoragePolicyPage' } } }
+    StoragePolicyVersionPageResponse:
+      description: Immutable tenant storage capacity policy version page.
+      content: { application/json: { schema: { $ref: '#/components/schemas/StoragePolicyVersionPage' } } }
     MemberResponse:
       description: Tenant member.
       headers: { ETag: { $ref: '#/components/headers/ETag' } }
@@ -1372,6 +1494,166 @@ components:
       required: [items, has_more]
       properties:
         items: { type: array, items: { $ref: '#/components/schemas/QuotaPolicyVersion' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    BudgetPolicyCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, period, token_limit]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        period: { enum: [DAILY, MONTHLY] }
+        enforcement: { enum: [HARD, SOFT], default: HARD }
+        token_limit: { type: integer, minimum: 1, maximum: 9223372036854775807 }
+        cost_limit:
+          anyOf:
+            - type: 'null'
+            - type: object
+              additionalProperties: false
+              required: [amount, currency]
+              properties:
+                amount: { type: string, pattern: '^\d+(\.\d{1,8})?$' }
+                currency: { enum: [USD, CNY] }
+    BudgetPolicyUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        period: { enum: [DAILY, MONTHLY] }
+        enforcement: { enum: [HARD, SOFT] }
+        token_limit: { type: integer, minimum: 1, maximum: 9223372036854775807 }
+        cost_limit:
+          anyOf:
+            - type: 'null'
+            - type: object
+              additionalProperties: false
+              required: [amount, currency]
+              properties:
+                amount: { type: string, pattern: '^\d+(\.\d{1,8})?$' }
+                currency: { enum: [USD, CNY] }
+    BudgetPolicyVersion:
+      type: object
+      additionalProperties: false
+      required: [id, policy_id, version_no, period, enforcement, token_limit, cost_limit, price_catalog_version, content_hash, created_by, created_at]
+      properties:
+        id: { type: string }
+        policy_id: { type: string }
+        version_no: { type: integer, minimum: 1 }
+        period: { enum: [DAILY, MONTHLY] }
+        enforcement: { enum: [HARD, SOFT] }
+        token_limit: { type: integer, minimum: 1, maximum: 9223372036854775807 }
+        cost_limit:
+          anyOf:
+            - type: 'null'
+            - type: object
+              additionalProperties: false
+              required: [amount, currency]
+              properties:
+                amount: { type: string, pattern: '^\d+(\.\d{1,8})?$' }
+                currency: { enum: [USD, CNY] }
+        price_catalog_version: { type: [string, 'null'] }
+        content_hash: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+    BudgetPolicy:
+      type: object
+      additionalProperties: false
+      required: [id, tenant_id, name, description, status, current_version, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        status: { enum: [ACTIVE, DISABLED] }
+        current_version: { $ref: '#/components/schemas/BudgetPolicyVersion' }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    BudgetPolicyPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/BudgetPolicy' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    BudgetPolicyVersionPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/BudgetPolicyVersion' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    StorageLimits:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Workspace and Artifact pools are independent; omitted dimensions inherit deployment hard limits.
+      properties:
+        max_reserved_workspace_bytes: { type: integer, minimum: 1, maximum: 1125899906842624 }
+        max_reserved_workspaces: { type: integer, minimum: 1, maximum: 1000000000 }
+        max_reserved_artifact_bytes: { type: integer, minimum: 1, maximum: 1125899906842624 }
+        max_reserved_artifacts: { type: integer, minimum: 1, maximum: 1000000000 }
+    StoragePolicyCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, limits]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        limits: { $ref: '#/components/schemas/StorageLimits' }
+    StoragePolicyUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        limits: { $ref: '#/components/schemas/StorageLimits' }
+    StoragePolicyVersion:
+      type: object
+      additionalProperties: false
+      required: [id, policy_id, version_no, limits, content_hash, created_by, created_at]
+      properties:
+        id: { type: string }
+        policy_id: { type: string }
+        version_no: { type: integer, minimum: 1 }
+        limits: { $ref: '#/components/schemas/StorageLimits' }
+        content_hash: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+    StoragePolicy:
+      type: object
+      additionalProperties: false
+      required: [id, tenant_id, name, description, status, current_version, resource_version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        status: { enum: [ACTIVE, DISABLED] }
+        current_version: { $ref: '#/components/schemas/StoragePolicyVersion' }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    StoragePolicyPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/StoragePolicy' } }
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    StoragePolicyVersionPage:
+      type: object
+      additionalProperties: false
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/StoragePolicyVersion' } }
         next_cursor: { type: [string, 'null'] }
         has_more: { type: boolean }
     MemberCreateRequest:

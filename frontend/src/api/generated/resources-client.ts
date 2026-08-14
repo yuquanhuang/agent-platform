@@ -93,6 +93,20 @@ export const operationIds = [
   'disableQuotaPolicy',
   'enableQuotaPolicy',
   'listQuotaPolicyVersions',
+  'listBudgetPolicies',
+  'createBudgetPolicy',
+  'getBudgetPolicy',
+  'updateBudgetPolicy',
+  'disableBudgetPolicy',
+  'enableBudgetPolicy',
+  'listBudgetPolicyVersions',
+  'listStoragePolicies',
+  'createStoragePolicy',
+  'getStoragePolicy',
+  'updateStoragePolicy',
+  'disableStoragePolicy',
+  'enableStoragePolicy',
+  'listStoragePolicyVersions',
   'listMembers',
   'createMember',
   'getMember',
@@ -1832,6 +1846,278 @@ export class ResourcesApiClient {
   ): Promise<Models.QuotaPolicyVersionPage> {
     const path = '/api/v1/quota-policies/{quota_policy_id}/versions'.replace('{quota_policy_id}', encodeURIComponent(String(input.quotaPolicyId)));
     return await this.transport.request<Models.QuotaPolicyVersionPage>({
+      method: 'GET',
+      path,
+      query: {
+        'limit': input.limit,
+        'cursor': input.cursor,
+      },
+      signal: input.signal,
+    });
+  }
+
+  async listBudgetPolicies(
+    input: {
+      readonly limit?: Models.ListBudgetPoliciesLimit;
+      readonly cursor?: Models.ListBudgetPoliciesCursor;
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<Models.BudgetPolicyPage> {
+    const path = '/api/v1/budget-policies';
+    return await this.transport.request<Models.BudgetPolicyPage>({
+      method: 'GET',
+      path,
+      query: {
+        'limit': input.limit,
+        'cursor': input.cursor,
+      },
+      signal: input.signal,
+    });
+  }
+
+  async createBudgetPolicy(
+    input: {
+      readonly idempotencyKey: Models.CreateBudgetPolicyIdempotencyKey;
+      readonly body: Models.BudgetPolicyCreateRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.BudgetPolicy> {
+    const path = '/api/v1/budget-policies';
+    return await this.transport.request<Models.BudgetPolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async getBudgetPolicy(
+    input: {
+      readonly budgetPolicyId: Models.GetBudgetPolicyBudgetPolicyId;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.BudgetPolicy> {
+    const path = '/api/v1/budget-policies/{budget_policy_id}'.replace('{budget_policy_id}', encodeURIComponent(String(input.budgetPolicyId)));
+    return await this.transport.request<Models.BudgetPolicy>({
+      method: 'GET',
+      path,
+      signal: input.signal,
+    });
+  }
+
+  async updateBudgetPolicy(
+    input: {
+      readonly budgetPolicyId: Models.UpdateBudgetPolicyBudgetPolicyId;
+      readonly ifMatch: Models.UpdateBudgetPolicyIfMatch;
+      readonly body: Models.BudgetPolicyUpdateRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.BudgetPolicy> {
+    const path = '/api/v1/budget-policies/{budget_policy_id}'.replace('{budget_policy_id}', encodeURIComponent(String(input.budgetPolicyId)));
+    return await this.transport.request<Models.BudgetPolicy>({
+      method: 'PATCH',
+      path,
+      headers: {
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async disableBudgetPolicy(
+    input: {
+      readonly budgetPolicyId: Models.DisableBudgetPolicyBudgetPolicyId;
+      readonly idempotencyKey: Models.DisableBudgetPolicyIdempotencyKey;
+      readonly ifMatch: Models.DisableBudgetPolicyIfMatch;
+      readonly body?: Models.ActionRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.BudgetPolicy> {
+    const path = '/api/v1/budget-policies/{budget_policy_id}/disable'.replace('{budget_policy_id}', encodeURIComponent(String(input.budgetPolicyId)));
+    return await this.transport.request<Models.BudgetPolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async enableBudgetPolicy(
+    input: {
+      readonly budgetPolicyId: Models.EnableBudgetPolicyBudgetPolicyId;
+      readonly idempotencyKey: Models.EnableBudgetPolicyIdempotencyKey;
+      readonly ifMatch: Models.EnableBudgetPolicyIfMatch;
+      readonly body?: Models.ActionRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.BudgetPolicy> {
+    const path = '/api/v1/budget-policies/{budget_policy_id}/enable'.replace('{budget_policy_id}', encodeURIComponent(String(input.budgetPolicyId)));
+    return await this.transport.request<Models.BudgetPolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async listBudgetPolicyVersions(
+    input: {
+      readonly budgetPolicyId: Models.ListBudgetPolicyVersionsBudgetPolicyId;
+      readonly limit?: Models.ListBudgetPolicyVersionsLimit;
+      readonly cursor?: Models.ListBudgetPolicyVersionsCursor;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.BudgetPolicyVersionPage> {
+    const path = '/api/v1/budget-policies/{budget_policy_id}/versions'.replace('{budget_policy_id}', encodeURIComponent(String(input.budgetPolicyId)));
+    return await this.transport.request<Models.BudgetPolicyVersionPage>({
+      method: 'GET',
+      path,
+      query: {
+        'limit': input.limit,
+        'cursor': input.cursor,
+      },
+      signal: input.signal,
+    });
+  }
+
+  async listStoragePolicies(
+    input: {
+      readonly limit?: Models.ListStoragePoliciesLimit;
+      readonly cursor?: Models.ListStoragePoliciesCursor;
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<Models.StoragePolicyPage> {
+    const path = '/api/v1/storage-policies';
+    return await this.transport.request<Models.StoragePolicyPage>({
+      method: 'GET',
+      path,
+      query: {
+        'limit': input.limit,
+        'cursor': input.cursor,
+      },
+      signal: input.signal,
+    });
+  }
+
+  async createStoragePolicy(
+    input: {
+      readonly idempotencyKey: Models.CreateStoragePolicyIdempotencyKey;
+      readonly body: Models.StoragePolicyCreateRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.StoragePolicy> {
+    const path = '/api/v1/storage-policies';
+    return await this.transport.request<Models.StoragePolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async getStoragePolicy(
+    input: {
+      readonly storagePolicyId: Models.GetStoragePolicyStoragePolicyId;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.StoragePolicy> {
+    const path = '/api/v1/storage-policies/{storage_policy_id}'.replace('{storage_policy_id}', encodeURIComponent(String(input.storagePolicyId)));
+    return await this.transport.request<Models.StoragePolicy>({
+      method: 'GET',
+      path,
+      signal: input.signal,
+    });
+  }
+
+  async updateStoragePolicy(
+    input: {
+      readonly storagePolicyId: Models.UpdateStoragePolicyStoragePolicyId;
+      readonly ifMatch: Models.UpdateStoragePolicyIfMatch;
+      readonly body: Models.StoragePolicyUpdateRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.StoragePolicy> {
+    const path = '/api/v1/storage-policies/{storage_policy_id}'.replace('{storage_policy_id}', encodeURIComponent(String(input.storagePolicyId)));
+    return await this.transport.request<Models.StoragePolicy>({
+      method: 'PATCH',
+      path,
+      headers: {
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async disableStoragePolicy(
+    input: {
+      readonly storagePolicyId: Models.DisableStoragePolicyStoragePolicyId;
+      readonly idempotencyKey: Models.DisableStoragePolicyIdempotencyKey;
+      readonly ifMatch: Models.DisableStoragePolicyIfMatch;
+      readonly body?: Models.ActionRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.StoragePolicy> {
+    const path = '/api/v1/storage-policies/{storage_policy_id}/disable'.replace('{storage_policy_id}', encodeURIComponent(String(input.storagePolicyId)));
+    return await this.transport.request<Models.StoragePolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async enableStoragePolicy(
+    input: {
+      readonly storagePolicyId: Models.EnableStoragePolicyStoragePolicyId;
+      readonly idempotencyKey: Models.EnableStoragePolicyIdempotencyKey;
+      readonly ifMatch: Models.EnableStoragePolicyIfMatch;
+      readonly body?: Models.ActionRequest;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.StoragePolicy> {
+    const path = '/api/v1/storage-policies/{storage_policy_id}/enable'.replace('{storage_policy_id}', encodeURIComponent(String(input.storagePolicyId)));
+    return await this.transport.request<Models.StoragePolicy>({
+      method: 'POST',
+      path,
+      headers: {
+        'Idempotency-Key': String(input.idempotencyKey),
+        'If-Match': String(input.ifMatch),
+      },
+      body: input.body,
+      signal: input.signal,
+    });
+  }
+
+  async listStoragePolicyVersions(
+    input: {
+      readonly storagePolicyId: Models.ListStoragePolicyVersionsStoragePolicyId;
+      readonly limit?: Models.ListStoragePolicyVersionsLimit;
+      readonly cursor?: Models.ListStoragePolicyVersionsCursor;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Models.StoragePolicyVersionPage> {
+    const path = '/api/v1/storage-policies/{storage_policy_id}/versions'.replace('{storage_policy_id}', encodeURIComponent(String(input.storagePolicyId)));
+    return await this.transport.request<Models.StoragePolicyVersionPage>({
       method: 'GET',
       path,
       query: {

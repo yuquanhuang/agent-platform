@@ -52,6 +52,7 @@ class ArtifactRecord:
     created_at: datetime
     updated_at: datetime
     expires_at: datetime
+    retention_delete_after: datetime | None
     deleted_at: datetime | None
 
 

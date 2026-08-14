@@ -58,6 +58,14 @@ class Store:
         self.requeued: list[UUID] = []
         self.mapped: list[UUID] = []
         self.cancel_deliveries: list[tuple[UUID, str]] = []
+        self.queue_calls: list[tuple[datetime, int]] = []
+
+    async def process_admission_queue(
+        self, context: TenantContext, *, now: datetime, limit: int
+    ) -> tuple[int, int]:
+        del context
+        self.queue_calls.append((now, limit))
+        return 2, 1
 
     async def list_stalled_runs(
         self, context: TenantContext, **kwargs: object
@@ -130,6 +138,14 @@ async def test_reconciler_requeues_missing_workflow_and_resignals_cancellation()
     assert summary.mappings_recorded == 2
     assert summary.cancellations_signalled == 1
     assert summary.unresolved == 1
+    assert summary.queue_admitted == 0
+    assert summary.queue_timed_out == 0
+    assert store.queue_calls == []
+
+    queue_summary = await reconciler.process_admission_queue(context(), now=NOW)
+    assert queue_summary.queue_admitted == 2
+    assert queue_summary.queue_timed_out == 1
+    assert store.queue_calls == [(NOW, 50)]
     assert store.requeued == [CREATED_RUN_ID]
     assert store.mapped == [CANCELLING_RUN_ID, TERMINAL_WORKFLOW_RUN_ID]
     assert len(control.signals) == 1

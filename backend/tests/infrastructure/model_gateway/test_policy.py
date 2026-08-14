@@ -82,21 +82,16 @@ async def test_cost_budget_fails_closed_without_price_table() -> None:
             ModelBinding(binding_id="binding-1", routes=(route(),)),
         )
 
-    assert error.value.code == "COST_BUDGET_UNAVAILABLE"
+    assert error.value.code == "COST_BOUND_UNAVAILABLE"
     assert error.value.submission_state == "not_submitted"
 
 
 @pytest.mark.asyncio
-async def test_unconfigured_token_budget_and_rpm_do_not_open_database_session() -> None:
+async def test_unconfigured_rpm_does_not_open_database_session() -> None:
     binding = ModelBinding(binding_id="binding-1", routes=(route(),))
-    guard = SqlAlchemyModelBudgetGuard(session_factory())
     limiter = SqlAlchemyModelRateLimiter(session_factory())
 
-    permit = await guard.authorize(context(), request(), binding)
     await limiter.acquire(context(), request(), binding, binding.routes[0])
-
-    assert permit.reservation_id is None
-    assert permit.reserved_tokens is None
 
 
 @pytest.mark.asyncio

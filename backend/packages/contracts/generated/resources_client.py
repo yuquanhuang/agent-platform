@@ -100,6 +100,20 @@ OPERATION_IDS = frozenset(
         "disableQuotaPolicy",
         "enableQuotaPolicy",
         "listQuotaPolicyVersions",
+        "listBudgetPolicies",
+        "createBudgetPolicy",
+        "getBudgetPolicy",
+        "updateBudgetPolicy",
+        "disableBudgetPolicy",
+        "enableBudgetPolicy",
+        "listBudgetPolicyVersions",
+        "listStoragePolicies",
+        "createStoragePolicy",
+        "getStoragePolicy",
+        "updateStoragePolicy",
+        "disableStoragePolicy",
+        "enableStoragePolicy",
+        "listStoragePolicyVersions",
         "listMembers",
         "createMember",
         "getMember",
@@ -1986,6 +2000,300 @@ class ResourcesApiClient:
             body=None,
         )
         return TypeAdapter(models.QuotaPolicyVersionPage).validate_python(payload)
+
+    async def list_budget_policies(
+        self,
+        *,
+        limit: models.ListBudgetPoliciesLimit | None = None,
+        cursor: models.ListBudgetPoliciesCursor | None = None,
+    ) -> models.BudgetPolicyPage:
+        path = "/api/v1/budget-policies"
+        query: dict[str, QueryValue] = {}
+        if limit is not None:
+            query["limit"] = limit
+        if cursor is not None:
+            query["cursor"] = cursor
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=query,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.BudgetPolicyPage).validate_python(payload)
+
+    async def create_budget_policy(
+        self,
+        *,
+        idempotency_key: models.CreateBudgetPolicyIdempotencyKey,
+        body: models.BudgetPolicyCreateRequest,
+    ) -> models.BudgetPolicy:
+        path = "/api/v1/budget-policies"
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.BudgetPolicy).validate_python(payload)
+
+    async def get_budget_policy(
+        self,
+        *,
+        budget_policy_id: models.GetBudgetPolicyBudgetPolicyId,
+    ) -> models.BudgetPolicy:
+        path = "/api/v1/budget-policies/{budget_policy_id}".replace(
+            "{budget_policy_id}", quote(str(budget_policy_id), safe="")
+        )
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=None,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.BudgetPolicy).validate_python(payload)
+
+    async def update_budget_policy(
+        self,
+        *,
+        budget_policy_id: models.UpdateBudgetPolicyBudgetPolicyId,
+        if_match: models.UpdateBudgetPolicyIfMatch,
+        body: models.BudgetPolicyUpdateRequest,
+    ) -> models.BudgetPolicy:
+        path = "/api/v1/budget-policies/{budget_policy_id}".replace(
+            "{budget_policy_id}", quote(str(budget_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "PATCH",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.BudgetPolicy).validate_python(payload)
+
+    async def disable_budget_policy(
+        self,
+        *,
+        budget_policy_id: models.DisableBudgetPolicyBudgetPolicyId,
+        idempotency_key: models.DisableBudgetPolicyIdempotencyKey,
+        if_match: models.DisableBudgetPolicyIfMatch,
+        body: models.ActionRequest | None = None,
+    ) -> models.BudgetPolicy:
+        path = "/api/v1/budget-policies/{budget_policy_id}/disable".replace(
+            "{budget_policy_id}", quote(str(budget_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.BudgetPolicy).validate_python(payload)
+
+    async def enable_budget_policy(
+        self,
+        *,
+        budget_policy_id: models.EnableBudgetPolicyBudgetPolicyId,
+        idempotency_key: models.EnableBudgetPolicyIdempotencyKey,
+        if_match: models.EnableBudgetPolicyIfMatch,
+        body: models.ActionRequest | None = None,
+    ) -> models.BudgetPolicy:
+        path = "/api/v1/budget-policies/{budget_policy_id}/enable".replace(
+            "{budget_policy_id}", quote(str(budget_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.BudgetPolicy).validate_python(payload)
+
+    async def list_budget_policy_versions(
+        self,
+        *,
+        budget_policy_id: models.ListBudgetPolicyVersionsBudgetPolicyId,
+        limit: models.ListBudgetPolicyVersionsLimit | None = None,
+        cursor: models.ListBudgetPolicyVersionsCursor | None = None,
+    ) -> models.BudgetPolicyVersionPage:
+        path = "/api/v1/budget-policies/{budget_policy_id}/versions".replace(
+            "{budget_policy_id}", quote(str(budget_policy_id), safe="")
+        )
+        query: dict[str, QueryValue] = {}
+        if limit is not None:
+            query["limit"] = limit
+        if cursor is not None:
+            query["cursor"] = cursor
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=query,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.BudgetPolicyVersionPage).validate_python(payload)
+
+    async def list_storage_policies(
+        self,
+        *,
+        limit: models.ListStoragePoliciesLimit | None = None,
+        cursor: models.ListStoragePoliciesCursor | None = None,
+    ) -> models.StoragePolicyPage:
+        path = "/api/v1/storage-policies"
+        query: dict[str, QueryValue] = {}
+        if limit is not None:
+            query["limit"] = limit
+        if cursor is not None:
+            query["cursor"] = cursor
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=query,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.StoragePolicyPage).validate_python(payload)
+
+    async def create_storage_policy(
+        self,
+        *,
+        idempotency_key: models.CreateStoragePolicyIdempotencyKey,
+        body: models.StoragePolicyCreateRequest,
+    ) -> models.StoragePolicy:
+        path = "/api/v1/storage-policies"
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.StoragePolicy).validate_python(payload)
+
+    async def get_storage_policy(
+        self,
+        *,
+        storage_policy_id: models.GetStoragePolicyStoragePolicyId,
+    ) -> models.StoragePolicy:
+        path = "/api/v1/storage-policies/{storage_policy_id}".replace(
+            "{storage_policy_id}", quote(str(storage_policy_id), safe="")
+        )
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=None,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.StoragePolicy).validate_python(payload)
+
+    async def update_storage_policy(
+        self,
+        *,
+        storage_policy_id: models.UpdateStoragePolicyStoragePolicyId,
+        if_match: models.UpdateStoragePolicyIfMatch,
+        body: models.StoragePolicyUpdateRequest,
+    ) -> models.StoragePolicy:
+        path = "/api/v1/storage-policies/{storage_policy_id}".replace(
+            "{storage_policy_id}", quote(str(storage_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "PATCH",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.StoragePolicy).validate_python(payload)
+
+    async def disable_storage_policy(
+        self,
+        *,
+        storage_policy_id: models.DisableStoragePolicyStoragePolicyId,
+        idempotency_key: models.DisableStoragePolicyIdempotencyKey,
+        if_match: models.DisableStoragePolicyIfMatch,
+        body: models.ActionRequest | None = None,
+    ) -> models.StoragePolicy:
+        path = "/api/v1/storage-policies/{storage_policy_id}/disable".replace(
+            "{storage_policy_id}", quote(str(storage_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.StoragePolicy).validate_python(payload)
+
+    async def enable_storage_policy(
+        self,
+        *,
+        storage_policy_id: models.EnableStoragePolicyStoragePolicyId,
+        idempotency_key: models.EnableStoragePolicyIdempotencyKey,
+        if_match: models.EnableStoragePolicyIfMatch,
+        body: models.ActionRequest | None = None,
+    ) -> models.StoragePolicy:
+        path = "/api/v1/storage-policies/{storage_policy_id}/enable".replace(
+            "{storage_policy_id}", quote(str(storage_policy_id), safe="")
+        )
+        headers: dict[str, str] = {}
+        headers["Idempotency-Key"] = str(idempotency_key)
+        headers["If-Match"] = str(if_match)
+        payload = await self._transport.request(
+            "POST",
+            path,
+            query=None,
+            headers=headers,
+            body=body,
+        )
+        return TypeAdapter(models.StoragePolicy).validate_python(payload)
+
+    async def list_storage_policy_versions(
+        self,
+        *,
+        storage_policy_id: models.ListStoragePolicyVersionsStoragePolicyId,
+        limit: models.ListStoragePolicyVersionsLimit | None = None,
+        cursor: models.ListStoragePolicyVersionsCursor | None = None,
+    ) -> models.StoragePolicyVersionPage:
+        path = "/api/v1/storage-policies/{storage_policy_id}/versions".replace(
+            "{storage_policy_id}", quote(str(storage_policy_id), safe="")
+        )
+        query: dict[str, QueryValue] = {}
+        if limit is not None:
+            query["limit"] = limit
+        if cursor is not None:
+            query["cursor"] = cursor
+        payload = await self._transport.request(
+            "GET",
+            path,
+            query=query,
+            headers=None,
+            body=None,
+        )
+        return TypeAdapter(models.StoragePolicyVersionPage).validate_python(payload)
 
     async def list_members(
         self,

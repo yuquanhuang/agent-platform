@@ -32,6 +32,10 @@ spec:
           image: agent-platform-backend:dev
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "apps.reconciliation_worker.main"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
           envFrom:
             - configMapRef:
                 name: agent-platform-reconciliation-worker

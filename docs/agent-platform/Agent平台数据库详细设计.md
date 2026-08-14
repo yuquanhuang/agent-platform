@@ -1,6 +1,6 @@
 # Agent 平台数据库详细设计
 
-> 文档版本：V1.7
+> 文档版本：V2.3
 > 文档状态：开发输入基线  
 > 数据库：PostgreSQL 16+  
 > ORM：SQLAlchemy 2.x Async  
@@ -333,7 +333,24 @@ created_at, updated_at, archived_at, deleted_at
 - 对账索引：`tenant_id + status + cancelling_at`；CREATED 使用既有 `tenant_id + status + created_at` 索引。
 - 创建事务不得写 Assistant 占位；`assistant_message_id` 初始为 NULL。Runtime 返回通过契约校验的最终结果后，终态事务 INSERT 新 ASSISTANT Message（`source_run_id = run_id`），将该字段从 NULL 一次性绑定到新消息并推进 Session Cursor。无有效最终结果的失败、取消或超时 Run 保持 NULL，Message 全程禁止 UPDATE/DELETE。
 
-### 7.4 run_attempt
+### 7.4 run_admission_queue
+
+字段：`id, tenant_id, run_id, priority, capacity_domain, status, queued_at, deadline_at, admitted_at, cancelled_at, quota_policy_version_id, capacity_snapshot_json, resource_version, created_at, updated_at`。
+
+- 每个 Run 唯一一条 durable 准入记录；状态只允许 `WAITING -> ADMITTED/CANCELLED/TIMED_OUT`，终态记录保留为审计事实。
+- create/retry 在同一事务写 `agent_run=QUEUED` 与 `queue=WAITING`；仅 `ADMITTED` 后写确定性 Run start Outbox，`prepare_run` 必须验证 durable 准入事实。
+- Scheduler 使用 `FOR UPDATE SKIP LOCKED`、优先级/FIFO 和部署/租户容量求交。执行容量口径只计 `QUEUED+ADMITTED` 或执行中 Run，禁止重复计数；同批每次准入后刷新占槽事实，避免批内超配。
+- WAITING 取消直接形成 Run `CANCELLED` 与 `run_cancelled` 事件；deadline 超时形成 `TIMEOUT/RUN_QUEUE_TIMEOUT` 与 `run_timeout(stage=queue)`，两者均不得创建 Attempt、Workflow、Sandbox 或 Run start Outbox。
+- `AP_RUN_QUEUE_MAX_WAIT_SECONDS=300`、`AP_RUN_QUEUE_MAX_PENDING_PER_TENANT=1000`、`AP_RUN_QUEUE_ADMISSION_BATCH_SIZE=50`、`AP_RUN_QUEUE_POLL_INTERVAL_SECONDS=1` 是开发默认值，生产可按容量验收覆盖。
+
+### 7.4.1 run_capacity_domain / run_capacity_lease
+
+- `run_capacity_domain`：`domain_key, configured_slots, status, config_hash, resource_version, created_at, updated_at`；`domain_key` 等于 Deployment `runtime_target_id`，状态为 `ACTIVE/DRAINING/DISABLED`。只允许平台 Scheduler 身份跨租户读写。
+- `run_capacity_lease`：`id, domain_key, tenant_id, run_id, acquired_at, renewed_at, expires_at, released_at, release_reason, resource_version`；每个 Run 最多一条 Lease，租户只能查看本租户事实。
+- Lease 与 Queue `ADMITTED`、确定性 Run start Outbox 和 Audit 在同一事务中创建。运行中 Lease 过期时续租，终态或孤儿才以 `RUN_TERMINAL/ORPHANED` 释放；不允许把过期时间单独当作可复用证据。
+- 迁移 `0041_capacity_domain_lease` 将存量 Queue 的 domain 回填为 Runtime Target，并为存量未终态 ADMITTED Run 生成 `DRAINING` 域与 5 分钟 Lease；运维配置同步后才进入 ACTIVE。
+
+### 7.5 run_attempt
 
 字段：`id, tenant_id, run_id, attempt_no, fencing_token_hash, worker_id, runtime_handle_ref, status, started_at, heartbeat_at, finished_at, error_code`。
 
@@ -387,14 +404,19 @@ Event Service 在事务中通过原子更新分配连续序号；实现也可使
 - `sandbox_instance`：`id, tenant_id, scope, image_digest, policy_hash, runtime_target_id, status, provider_ref, lease_expires_at, created_at, terminated_at, failure_code`。
 - `sandbox_lease`：`id, tenant_id, sandbox_id, holder_run_id, fencing_token_hash, acquired_at, expires_at, released_at`。
 - `workspace`：`id, tenant_id, user_id, session_id, run_id, uri, quota_bytes, used_bytes, status, created_at, expires_at`。
-- `artifact`：`id, tenant_id, workspace_id, run_id, owner_user_id, name, object_uri, content_hash, size_bytes, content_type, status, required_output, scan_result_json, created_at, expires_at, deleted_at`。
+- `artifact`：`id, tenant_id, workspace_id, run_id, owner_user_id, name, object_uri, content_hash, size_bytes, content_type, status, required_output, scan_result_json, retention_delete_after, created_at, expires_at, deleted_at`。
 - `artifact_download_grant`：`id, tenant_id, artifact_id, owner_user_id, token_hash, expires_at, revoked_at, created_at`；Token 明文只返回一次，表中只保存 SHA-256。
+- `artifact_legal_hold`：`id, tenant_id, artifact_id, case_ref, reason, placed_by/at, released_by/at`；同 Artifact/case_ref 最多一条活动 Hold，历史放置/解除事实保留。
 
 约束：
 
 - Workspace URI 唯一且必须通过 URI Parser 生成，禁止直接拼接。
 - Artifact 在 AVAILABLE 前不得提供普通下载。
 - Artifact Download Grant 绑定单一 Tenant/Artifact/Owner；除一次性写入 `revoked_at` 外绑定字段不可变，Artifact 进入删除流程时同事务撤销全部 Grant。
+- AP-E7-003 D1 的部署级 Artifact 容量准入不新增汇总表：创建上传时按 Tenant advisory transaction lock，聚合 `status <> 'DELETED'` 的 `sum(size_bytes)` 与 `count(id)` 后再写入。拒绝事务回滚，不留下 Artifact 或 Idempotency claim；DENIED Audit 使用独立 Tenant 事务提交。仅 `DELETED` 释放预留容量，避免对象处于隔离、失败、过期或删除中时被低估。
+- AP-E7-003 D2 通过 `tenant_id, status, upload_expires_at` 索引和 `FOR UPDATE SKIP LOCKED` 分批认领上传窗口已过期的 `UPLOADING`。同一租户事务先持久化 `FAILED/ARTIFACT_UPLOAD_EXPIRED`，再进入 `DELETING`，创建 `artifact.delete` Operation、确定性 `artifact.delete_requested.v1` Outbox 和 Audit；只有既有对象删除处理完成为 `DELETED` 后释放 D1 容量。未过期上传、AVAILABLE 以及其他失败/拒绝/保留过期状态不在本轮自动清理范围。
+- AVAILABLE 可下载期限使用 Artifact 创建时一次固化的 `expires_at`，默认 30 天；进入 FAILED/REJECTED/EXPIRED 时一次固化 `retention_delete_after`，默认 7 天。配置更改不修改既有 deadline，`FOR UPDATE SKIP LOCKED` 分批推进到既有 Operation/Outbox/Audit 删除链路。
+- 任一 `artifact_legal_hold.released_at IS NULL` 都阻断自动与手动删除。解除 Hold 只恢复原冻结 deadline；删除失败默认 1 小时后可恢复，同 Artifact 最多创建 3 个删除 Operation。
 - Sandbox Lease 同一 Sandbox 同时最多一个未释放记录。
 
 ## 10. Approval、审计和可靠消息
@@ -416,17 +438,39 @@ Runtime checkpoint 约束：
 
 ## 11. 模型用量与预算
 
-- `model_usage`：`id, tenant_id, run_id, provider, model, provider_request_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, token_estimated, cost_amount, cost_currency, started_at, finished_at`。
+- `model_usage`：`id, tenant_id, run_id, provider, model, provider_request_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, token_estimated, cost_amount, cost_currency, cost_source, price_catalog_version_id, cost_details_json, started_at, finished_at`；费用来源只允许 `PROVIDER_REPORTED/CATALOG_CALCULATED`，目录计算必须绑定不可变价格版本和计算明细，Usage 事实禁止更新删除。
+- `price_catalog_version`：`id, tenant_id, provider, model, currency, effective_from/to, source_ref, content_hash, created_by/at`；按 Tenant、Provider、Model 和 UTC 生效时间选择不可变可信版本，不内置供应商正式价格。
+- `price_catalog_rate`：`id, tenant_id, catalog_version_id, dimension, unit_tokens, unit_price`；维度仅允许 input/output/reasoning/cache read/cache write Token，同版本同维度唯一，金额使用 Decimal 计算。
 - `quota_policy`：`id, tenant_id, name, description, status, current_version_id, resource_version, created_by, created_at, updated_at`；每租户最多一条，状态为 `ACTIVE/DISABLED`，`tenant.quota_policy_id` 选择当前策略。
 - `quota_policy_version`：`id, tenant_id, policy_id, version_no, max_nonterminal_runs_per_tenant/user/agent, max_nonterminal_agentscope_runs, max_nonterminal_codex_runs, content_hash, created_by, created_at`；至少一个限制非空，版本和内容不可更新删除。
-- `budget_policy`：周期 Token/费用硬软限制。
-- `budget_reservation`：`run_id, policy_id, reserved_amount, consumed_amount, released_amount, status`。
+- `budget_policy`：`id, tenant_id, name, description, status, current_version_id, resource_version, created_by, created_at, updated_at`；每租户最多一条，创建即 ACTIVE，`tenant.budget_policy_id` 选择当前策略。
+- `budget_policy_version`：`id, tenant_id, policy_id, version_no, period, enforcement, token_limit, cost_limit_amount/currency, price_catalog_version, content_hash, created_by, created_at`；允许 UTC 日历 `DAILY/MONTHLY`、`HARD/SOFT`、Token limit 和可选 USD/CNY cost limit，版本不可更新删除。
+- `budget_reservation`：在既有 Run 预算字段上增加 Policy/Version/周期快照，以及 `reserved_cost_amount/currency, canonical_input_hash, counter_profile_id/version/hash, upper_bound_json`。周期为左闭右开区间，费用与 Counter 事实必须成组完整。
+- `cost_ledger_entry`：`id, tenant_id, reservation/policy/version/catalog refs, entry_type, amount, currency, period, run/user/agent/model_binding, provider/model/attempt, details_json, entry_hash, created_at`；只允许 `RESERVE/RELEASE/SETTLE/ADJUST/UNKNOWN`，仅 USD/CNY，不可更新删除。
+- `model_provider_attempt`：`id, tenant_id, reservation_id, run_id, idempotency_key, attempt_no, provider, model, provider_request_id, submission_state, error_code, started_at, finished_at`；只记录 `submitted/unknown`，按 Tenant/Run/Idempotency/Attempt 唯一并不可更新删除。
+- `storage_policy`：`id, tenant_id, name, description, status, current_version_id, resource_version, created_by, created_at, updated_at`；每租户最多一条，创建即 ACTIVE，`tenant.storage_policy_id` 以复合外键选择本租户当前策略。
+- `storage_policy_version`：`id, tenant_id, policy_id, version_no, max_reserved_workspace_bytes, max_reserved_workspaces, max_reserved_artifact_bytes, max_reserved_artifacts, content_hash, created_by, created_at`；Workspace/Artifact 额度池分离，至少一维非空，版本不可更新删除。
 
 QuotaPolicy 约束：
 
 - 两表启用 ENABLE/FORCE RLS；策略版本通过 deferred FK 绑定所属策略和当前版本。
 - ACTIVE 版本在 Run 创建/重试事务中读取，与部署硬限制逐维取最小值；禁用策略回退部署限制。
 - 本阶段字段仅表达已执行的 Run capacity，不提前加入未实现的存储、速率或费用字段。
+
+BudgetPolicy C1 约束：
+
+- 两表启用 ENABLE/FORCE RLS，tenant_admin 通过 ETag/CAS、幂等和 Audit 管理 ACTIVE/DISABLED；更新创建不可变 Version 并原子切换 current version。
+
+StoragePolicy F1 约束：
+
+- 两表启用 ENABLE/FORCE RLS；策略变更与 Artifact/Workspace 准入共享租户事务锁，避免版本切换竞态。
+- ACTIVE 当前版本只收紧部署硬上限；DISABLED/不存在回退部署配置。Artifact 仅 `DELETED` 释放容量，Workspace 按 `quota_bytes` 预留且既有 Run 配额不追溯修改。
+- 成功和拒绝 Audit 记录实际采用的不可变 Version ID；Retention 已由独立 deadline/Legal Hold 事实实现，StoragePolicy 软阈值和对象存储事实对账仍待后续。
+- Model Gateway 对 Run `token_budget` 和 ACTIVE 租户周期余额取最小值；即使请求未携带 Run 预算，租户周期策略仍必须生效。跨 Run 并发按租户、策略和周期 advisory lock 串行化。
+- 周期用量按 `model_usage.finished_at` 落入 UTC `[period_start, period_end)` 聚合；有效预占只统计同策略周期内未过期 RESERVED。取消或提交前失败释放预占，已记录用量不回退。
+- 调用前费用上界需要 ModelBinding 冻结路由 cap、Counter 版本/Hash、billing semantics 和生效的 PUBLISHED PriceCatalog；将输入 canonical hash 与各 fallback Route 上界固化，准入金额取路由最大值而非求和。任一事实不可信时 `COST_BOUND_UNAVAILABLE`失败关闭。
+- C2a 仅在模型调用完成后归因费用事实：Provider 明确返回金额时标记 `PROVIDER_REPORTED`；否则按调用完成时命中的可信 PriceCatalog 计算并固化 `CATALOG_CALCULATED` provenance。目录缺失、费率维度缺失或 Usage 不完整时费用保持未知，不按零处理。
+- C2b 仅支持 USD/CNY，不做汇率换算；请求、BudgetPolicy、PriceCatalog 或 Provider 费用币种不一致时失败关闭。HARD 超限在 Provider 提交前拒绝；SOFT 不阻断并按策略版本/周期/维度幂等写 Outbox/Audit 阈值事实。PriceCatalog 的受控内存 draft/publish/rollback 仅供本地/测试；生产 durable 发布入口、官方 Counter Golden 和 Model Gateway Planner/Attempt Store 组合仍是上线前待办。
 
 ## 12. V1 增量表
 

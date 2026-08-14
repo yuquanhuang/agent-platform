@@ -82,6 +82,12 @@ def _resources() -> tuple[ResourceVersionRecord, ...]:
         default_parameters={},
         max_context_tokens=None,
         rate_limit_rpm=None,
+        max_output_tokens=None,
+        max_reasoning_tokens=None,
+        counter_profile_id=None,
+        counter_profile_version=None,
+        counter_profile_hash=None,
+        billing_semantics_version=None,
     )
     sandbox = ResourceContentSandboxProfile.model_validate(
         {

@@ -435,6 +435,40 @@ async def load_active_run_capacity_policy(
     return _capacity_policy(row) if row is not None else None
 
 
+async def load_active_run_capacity_policy_version(
+    session: AsyncSession, tenant_id: UUID
+) -> tuple[UUID | None, RunCapacityPolicy | None]:
+    """Load the immutable version identity and capacity limits in one query."""
+
+    row = (
+        await session.execute(
+            select(QuotaPolicyVersionModel)
+            .join(
+                QuotaPolicyModel,
+                and_(
+                    QuotaPolicyModel.tenant_id == QuotaPolicyVersionModel.tenant_id,
+                    QuotaPolicyModel.id == QuotaPolicyVersionModel.policy_id,
+                    QuotaPolicyModel.current_version_id == QuotaPolicyVersionModel.id,
+                ),
+            )
+            .join(
+                TenantModel,
+                and_(
+                    TenantModel.id == QuotaPolicyModel.tenant_id,
+                    TenantModel.quota_policy_id == QuotaPolicyModel.id,
+                ),
+            )
+            .where(
+                QuotaPolicyModel.tenant_id == tenant_id,
+                QuotaPolicyModel.status == "ACTIVE",
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None, None
+    return row.id, _capacity_policy(row)
+
+
 def _policy_statement(tenant_id: UUID, policy_id: UUID):  # type: ignore[no-untyped-def]
     return (
         select(QuotaPolicyModel, QuotaPolicyVersionModel)

@@ -1,6 +1,6 @@
 # Agent 平台权限、安全与审计契约
 
-> 文档版本：V1.6
+> 文档版本：V1.9
 > 文档状态：开发输入基线
 
 ## 1. 安全模型
@@ -107,8 +107,14 @@ knowledge, schedule, evaluation
 | 查看 Audit | audit:list | 审计范围过滤 |
 | 管理 Secret Ref | secret:manage | 只能管理引用和轮换，不能普通读取明文 |
 | 管理 Run 配额 | quota_policy:create/read/list/update/disable | 仅租户管理员；不得超过部署硬上限 |
+| 管理模型预算 | budget_policy:create/read/list/update/disable | 仅租户管理员；当前只允许 HARD Token 周期预算 |
+| 管理存储配额 | storage_policy:create/read/list/update/disable | 仅租户管理员；Workspace/Artifact 分离硬上限 |
 
 QuotaPolicy 创建、更新、启用和禁用必须记录不可变 Audit，仅记录限制、版本号、Hash、状态和原因是否存在，不记录凭证或环境敏感配置。Run 超限审计继续使用 `RATE_LIMITED + reason_code + current + limit`。
+
+BudgetPolicy 管理同样记录不可变 Audit，仅记录周期、Token/Cost limit、币种、版本号、content hash、状态和原因是否存在。预算准入不得记录请求凭证、Secret Ref 或 Prompt 内容；只允许保存 canonical input hash、锁版 Counter 证据和聚合上界。`cost_ledger_entry` 与 `model_provider_attempt` 是不可更新删除的租户事实，币种或 PriceCatalog/Counter 证据缺失时失败关闭。生产必须显式组合可信 Counter/Planner/Attempt Store，受控内存目录发布不得冒充生产价格管理入口。
+
+StoragePolicy 管理和准入 Audit 只记录四维限制、版本号/ID、content hash、状态、current/requested/limit 和稳定 reason code。不得记录对象 URI、文件内容、Secret Ref 或 Sandbox 凭证。策略管理与准入共享租户事务锁，数据库复合外键禁止 Tenant 选择其他租户的策略。
 
 ## 7. Policy Service
 
@@ -198,6 +204,8 @@ expires_at, single_use
 - Gateway 每次读取重新校验 Grant、Artifact 状态和有效期，再访问私有对象；Artifact 删除必须在同一事务先撤销全部 Grant。单 Range 不得扩大授权对象或绕过长度校验；已建立连接通过 Redis 撤销通知加 PostgreSQL 周期复核在受控窗口内终止。
 - Gateway、Ingress、Service Mesh、Trace 和访问日志不得记录下载 query token 或完整下载 URL；生产限流同时约束全局、租户和单主体并发，带宽整形由受控代理执行。
 - 用户或成员停用后，新授权立即失败；已签发 Gateway Grant 依赖短 TTL 和显式撤销收敛风险。
+- Artifact Legal Hold 是内部受审计合规能力，不向普通 Artifact API 暴露；放置/解除必须包含 `case_ref`、原因和操作主体，历史 Hold 事实不得更新或删除。
+- 任一活动 Hold 均阻断保留期 sweep 和手动删除；解除不得延长或重置原 `retention_delete_after`。失败删除重试的每个 Operation 均须可审计。
 
 ## 13. 审计事件
 
@@ -214,7 +222,7 @@ run.create/cancel/retry/force_terminate
 approval.request/approve/reject/expire/ticket.consume/ticket.replay
 tool.execute/tool.denied
 sandbox.provision/quarantine/destroy/failure
-artifact.export/download/delete/denied
+artifact.export/download/delete/denied/legal_hold.place/legal_hold.release/delete.retry
 security.cross_tenant_denied
 ```
 

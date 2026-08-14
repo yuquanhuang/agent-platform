@@ -3,13 +3,14 @@
 import asyncio
 import os
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -18,10 +19,13 @@ from packages.application.artifacts import (
     ARTIFACT_DELETE_REQUESTED_EVENT,
     ARTIFACT_DOWNLOADS_REVOKED_EVENT,
     ARTIFACT_SCAN_REQUESTED_EVENT,
+    ArtifactDeleteProcessor,
 )
 from packages.application.metadata import RequestMetadata
 from packages.application.model_gateway import BudgetPermit
+from packages.application.policy import ArtifactStoragePolicy, TenantStoragePolicy
 from packages.contracts.generated.core_models import ArtifactUploadCreateRequest
+from packages.contracts.generated.resources_models import StoragePolicyCreateRequest
 from packages.contracts.model_gateway import (
     ImmutableReference,
     ModelGatewayRequest,
@@ -34,12 +38,22 @@ from packages.domain.model_gateway import (
     ModelUsageRecord,
     ProviderError,
 )
+from packages.domain.public import ArtifactRecord
 from packages.infrastructure.database.audit_security import audit_change_digest
-from packages.infrastructure.database.models import AuditLogModel
+from packages.infrastructure.database.models import (
+    ArtifactModel,
+    AuditLogModel,
+    IdempotencyRecordModel,
+    OperationRecordModel,
+    OutboxEventModel,
+    PriceCatalogRateModel,
+    PriceCatalogVersionModel,
+)
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxStore
 from packages.infrastructure.database.public import (
     SqlAlchemyArtifactStore,
     SqlAlchemyAuditQueryStore,
+    SqlAlchemyStoragePolicyStore,
     SqlAlchemyTenantContextSource,
     create_session_factory,
 )
@@ -48,6 +62,7 @@ from packages.infrastructure.model_gateway import (
     SqlAlchemyModelBudgetGuard,
     SqlAlchemyModelGatewayStore,
     SqlAlchemyModelRateLimiter,
+    SqlAlchemyPriceCatalogReader,
 )
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -61,15 +76,38 @@ MEMBER_A = "44444444-4444-4444-8444-444444444444"
 OUTBOX_A = "55555555-5555-4555-8555-555555555555"
 PROBE_A = "66666666-6666-4666-8666-666666666666"
 MODEL_USAGE_A = "77777777-7777-4777-8777-777777777777"
+PRICE_CATALOG_A = UUID("77777777-7777-4777-8777-777777777778")
+PRICE_RATE_A = UUID("77777777-7777-4777-8777-777777777779")
+BUDGET_POLICY_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab1"
+BUDGET_POLICY_VERSION_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab2"
 HASH = "sha256:" + "a" * 64
 ARTIFACT_A = UUID("88888888-8888-4888-8888-888888888888")
 ARTIFACT_FAILED = UUID("99999999-9999-4999-8999-999999999999")
+ARTIFACT_CONCURRENT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaac1")
+ARTIFACT_CONCURRENT_OTHER = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaac2")
+ARTIFACT_EXPIRED_UPLOAD = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaac3")
+ARTIFACT_REPLACEMENT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaac5")
 AUDIT_A = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1")
 AUDIT_A_OLDER = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2")
 AUDIT_B = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1")
 AUDIT_PLATFORM = UUID("cccccccc-cccc-4ccc-8ccc-ccccccccccc1")
 AUDIT_RUN_A = UUID("dddddddd-dddd-4ddd-8ddd-ddddddddddd1")
 AUDIT_RUN_B = UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1")
+
+
+class ArtifactDeletionRecorder:
+    def __init__(self) -> None:
+        self.deleted: list[UUID] = []
+
+    async def revoke_download_access(
+        self, context: TenantContext, *, artifact: ArtifactRecord
+    ) -> None:
+        return None
+
+    async def delete_artifact_objects(
+        self, context: TenantContext, *, artifact: ArtifactRecord
+    ) -> None:
+        self.deleted.append(artifact.id)
 
 
 def require_database_url() -> str:
@@ -457,7 +495,84 @@ async def verify_rls(database_url: str) -> None:
             )
 
             policy_factory = create_session_factory(app_engine)
-            artifact_store = SqlAlchemyArtifactStore(policy_factory)
+            async with TenantUnitOfWork(policy_factory, tenant_context) as unit:
+                unit.session.add(
+                    PriceCatalogVersionModel(
+                        id=PRICE_CATALOG_A,
+                        tenant_id=UUID(TENANT_A),
+                        provider="openai",
+                        model="model-a",
+                        currency="USD",
+                        effective_from=datetime(2026, 8, 1, tzinfo=UTC),
+                        effective_to=None,
+                        source_ref="test://trusted-price-fixture",
+                        content_hash="sha256:" + "c" * 64,
+                        created_by=UUID(USER_A),
+                    )
+                )
+                await unit.session.flush()
+                unit.session.add(
+                    PriceCatalogRateModel(
+                        id=PRICE_RATE_A,
+                        tenant_id=UUID(TENANT_A),
+                        catalog_version_id=PRICE_CATALOG_A,
+                        dimension="input_tokens",
+                        unit_tokens=1000,
+                        unit_price=Decimal("0.100000000000"),
+                    )
+                )
+            catalog = await SqlAlchemyPriceCatalogReader(policy_factory).get_catalog(
+                tenant_context,
+                provider="openai",
+                model="model-a",
+                occurred_at=datetime(2026, 8, 7, tzinfo=UTC),
+            )
+            assert catalog is not None
+            assert catalog.id == PRICE_CATALOG_A
+            assert catalog.rates[0].id == PRICE_RATE_A
+            assert (
+                await SqlAlchemyPriceCatalogReader(policy_factory).get_catalog(
+                    tenant_context.model_copy(update={"tenant_id": TENANT_B}),
+                    provider="openai",
+                    model="model-a",
+                    occurred_at=datetime(2026, 8, 7, tzinfo=UTC),
+                )
+                is None
+            )
+            storage_policy_outcome = await SqlAlchemyStoragePolicyStore(
+                policy_factory
+            ).create_policy(
+                tenant_context,
+                actor_id=UUID(USER_A),
+                request=StoragePolicyCreateRequest.model_validate(
+                    {
+                        "name": "PostgreSQL storage policy",
+                        "limits": {
+                            "max_reserved_artifact_bytes": 12,
+                            "max_reserved_artifacts": 2,
+                        },
+                    }
+                ),
+                limits=TenantStoragePolicy(
+                    max_reserved_artifact_bytes=12,
+                    max_reserved_artifacts=2,
+                ),
+                idempotency_key="postgresql-storage-policy-create",
+                request_hash="postgresql-storage-policy-create-hash",
+                metadata=RequestMetadata(
+                    request_id="req-storage-policy-create",
+                    trace_id="trace-storage-policy-create",
+                ),
+            )
+            assert storage_policy_outcome.value is not None
+            storage_policy = storage_policy_outcome.value
+            artifact_store = SqlAlchemyArtifactStore(
+                policy_factory,
+                storage_policy=ArtifactStoragePolicy(
+                    max_reserved_bytes_per_tenant=24,
+                    max_reserved_artifacts_per_tenant=2,
+                ),
+            )
             artifact_now = datetime.now(UTC)
             artifact_request = ArtifactUploadCreateRequest(
                 name="postgresql-result.txt",
@@ -483,6 +598,20 @@ async def verify_rls(database_url: str) -> None:
                 ),
             )
             assert artifact.status == "UPLOADING"
+            async with TenantUnitOfWork(
+                policy_factory, tenant_context, read_only=True
+            ) as unit:
+                creation_audit = await unit.session.scalar(
+                    select(AuditLogModel).where(
+                        AuditLogModel.tenant_id == UUID(TENANT_A),
+                        AuditLogModel.action == "artifact.upload.create",
+                        AuditLogModel.resource_id == ARTIFACT_A,
+                    )
+                )
+                assert creation_audit is not None
+                assert creation_audit.metadata_json["storage_policy_version_id"] == str(
+                    storage_policy.current_version.id
+                )
             replayed_artifact = await artifact_store.create_upload(
                 tenant_context,
                 artifact_id=ARTIFACT_A,
@@ -520,6 +649,179 @@ async def verify_rls(database_url: str) -> None:
                     ),
                 )
             assert reused_artifact_key.value.code == "IDEMPOTENCY_KEY_REUSED"
+            with pytest.raises(PlatformError) as artifact_capacity:
+                await artifact_store.create_upload(
+                    tenant_context,
+                    artifact_id=ARTIFACT_FAILED,
+                    owner_user_id=UUID(USER_A),
+                    request=artifact_request.model_copy(update={"size": 13}),
+                    quarantine_object_uri=(
+                        f"quarantine://tenant/{TENANT_A}/artifact/"
+                        f"{ARTIFACT_FAILED}/capacity"
+                    ),
+                    upload_expires_at=artifact_now + timedelta(minutes=15),
+                    expires_at=artifact_now + timedelta(days=30),
+                    idempotency_key="postgresql-artifact-capacity-denied",
+                    request_hash="artifact-capacity-denied-hash",
+                    metadata=RequestMetadata(
+                        request_id="req-artifact-capacity-denied",
+                        trace_id="trace-artifact-capacity-denied",
+                    ),
+                )
+            assert artifact_capacity.value.code == "RATE_LIMITED"
+            assert artifact_capacity.value.details == {
+                "scope": "tenant",
+                "reason_code": "ARTIFACT_TENANT_STORAGE_BYTES_LIMIT",
+            }
+            async with TenantUnitOfWork(
+                policy_factory, tenant_context, read_only=True
+            ) as unit:
+                denial_audit = await unit.session.scalar(
+                    select(AuditLogModel).where(
+                        AuditLogModel.tenant_id == UUID(TENANT_A),
+                        AuditLogModel.action == "artifact.upload.admission_deny",
+                    )
+                )
+                assert denial_audit is not None
+                assert denial_audit.result == "DENIED"
+                assert denial_audit.metadata_json["current"] == 12
+                assert denial_audit.metadata_json["requested"] == 13
+                assert denial_audit.metadata_json["storage_policy_version_id"] == str(
+                    storage_policy.current_version.id
+                )
+                assert (
+                    await unit.session.scalar(
+                        select(IdempotencyRecordModel.id).where(
+                            IdempotencyRecordModel.tenant_id == UUID(TENANT_A),
+                            IdempotencyRecordModel.actor_id == UUID(USER_A),
+                            IdempotencyRecordModel.operation_type
+                            == "artifact.upload.create",
+                            IdempotencyRecordModel.idempotency_key
+                            == "postgresql-artifact-capacity-denied",
+                        )
+                    )
+                    is None
+                )
+            disabled = await SqlAlchemyStoragePolicyStore(
+                policy_factory
+            ).set_policy_status(
+                tenant_context,
+                actor_id=UUID(USER_A),
+                policy_id=storage_policy.id,
+                expected_version=1,
+                enabled=False,
+                request=None,
+                idempotency_key="postgresql-storage-policy-disable",
+                request_hash="postgresql-storage-policy-disable-hash",
+                metadata=RequestMetadata(
+                    request_id="req-storage-policy-disable",
+                    trace_id="trace-storage-policy-disable",
+                ),
+            )
+            assert disabled is not None
+            assert disabled.value is not None
+            assert disabled.value.status == "DISABLED"
+            concurrent_store = SqlAlchemyArtifactStore(
+                policy_factory,
+                storage_policy=ArtifactStoragePolicy(
+                    max_reserved_bytes_per_tenant=24,
+                    max_reserved_artifacts_per_tenant=3,
+                ),
+            )
+            concurrent_results = await asyncio.gather(
+                concurrent_store.create_upload(
+                    tenant_context,
+                    artifact_id=ARTIFACT_CONCURRENT,
+                    owner_user_id=UUID(USER_A),
+                    request=artifact_request,
+                    quarantine_object_uri=(
+                        f"quarantine://tenant/{TENANT_A}/artifact/"
+                        f"{ARTIFACT_CONCURRENT}/source"
+                    ),
+                    upload_expires_at=artifact_now + timedelta(minutes=15),
+                    expires_at=artifact_now + timedelta(days=30),
+                    idempotency_key="postgresql-artifact-concurrent-a",
+                    request_hash="artifact-concurrent-a-hash",
+                    metadata=RequestMetadata(
+                        request_id="req-artifact-concurrent-a",
+                        trace_id="trace-artifact-concurrent-a",
+                    ),
+                ),
+                concurrent_store.create_upload(
+                    tenant_context,
+                    artifact_id=ARTIFACT_CONCURRENT_OTHER,
+                    owner_user_id=UUID(USER_A),
+                    request=artifact_request,
+                    quarantine_object_uri=(
+                        f"quarantine://tenant/{TENANT_A}/artifact/"
+                        f"{ARTIFACT_CONCURRENT_OTHER}/source"
+                    ),
+                    upload_expires_at=artifact_now + timedelta(minutes=15),
+                    expires_at=artifact_now + timedelta(days=30),
+                    idempotency_key="postgresql-artifact-concurrent-b",
+                    request_hash="artifact-concurrent-b-hash",
+                    metadata=RequestMetadata(
+                        request_id="req-artifact-concurrent-b",
+                        trace_id="trace-artifact-concurrent-b",
+                    ),
+                ),
+                return_exceptions=True,
+            )
+            assert (
+                sum(
+                    isinstance(result, PlatformError) and result.code == "RATE_LIMITED"
+                    for result in concurrent_results
+                )
+                == 1
+            )
+            concurrent_artifact = next(
+                result
+                for result in concurrent_results
+                if not isinstance(result, BaseException)
+            )
+            await concurrent_store.fail_upload(
+                tenant_context,
+                artifact_id=concurrent_artifact.id,
+                owner_user_id=UUID(USER_A),
+                code="ARTIFACT_UPLOAD_MISMATCH",
+                now=artifact_now + timedelta(seconds=1),
+            )
+            concurrent_deletion = await concurrent_store.request_delete(
+                tenant_context,
+                artifact_id=concurrent_artifact.id,
+                owner_user_id=UUID(USER_A),
+                idempotency_key="postgresql-artifact-concurrent-delete",
+                request_hash="artifact-concurrent-delete-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-concurrent-delete",
+                    trace_id="trace-artifact-concurrent-delete",
+                ),
+                now=artifact_now + timedelta(seconds=2),
+            )
+            assert concurrent_deletion is not None
+            assert concurrent_deletion.value is not None
+            await concurrent_store.complete_delete(
+                tenant_context,
+                artifact_id=concurrent_artifact.id,
+                operation_id=concurrent_deletion.value.id,
+                now=artifact_now + timedelta(seconds=3),
+            )
+            concurrent_delete_outbox = SqlAlchemyOutboxStore(
+                policy_factory,
+                event_types=frozenset({ARTIFACT_DELETE_REQUESTED_EVENT}),
+            )
+            concurrent_delete_events = await concurrent_delete_outbox.claim_ready(
+                tenant_context,
+                now=artifact_now + timedelta(seconds=3),
+                limit=10,
+                lease_duration=timedelta(seconds=30),
+            )
+            assert len(concurrent_delete_events) == 1
+            await concurrent_delete_outbox.mark_published(
+                tenant_context,
+                concurrent_delete_events[0].id,
+                now=artifact_now + timedelta(seconds=3),
+            )
             scanning = await artifact_store.mark_scanning(
                 tenant_context,
                 artifact_id=ARTIFACT_A,
@@ -574,6 +876,14 @@ async def verify_rls(database_url: str) -> None:
                 now=scan_now,
             )
             assert available.status == "AVAILABLE"
+            assert (
+                await artifact_store.reclaim_expired_uploads(
+                    tenant_context,
+                    now=artifact_now + timedelta(minutes=16),
+                    limit=10,
+                )
+                == 0
+            )
             await artifact_outbox.mark_published(
                 tenant_context, scan_events[0].id, now=scan_now
             )
@@ -815,6 +1125,162 @@ async def verify_rls(database_url: str) -> None:
                 operation_id=failed_deletion.value.id,
                 now=artifact_now + timedelta(seconds=3),
             )
+            failed_delete_outbox = SqlAlchemyOutboxStore(
+                policy_factory,
+                event_types=frozenset({ARTIFACT_DELETE_REQUESTED_EVENT}),
+            )
+            failed_delete_events = await failed_delete_outbox.claim_ready(
+                tenant_context,
+                now=artifact_now + timedelta(seconds=3),
+                limit=10,
+                lease_duration=timedelta(seconds=30),
+            )
+            assert len(failed_delete_events) == 1
+            await failed_delete_outbox.mark_published(
+                tenant_context,
+                failed_delete_events[0].id,
+                now=artifact_now + timedelta(seconds=3),
+            )
+
+            expired_upload_request = artifact_request.model_copy(update={"size": 24})
+            expired_upload = await artifact_store.create_upload(
+                tenant_context,
+                artifact_id=ARTIFACT_EXPIRED_UPLOAD,
+                owner_user_id=UUID(USER_A),
+                request=expired_upload_request,
+                quarantine_object_uri=(
+                    f"quarantine://tenant/{TENANT_A}/artifact/"
+                    f"{ARTIFACT_EXPIRED_UPLOAD}/source"
+                ),
+                upload_expires_at=artifact_now + timedelta(seconds=10),
+                expires_at=artifact_now + timedelta(days=30),
+                idempotency_key="postgresql-artifact-expired-upload-create",
+                request_hash="artifact-expired-upload-create-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-expired-upload-create",
+                    trace_id="trace-artifact-expired-upload-create",
+                ),
+            )
+            assert expired_upload.status == "UPLOADING"
+            assert (
+                await artifact_store.reclaim_expired_uploads(
+                    tenant_context,
+                    now=artifact_now + timedelta(seconds=9),
+                    limit=10,
+                )
+                == 0
+            )
+            reclaimed = await asyncio.gather(
+                artifact_store.reclaim_expired_uploads(
+                    tenant_context,
+                    now=artifact_now + timedelta(seconds=11),
+                    limit=10,
+                ),
+                artifact_store.reclaim_expired_uploads(
+                    tenant_context,
+                    now=artifact_now + timedelta(seconds=11),
+                    limit=10,
+                ),
+            )
+            assert sum(reclaimed) == 1
+            assert (
+                await artifact_store.reclaim_expired_uploads(
+                    tenant_context,
+                    now=artifact_now + timedelta(seconds=12),
+                    limit=10,
+                )
+                == 0
+            )
+            async with TenantUnitOfWork(
+                policy_factory, tenant_context, read_only=True
+            ) as unit:
+                reclaimed_state = (
+                    await unit.session.execute(
+                        select(
+                            ArtifactModel.status,
+                            ArtifactModel.scan_result_json,
+                            OperationRecordModel.id,
+                            OperationRecordModel.status,
+                        )
+                        .join(
+                            OperationRecordModel,
+                            OperationRecordModel.resource_id == ArtifactModel.id,
+                        )
+                        .where(
+                            ArtifactModel.tenant_id == UUID(TENANT_A),
+                            ArtifactModel.id == ARTIFACT_EXPIRED_UPLOAD,
+                            OperationRecordModel.tenant_id == UUID(TENANT_A),
+                            OperationRecordModel.operation_type == "artifact.delete",
+                        )
+                    )
+                ).one()
+                assert reclaimed_state[0] == "DELETING"
+                assert reclaimed_state[1]["failure_code"] == "ARTIFACT_UPLOAD_EXPIRED"
+                assert reclaimed_state[3] == "ACCEPTED"
+                assert (
+                    await unit.session.scalar(
+                        select(func.count(OutboxEventModel.id)).where(
+                            OutboxEventModel.tenant_id == UUID(TENANT_A),
+                            OutboxEventModel.aggregate_id == ARTIFACT_EXPIRED_UPLOAD,
+                            OutboxEventModel.event_type
+                            == ARTIFACT_DELETE_REQUESTED_EVENT,
+                        )
+                    )
+                    == 1
+                )
+                assert (
+                    await unit.session.scalar(
+                        select(func.count(OperationRecordModel.id)).where(
+                            OperationRecordModel.tenant_id == UUID(TENANT_A),
+                            OperationRecordModel.resource_id == ARTIFACT_EXPIRED_UPLOAD,
+                            OperationRecordModel.operation_type == "artifact.delete",
+                        )
+                    )
+                    == 1
+                )
+            expired_delete_outbox = SqlAlchemyOutboxStore(
+                policy_factory,
+                event_types=frozenset({ARTIFACT_DELETE_REQUESTED_EVENT}),
+            )
+            expired_delete_events = await expired_delete_outbox.claim_ready(
+                tenant_context,
+                now=artifact_now + timedelta(seconds=12),
+                limit=10,
+                lease_duration=timedelta(seconds=30),
+            )
+            assert len(expired_delete_events) == 1
+            assert expired_delete_events[0].aggregate_id == ARTIFACT_EXPIRED_UPLOAD
+            deletion_recorder = ArtifactDeletionRecorder()
+            await ArtifactDeleteProcessor(artifact_store, deletion_recorder).process(
+                tenant_context,
+                expired_delete_events[0],
+                now=artifact_now + timedelta(seconds=13),
+            )
+            await expired_delete_outbox.mark_published(
+                tenant_context,
+                expired_delete_events[0].id,
+                now=artifact_now + timedelta(seconds=13),
+            )
+            assert deletion_recorder.deleted == [ARTIFACT_EXPIRED_UPLOAD]
+            replacement = await artifact_store.create_upload(
+                tenant_context,
+                artifact_id=ARTIFACT_REPLACEMENT,
+                owner_user_id=UUID(USER_A),
+                request=expired_upload_request,
+                quarantine_object_uri=(
+                    f"quarantine://tenant/{TENANT_A}/artifact/"
+                    f"{ARTIFACT_REPLACEMENT}/source"
+                ),
+                upload_expires_at=artifact_now + timedelta(minutes=15),
+                expires_at=artifact_now + timedelta(days=30),
+                idempotency_key="postgresql-artifact-replacement-create",
+                request_hash="artifact-replacement-create-hash",
+                metadata=RequestMetadata(
+                    request_id="req-artifact-replacement-create",
+                    trace_id="trace-artifact-replacement-create",
+                ),
+            )
+            assert replacement.status == "UPLOADING"
 
             budget_guard = SqlAlchemyModelBudgetGuard(
                 policy_factory,
@@ -956,6 +1422,153 @@ async def verify_rls(database_url: str) -> None:
             ]
             await budget_guard.release(tenant_context, concurrent_permits[0])
 
+            async with app_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "SELECT set_config('app.current_tenant_id', :tenant_id, true)"
+                    ),
+                    {"tenant_id": TENANT_A},
+                )
+                await connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+                await connection.execute(
+                    text(
+                        "INSERT INTO budget_policy "
+                        "(id, tenant_id, name, status, current_version_id, created_by) "
+                        "VALUES (:policy_id, :tenant_id, 'Daily model tokens', "
+                        "'ACTIVE', :version_id, :created_by)"
+                    ),
+                    {
+                        "policy_id": BUDGET_POLICY_A,
+                        "tenant_id": TENANT_A,
+                        "version_id": BUDGET_POLICY_VERSION_A,
+                        "created_by": USER_A,
+                    },
+                )
+                await connection.execute(
+                    text(
+                        "INSERT INTO budget_policy_version "
+                        "(id, tenant_id, policy_id, version_no, period, enforcement, "
+                        "token_limit, content_hash, created_by) VALUES "
+                        "(:version_id, :tenant_id, :policy_id, 1, 'DAILY', 'HARD', "
+                        "12, :content_hash, :created_by)"
+                    ),
+                    {
+                        "version_id": BUDGET_POLICY_VERSION_A,
+                        "tenant_id": TENANT_A,
+                        "policy_id": BUDGET_POLICY_A,
+                        "content_hash": "sha256:" + "b" * 64,
+                        "created_by": USER_A,
+                    },
+                )
+                await connection.execute(
+                    text(
+                        "UPDATE tenant SET budget_policy_id = :policy_id "
+                        "WHERE id = :tenant_id"
+                    ),
+                    {"policy_id": BUDGET_POLICY_A, "tenant_id": TENANT_A},
+                )
+
+            tenant_only_request = gateway_request.model_copy(
+                update={
+                    "run_id": "run-tenant-budget",
+                    "token_budget": None,
+                    "idempotency_key": "tenant-budget-only",
+                }
+            )
+            tenant_only_permit = await budget_guard.authorize(
+                tenant_context, tenant_only_request, binding
+            )
+            assert tenant_only_permit.reserved_tokens == 4
+            await budget_guard.release(tenant_context, tenant_only_permit)
+
+            tenant_concurrent_request = tenant_only_request.model_copy(
+                update={"idempotency_key": "tenant-budget-concurrent-a"}
+            )
+            tenant_concurrent_results = await asyncio.gather(
+                budget_guard.authorize(
+                    tenant_context, tenant_concurrent_request, binding
+                ),
+                budget_guard.authorize(
+                    tenant_context,
+                    tenant_concurrent_request.model_copy(
+                        update={
+                            "run_id": "run-tenant-budget-concurrent-b",
+                            "idempotency_key": "tenant-budget-concurrent-b",
+                        }
+                    ),
+                    binding,
+                ),
+                return_exceptions=True,
+            )
+            tenant_concurrent_permits = [
+                result
+                for result in tenant_concurrent_results
+                if isinstance(result, BudgetPermit)
+            ]
+            tenant_concurrent_errors = [
+                result
+                for result in tenant_concurrent_results
+                if isinstance(result, ProviderError)
+            ]
+            assert len(tenant_concurrent_permits) == 1
+            assert [error.code for error in tenant_concurrent_errors] == [
+                "TOKEN_BUDGET_EXCEEDED"
+            ]
+            await budget_guard.release(tenant_context, tenant_concurrent_permits[0])
+
+            intersected_request = tenant_only_request.model_copy(
+                update={
+                    "run_id": "run-intersected-budget",
+                    "token_budget": 2,
+                    "idempotency_key": "tenant-run-intersection",
+                }
+            )
+            intersected_permit = await budget_guard.authorize(
+                tenant_context, intersected_request, binding
+            )
+            assert intersected_permit.reserved_tokens == 2
+            await budget_guard.release(tenant_context, intersected_permit)
+
+            async with TenantUnitOfWork(policy_factory, tenant_context) as unit:
+                reservation_snapshot = (
+                    await unit.session.execute(
+                        text(
+                            "SELECT budget_policy_id, budget_policy_version_id, "
+                            "budget_period_started_at, budget_period_ends_at "
+                            "FROM budget_reservation WHERE run_id = :run_id"
+                        ),
+                        {"run_id": intersected_request.run_id},
+                    )
+                ).one()
+                assert str(reservation_snapshot.budget_policy_id) == BUDGET_POLICY_A
+                assert (
+                    str(reservation_snapshot.budget_policy_version_id)
+                    == BUDGET_POLICY_VERSION_A
+                )
+                assert reservation_snapshot.budget_period_started_at == datetime(
+                    2026, 8, 7, tzinfo=UTC
+                )
+                assert reservation_snapshot.budget_period_ends_at == datetime(
+                    2026, 8, 8, tzinfo=UTC
+                )
+
+            async with TenantUnitOfWork(policy_factory, tenant_context) as unit:
+                await unit.session.execute(
+                    text(
+                        "UPDATE budget_policy SET status = 'DISABLED' "
+                        "WHERE id = :policy_id"
+                    ),
+                    {"policy_id": BUDGET_POLICY_A},
+                )
+            disabled_permit = await budget_guard.authorize(
+                tenant_context,
+                tenant_only_request.model_copy(
+                    update={"idempotency_key": "disabled-tenant-budget"}
+                ),
+                binding,
+            )
+            assert disabled_permit.reservation_id is None
+
             tenant_b_request = gateway_request.model_copy(
                 update={
                     "tenant_id": TENANT_B,
@@ -1002,6 +1615,8 @@ async def verify_rls(database_url: str) -> None:
                 "artifact",
                 "artifact_download_grant",
                 "audit_log",
+                "budget_policy",
+                "budget_policy_version",
                 "budget_reservation",
                 "chat_message",
                 "chat_session",
@@ -1013,6 +1628,8 @@ async def verify_rls(database_url: str) -> None:
                 "model_usage",
                 "operation_record",
                 "outbox_event",
+                "price_catalog_rate",
+                "price_catalog_version",
                 "quota_policy",
                 "quota_policy_version",
                 "release",
@@ -1021,6 +1638,7 @@ async def verify_rls(database_url: str) -> None:
                 "role",
                 "role_binding",
                 "role_permission",
+                "run_admission_queue",
                 "run_attempt",
                 "run_event",
                 "run_event_counter",
@@ -1029,6 +1647,8 @@ async def verify_rls(database_url: str) -> None:
                 "sandbox_instance",
                 "sandbox_lease",
                 "skill_supply_chain_scan",
+                "storage_policy",
+                "storage_policy_version",
                 "tenant_member",
                 "workspace",
             ]

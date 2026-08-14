@@ -42,6 +42,8 @@ def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
         "release",
         "runtime_bundle",
         "run_attempt",
+        "run_capacity_domain",
+        "run_capacity_lease",
         "run_event",
         "run_event_counter",
         "sandbox_instance",
@@ -59,6 +61,10 @@ def test_iam_metadata_contains_foundation_and_rbac_tables() -> None:
         "tenant_member",
         "quota_policy",
         "quota_policy_version",
+        "budget_policy",
+        "budget_policy_version",
+        "price_catalog_version",
+        "price_catalog_rate",
     } <= set(Base.metadata.tables)
 
 
@@ -92,6 +98,7 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         "chat_session": "uq_chat_session__tenant_id_id",
         "agent_run": "uq_agent_run__tenant_id_id",
         "run_attempt": "uq_run_attempt__tenant_id_id",
+        "run_capacity_lease": "uq_run_capacity_lease__tenant_id_id",
         "run_event": "ix_run_event__tenant_run_sequence",
         "run_event_counter": "ix_run_event_counter__tenant_run",
         "sandbox_instance": "uq_sandbox_instance__tenant_id_id",
@@ -109,6 +116,12 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         ),
         "quota_policy": "uq_quota_policy__tenant_id",
         "quota_policy_version": "ix_quota_policy_version__tenant_policy_created",
+        "budget_policy": "uq_budget_policy__tenant_id",
+        "budget_policy_version": "ix_budget_policy_version__tenant_policy_created",
+        "price_catalog_version": (
+            "ix_price_catalog_version__tenant_provider_model_effective"
+        ),
+        "price_catalog_rate": "ix_price_catalog_rate__tenant_catalog_version",
     }
 
     for table_name, expected_index in expected_tenant_indexes.items():
@@ -117,6 +130,36 @@ def test_tenant_scoped_tables_require_tenant_id_and_baseline_indexes() -> None:
         assert expected_index in index_names(table_name) | constraint_names(
             table_name, UniqueConstraint
         )
+
+
+def test_capacity_domain_and_lease_metadata_are_durable_and_fenced() -> None:
+    domain = Base.metadata.tables["run_capacity_domain"]
+    lease = Base.metadata.tables["run_capacity_lease"]
+
+    assert {"domain_key", "configured_slots", "status", "config_hash"} <= set(
+        domain.c.keys()
+    )
+    assert {
+        "domain_key",
+        "tenant_id",
+        "run_id",
+        "acquired_at",
+        "renewed_at",
+        "expires_at",
+        "released_at",
+        "release_reason",
+    } <= set(lease.c.keys())
+    assert "uq_run_capacity_lease__run_id" in constraint_names(
+        "run_capacity_lease", UniqueConstraint
+    )
+    assert {
+        "fk_run_capacity_lease__domain_key__run_capacity_domain",
+        "fk_run_capacity_lease__tenant_run__agent_run",
+    } <= constraint_names("run_capacity_lease", ForeignKeyConstraint)
+    assert {
+        "ix_run_capacity_lease__domain_active",
+        "ix_run_capacity_lease__tenant_expires",
+    } <= index_names("run_capacity_lease")
 
 
 def test_execution_ticket_freezes_bindings_and_single_use_state() -> None:
@@ -185,11 +228,40 @@ def test_model_usage_metadata_has_normalized_usage_fields_and_indexes() -> None:
         "token_estimated",
         "cost_amount",
         "cost_currency",
+        "cost_source",
+        "price_catalog_version_id",
+        "cost_details_json",
     } <= set(table.c.keys())
     assert {
         "ix_model_usage__tenant_id_run_id",
         "ix_model_usage__tenant_id_finished_at",
     } <= index_names("model_usage")
+
+
+def test_price_catalog_metadata_is_versioned_and_tenant_scoped() -> None:
+    version = Base.metadata.tables["price_catalog_version"]
+    rate = Base.metadata.tables["price_catalog_rate"]
+    assert {
+        "tenant_id",
+        "provider",
+        "model",
+        "currency",
+        "effective_from",
+        "effective_to",
+        "source_ref",
+        "content_hash",
+        "created_by",
+    } <= set(version.c.keys())
+    assert {
+        "tenant_id",
+        "catalog_version_id",
+        "dimension",
+        "unit_tokens",
+        "unit_price",
+    } <= set(rate.c.keys())
+    assert "uq_price_catalog_rate__tenant_version_dimension" in constraint_names(
+        "price_catalog_rate", UniqueConstraint
+    )
 
 
 def test_model_binding_snapshot_freezes_provider_and_model_configuration() -> None:
@@ -406,6 +478,13 @@ def test_artifact_metadata_separates_quarantine_from_trusted_storage() -> None:
         "ck_artifact__scan_result_status",
         "ck_artifact__workspace_run_binding",
     } <= constraint_names("artifact", CheckConstraint)
+    assert "ix_artifact__tenant_status_upload_expires_at" in index_names("artifact")
+    assert "retention_delete_after" in table.c
+    assert "ix_artifact__tenant_status_retention_delete_after" in index_names(
+        "artifact"
+    )
+    hold = Base.metadata.tables["artifact_legal_hold"]
+    assert {"artifact_id", "case_ref", "placed_by", "released_at"} <= set(hold.c.keys())
     scan_result_type = table.c.scan_result_json.type
     assert isinstance(scan_result_type, JSON)
     assert scan_result_type.none_as_null is True

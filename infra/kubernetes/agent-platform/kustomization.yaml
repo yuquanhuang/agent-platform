@@ -4,5 +4,7 @@ resources:
   - namespace.yaml
   - serviceaccounts.yaml
   - configmap.yaml
+  - metrics-services.yaml
+  - prometheus-rules.yaml
   - event-worker-deployment.yaml
   - network-policies.yaml

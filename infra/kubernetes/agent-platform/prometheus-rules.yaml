@@ -1,0 +1,199 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agent-platform-worker-recording
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/name: agent-platform-worker-recording
+    app.kubernetes.io/part-of: agent-platform
+spec:
+  groups:
+    - name: agent-platform.worker.recording
+      interval: 30s
+      rules:
+        - record: agent_platform:worker_dependency_failures_rate5m
+          expr: |
+            sum by (process) (
+              rate(agent_platform_worker_cycles_total{outcome="dependency_failure"}[5m])
+            )
+        - record: agent_platform:outbox_retries_rate5m
+          expr: |
+            sum(rate(agent_platform_outbox_dispatch_total{outcome="retried"}[5m]))
+        - record: agent_platform:run_event_batch_duration_p95_seconds
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (
+                rate(agent_platform_run_event_batch_duration_seconds_bucket[5m])
+              )
+            )
+        - record: agent_platform:sse_visibility_delay_p95_seconds
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (
+                rate(agent_platform_sse_event_visibility_delay_seconds_bucket[5m])
+              )
+            )
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agent-platform-worker-alerts
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/name: agent-platform-worker-alerts
+    app.kubernetes.io/part-of: agent-platform
+spec:
+  groups:
+    - name: agent-platform.worker.alerts
+      rules:
+        - alert: AgentPlatformEventWorkerDown
+          expr: |
+            absent(up{namespace="agent-platform",service="agent-platform-event-worker-metrics"})
+            or up{namespace="agent-platform",service="agent-platform-event-worker-metrics"} == 0
+            or (
+              up{namespace="agent-platform",service="agent-platform-event-worker-metrics"} == 1
+              unless on() agent_platform_process_up{process="event-worker"} == 1
+            )
+          for: 5m
+          labels:
+            severity: critical
+            owner: platform-runtime
+          annotations:
+            summary: Event Worker metrics are absent or process is down
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#event-worker-down
+            recovery: Restore worker dependencies or restart the worker; clear when process_up is 1.
+        - alert: AgentPlatformReconciliationWorkerDown
+          expr: |
+            up{namespace="agent-platform",service="agent-platform-reconciliation-worker-metrics"} == 0
+            or (
+              up{namespace="agent-platform",service="agent-platform-reconciliation-worker-metrics"} == 1
+              unless on() agent_platform_process_up{process="reconciliation-worker"} == 1
+            )
+          for: 5m
+          labels:
+            severity: critical
+            owner: platform-runtime
+          annotations:
+            summary: Reconciliation Worker metrics are absent or process is down
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#reconciliation-worker-down
+            recovery: Restore worker dependencies or restart the worker; clear when process_up is 1.
+        - alert: AgentPlatformWorkerRecoveryExhausted
+          expr: |
+            increase(agent_platform_worker_cycles_total{outcome="retry_exhausted"}[10m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+            owner: platform-runtime
+          annotations:
+            summary: A worker exhausted bounded dependency recovery
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#recovery-exhausted
+            recovery: Fix the dependency or deployment configuration and replace the unhealthy pod.
+        - alert: AgentPlatformOutboxDeadLetter
+          expr: |
+            increase(agent_platform_outbox_dispatch_total{outcome="dead"}[10m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+            owner: platform-messaging
+          annotations:
+            summary: Outbox events entered DEAD
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#outbox-dead-letter--retries
+            recovery: Inspect the event and dependency error, repair the dependency, then replay with the original event id.
+        - alert: AgentPlatformOutboxRetriesHigh
+          expr: agent_platform:outbox_retries_rate5m > 0.1
+          for: 10m
+          labels:
+            severity: warning
+            owner: platform-messaging
+          annotations:
+            summary: Outbox retry rate is elevated
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#outbox-dead-letter--retries
+            recovery: Restore the dependency; the alert clears after retries return below the threshold.
+        - alert: AgentPlatformReconciliationUnresolved
+          expr: |
+            increase(agent_platform_run_reconciliation_total{outcome="unresolved"}[10m]) > 0
+            or increase(agent_platform_approval_reconciliation_total{outcome="unresolved"}[10m]) > 0
+            or increase(agent_platform_sandbox_reconciliation_total{outcome="unresolved"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            owner: platform-reliability
+          annotations:
+            summary: Reconciliation found unresolved durable state
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#reconciliation-unresolved--sandbox-cleanup
+            recovery: Review the bounded reconciliation error and repair the owning durable fact; clear after a clean cycle.
+        - alert: AgentPlatformRunQueueTimeouts
+          expr: increase(agent_platform_run_queue_events_total{outcome="timed_out"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            owner: platform-runtime
+          annotations:
+            summary: Runs are timing out while waiting for admission
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#run-queue-timeout--capacity-lease
+            recovery: Check capacity-domain slots and queue latency; clear after queue timeouts stop.
+        - alert: AgentPlatformSandboxCleanupFailed
+          expr: increase(agent_platform_sandbox_reconciliation_total{outcome="cleanup_failed"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            owner: platform-sandbox
+          annotations:
+            summary: Sandbox reconciliation could not complete cleanup
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#reconciliation-unresolved--sandbox-cleanup
+            recovery: Quarantine the instance, restore Sandbox Manager, and verify a successful cleanup cycle.
+        - alert: AgentPlatformTemporalStartFailed
+          expr: increase(agent_platform_temporal_workflow_starts_total{outcome="rpc_error"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            owner: platform-workflows
+          annotations:
+            summary: Temporal workflow starts are failing
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#temporal-start
+            recovery: Restore Temporal connectivity and let the original Outbox event retry idempotently.
+        - alert: AgentPlatformRunEventRejected
+          expr: |
+            increase(agent_platform_run_events_total{outcome="rejected"}[10m]) > 0
+            or increase(agent_platform_run_event_batches_total{outcome=~"authorization_rejected|store_rejected|store_failure"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            owner: platform-events
+          annotations:
+            summary: RunEvent candidates are being rejected
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#runevent-rejected--latency
+            recovery: Repair the producer contract or fencing fact; clear after valid batches resume.
+        - alert: AgentPlatformRunEventBatchLatencyHigh
+          expr: agent_platform:run_event_batch_duration_p95_seconds > 0.1
+          for: 10m
+          labels:
+            severity: warning
+            owner: platform-events
+          annotations:
+            summary: RunEvent ingestion p95 latency is high
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#runevent-rejected--latency
+            recovery: Check PostgreSQL latency and event writer contention; clear below the threshold.
+        - alert: AgentPlatformSseVisibilityDelayHigh
+          expr: agent_platform:sse_visibility_delay_p95_seconds > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            owner: platform-events
+          annotations:
+            summary: SSE event visibility delay is high
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#sse-visibility--delivery-degradation
+            recovery: Check Redis notification health and PostgreSQL event polling; clear below the threshold.
+        - alert: AgentPlatformSseDeliveryDegraded
+          expr: |
+            increase(agent_platform_sse_connection_outcomes_total{outcome=~"notification_fallback|send_timeout|query_error"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            owner: platform-events
+          annotations:
+            summary: SSE delivery entered fallback, send timeout, or query failure
+            runbook_path: infra/kubernetes/agent-platform/runbooks/agent-platform-workers.md#sse-visibility--delivery-degradation
+            recovery: Restore Redis/PostgreSQL health or remove the slow-consumer condition; clear after degraded outcomes stop.

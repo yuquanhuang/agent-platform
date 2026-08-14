@@ -38,6 +38,210 @@ class CapacityAdmissionDenied(ValueError):
         super().__init__("Run capacity is temporarily exhausted.")
 
 
+class ArtifactStorageAdmissionDenied(ValueError):
+    """A stable Artifact storage denial mapped to the frozen 429 error."""
+
+    def __init__(
+        self,
+        *,
+        dimension: Literal["bytes", "artifacts"],
+        reason_code: str,
+        current: int,
+        requested: int,
+        limit: int,
+    ) -> None:
+        self.dimension = dimension
+        self.reason_code = reason_code
+        self.current = current
+        self.requested = requested
+        self.limit = limit
+        super().__init__("Artifact storage capacity is temporarily exhausted.")
+
+
+class WorkspaceStorageAdmissionDenied(ValueError):
+    """A stable aggregate Workspace storage denial mapped to the frozen 429."""
+
+    def __init__(
+        self,
+        *,
+        dimension: Literal["bytes", "workspaces"],
+        reason_code: str,
+        current: int,
+        requested: int,
+        limit: int,
+    ) -> None:
+        self.dimension = dimension
+        self.reason_code = reason_code
+        self.current = current
+        self.requested = requested
+        self.limit = limit
+        self.storage_policy_version_id: object | None = None
+        super().__init__("Workspace storage capacity is temporarily exhausted.")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactStoragePolicy:
+    """Deployment-owned tenant hard limits for reserved Artifact storage."""
+
+    max_reserved_bytes_per_tenant: int | None = None
+    max_reserved_artifacts_per_tenant: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_reserved_bytes_per_tenant is not None and not (
+            1 <= self.max_reserved_bytes_per_tenant <= 1_125_899_906_842_624
+        ):
+            raise ValueError(
+                "max_reserved_bytes_per_tenant must be between 1 and 1125899906842624"
+            )
+        if self.max_reserved_artifacts_per_tenant is not None and not (
+            1 <= self.max_reserved_artifacts_per_tenant <= 1_000_000_000
+        ):
+            raise ValueError(
+                "max_reserved_artifacts_per_tenant must be between 1 and 1000000000"
+            )
+
+    @property
+    def enabled(self) -> bool:
+        return (
+            self.max_reserved_bytes_per_tenant is not None
+            or self.max_reserved_artifacts_per_tenant is not None
+        )
+
+
+_STORAGE_POLICY_FIELDS = (
+    "max_reserved_workspace_bytes",
+    "max_reserved_workspaces",
+    "max_reserved_artifact_bytes",
+    "max_reserved_artifacts",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TenantStoragePolicy:
+    """Hard limits for separate tenant Workspace and Artifact storage pools."""
+
+    max_reserved_workspace_bytes: int | None = None
+    max_reserved_workspaces: int | None = None
+    max_reserved_artifact_bytes: int | None = None
+    max_reserved_artifacts: int | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "max_reserved_workspace_bytes",
+            "max_reserved_artifact_bytes",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not 1 <= value <= 1_125_899_906_842_624:
+                raise ValueError(f"{field_name} must be between 1 and 1125899906842624")
+        for field_name in ("max_reserved_workspaces", "max_reserved_artifacts"):
+            value = getattr(self, field_name)
+            if value is not None and not 1 <= value <= 1_000_000_000:
+                raise ValueError(f"{field_name} must be between 1 and 1000000000")
+
+    @property
+    def enabled(self) -> bool:
+        return any(
+            getattr(self, field_name) is not None
+            for field_name in _STORAGE_POLICY_FIELDS
+        )
+
+    def narrowed_by(self, tenant_policy: TenantStoragePolicy) -> TenantStoragePolicy:
+        """Combine deployment and tenant limits without sharing resource pools."""
+
+        def effective(platform: int | None, tenant: int | None) -> int | None:
+            if platform is None:
+                return tenant
+            if tenant is None:
+                return platform
+            return min(platform, tenant)
+
+        return TenantStoragePolicy(
+            **{
+                field_name: effective(
+                    getattr(self, field_name), getattr(tenant_policy, field_name)
+                )
+                for field_name in _STORAGE_POLICY_FIELDS
+            }
+        )
+
+    def expansion_fields(self, tenant_policy: TenantStoragePolicy) -> tuple[str, ...]:
+        return tuple(
+            field_name
+            for field_name in _STORAGE_POLICY_FIELDS
+            if (platform := getattr(self, field_name)) is not None
+            and (tenant := getattr(tenant_policy, field_name)) is not None
+            and tenant > platform
+        )
+
+    def artifact_policy(self) -> ArtifactStoragePolicy:
+        return ArtifactStoragePolicy(
+            max_reserved_bytes_per_tenant=self.max_reserved_artifact_bytes,
+            max_reserved_artifacts_per_tenant=self.max_reserved_artifacts,
+        )
+
+
+def admit_artifact_storage(
+    policy: ArtifactStoragePolicy,
+    *,
+    reserved_bytes: int,
+    reserved_artifacts: int,
+    requested_bytes: int,
+) -> None:
+    """Reject before reserving an upload that would exceed a tenant hard limit."""
+
+    if reserved_bytes < 0 or reserved_artifacts < 0 or requested_bytes < 1:
+        raise ValueError("Artifact storage admission facts are invalid")
+    byte_limit = policy.max_reserved_bytes_per_tenant
+    if byte_limit is not None and reserved_bytes + requested_bytes > byte_limit:
+        raise ArtifactStorageAdmissionDenied(
+            dimension="bytes",
+            reason_code="ARTIFACT_TENANT_STORAGE_BYTES_LIMIT",
+            current=reserved_bytes,
+            requested=requested_bytes,
+            limit=byte_limit,
+        )
+    artifact_limit = policy.max_reserved_artifacts_per_tenant
+    if artifact_limit is not None and reserved_artifacts + 1 > artifact_limit:
+        raise ArtifactStorageAdmissionDenied(
+            dimension="artifacts",
+            reason_code="ARTIFACT_TENANT_STORAGE_COUNT_LIMIT",
+            current=reserved_artifacts,
+            requested=1,
+            limit=artifact_limit,
+        )
+
+
+def admit_workspace_storage(
+    policy: TenantStoragePolicy,
+    *,
+    reserved_bytes: int,
+    reserved_workspaces: int,
+    requested_bytes: int,
+) -> None:
+    """Reject before reserving a Workspace that exceeds its separate pool."""
+
+    if reserved_bytes < 0 or reserved_workspaces < 0 or requested_bytes < 1:
+        raise ValueError("Workspace storage admission facts are invalid")
+    byte_limit = policy.max_reserved_workspace_bytes
+    if byte_limit is not None and reserved_bytes + requested_bytes > byte_limit:
+        raise WorkspaceStorageAdmissionDenied(
+            dimension="bytes",
+            reason_code="WORKSPACE_TENANT_STORAGE_BYTES_LIMIT",
+            current=reserved_bytes,
+            requested=requested_bytes,
+            limit=byte_limit,
+        )
+    workspace_limit = policy.max_reserved_workspaces
+    if workspace_limit is not None and reserved_workspaces + 1 > workspace_limit:
+        raise WorkspaceStorageAdmissionDenied(
+            dimension="workspaces",
+            reason_code="WORKSPACE_TENANT_STORAGE_COUNT_LIMIT",
+            current=reserved_workspaces,
+            requested=1,
+            limit=workspace_limit,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class RunCapacityPolicy:
     """Deployment-owned hard limits used before a Run fact is created."""

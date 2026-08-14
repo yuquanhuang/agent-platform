@@ -1,6 +1,6 @@
 # Agent 平台核心接口与事件契约
 
-> 文档版本：V1.8
+> 文档版本：V2.2
 > 文档状态：开发输入基线  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
 > 关联架构：[Agent平台架构与流程设计](./Agent平台架构与流程设计.md)
@@ -244,6 +244,18 @@ Preview 仅供发布确认。正式 `publishAgent` 必须重新读取 Draft、�
 权威 operationId 和 Path 在 `agent-platform-openapi-resources-v1.yaml` 中定义。Prompt、Skill、MCP 和 ModelConfig 至少提供 create/get/list/update/delete/copy/publish/rollback/enable/disable/versions/diff/references；ModelProvider 和 RuntimeTarget 额外提供连通性或健康测试。Tenant、Member 和 Role 使用独立 Schema，不复用可发布资源的 `Resource` 响应。
 
 Skill 与 MCP 额外返回依赖解析、权限、工具 Schema Hash、Sandbox 测试和安全扫描结果。
+
+### 6.4 QuotaPolicy、BudgetPolicy 与 StoragePolicy
+
+QuotaPolicy、BudgetPolicy 和 StoragePolicy 的权威 Path、operationId、请求与响应 Schema 均在资源管理 OpenAPI 中定义。三者每租户最多一个，创建即 ACTIVE；更新生成不可变 Version，启用/禁用使用 `If-Match` 和幂等键。
+
+BudgetPolicy 冻结 UTC 日历 `DAILY/MONTHLY`、`HARD/SOFT`、`token_limit` 和可选 USD/CNY `cost_limit`。Model Gateway 在提交 Provider 前原子计算 Run/租户 Token 余额和可信费用上界；费用上界使用冻结 Route cap、Counter 版本/Hash、billing semantics 和 PUBLISHED PriceCatalog，fallback 取最大 Route 上界。HARD 超限在提交前拒绝，SOFT 不阻断且只产生一次确定性 Outbox/Audit 阈值事实。预留/释放/结算写 append-only ledger，submitted/unknown Provider 尝试写不可变 attempt 事实。契约不换汇，币种或可信事实不完整时失败关闭。
+
+StoragePolicy F1 冻结 Workspace/Artifact 分离的字节和数量额度。ACTIVE 版本只允许收紧部署硬上限，DISABLED/不存在时回退部署值；Artifact 上传和 Workspace 新建在同一租户策略事务锁内读取不可变 Version 并原子准入。StoragePolicy 软阈值和对象存储事实对账不属于本契约版本。
+
+Artifact retention 不新增公共 API：AVAILABLE 使用创建时冻结的 `expires_at`，FAILED/REJECTED/EXPIRED 使用状态进入时冻结的 `retention_delete_after`。多 Legal Hold 和删除恢复只通过受审计的内部管理 Service 操作。任一活动 Hold 均阻断现有 Artifact 手动删除路径，不改变 Download Gateway、Artifact 公开 DTO 或事件 Schema。
+
+Capacity Domain/Lease 不新增公共 API或 RunEvent。Run Queue 以 Deployment `runtime_target_id` 固化 domain；平台 Scheduler 在同一数据库事务中完成 Lease、`ADMITTED`、Run start Outbox 和 Audit，准入快照保存 domain 配置 Hash、slots、Lease ID 和过期时间。Temporal 和 SSE 契约保持不变。
 
 ## 7. Session、Message 与 Run 接口
 
@@ -596,6 +608,8 @@ token_budget, cost_budget, timeout
 
 Gateway 响应和流事件统一记录：供应商、模型、请求 ID、Token、费用、缓存、重试、fallback 和错误类型。
 
+调用后费用事实优先采用 Provider 明确返回金额；否则只在可信、版本化 PriceCatalog 完整命中时计算，并固化来源、目录版本和明细。未知价格不得按零费用处理。受控内存 PriceCatalog 已支持 DRAFT/PUBLISHED/rollback 和重叠区间拒绝，但不是生产 durable 管理 API；真实 source/digest 录入与发布权限仍需上线前组合。
+
 Fallback 规则：
 
 - 仅对配置的可重试错误执行。
@@ -625,7 +639,7 @@ GET   /api/v1/quota-policies/{quota_policy_id}/versions
 - 部署配置是平台硬上限。租户策略只能收紧显式部署上限；缺失维度继承部署值，超出部署值返回 400 `VALIDATION_ERROR`。
 - ACTIVE 策略参与 Run 创建和重试的 PostgreSQL 原子准入；DISABLED 时回退部署硬限制。超限继续返回冻结 429 `RATE_LIMITED` 并写 DENIED Audit。
 - 写操作使用 RBAC、强 ETag 和幂等键；`quota_policy_version` 不提供普通 Update/Delete。
-- 本阶段只冻结已接入运行链路的 Run capacity。周期 Token/费用 `BudgetPolicy`、存储/速率配额和真实排队在 AP-E7-003 后续子阶段冻结，禁止以占位 API 伪装生效。
+- AP-E7-003 已将 QuotaPolicy、HARD/SOFT Token/Cost BudgetPolicy、StoragePolicy、durable Queue 和 Capacity Domain/Lease 接入代码与契约。生产 Cost Budget 仍必须组合官方锁版 Counter/Planner/Attempt Store、Golden 对账、durable PriceCatalog 管理入口和 SOFT 通知渠道；Sandbox CPU/内存/PID、速率配额、Event/SSE 背压不得以占位 API 伪装生效。
 
 ## 15. Approval 契约
 

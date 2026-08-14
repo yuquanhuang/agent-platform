@@ -1,6 +1,7 @@
 """Model Gateway domain values."""
 
 from packages.domain.model_gateway.model import (
+    SUPPORTED_COST_CURRENCIES,
     AdapterResponse,
     AdapterStreamCompleted,
     AdapterStreamEvent,
@@ -8,17 +9,25 @@ from packages.domain.model_gateway.model import (
     AdapterTextDelta,
     AdapterToolCallDelta,
     AdapterUsageEvent,
+    CostAttribution,
+    CostSource,
     ModelBinding,
     ModelInvocationInput,
     ModelParameterValue,
     ModelRoute,
     ModelUsageRecord,
+    PriceCatalogRate,
+    PriceDimension,
     ProviderConnectionTarget,
     ProviderError,
     ProviderUsage,
+    SupportedCurrency,
+    calculate_catalog_cost,
+    calculate_catalog_upper_bound,
 )
 
 __all__ = [
+    "SUPPORTED_COST_CURRENCIES",
     "AdapterResponse",
     "AdapterStreamCompleted",
     "AdapterStreamEvent",
@@ -26,12 +35,19 @@ __all__ = [
     "AdapterTextDelta",
     "AdapterToolCallDelta",
     "AdapterUsageEvent",
+    "CostAttribution",
+    "CostSource",
     "ModelBinding",
     "ModelInvocationInput",
     "ModelParameterValue",
     "ModelRoute",
     "ModelUsageRecord",
+    "PriceCatalogRate",
+    "PriceDimension",
     "ProviderConnectionTarget",
     "ProviderError",
     "ProviderUsage",
+    "SupportedCurrency",
+    "calculate_catalog_cost",
+    "calculate_catalog_upper_bound",
 ]

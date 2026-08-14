@@ -91,6 +91,12 @@ class ResourceContentModelConfig(BaseModel):
     )
     max_context_tokens: int | None = Field(None, ge=1)
     rate_limit_rpm: int | None = Field(None, ge=1)
+    max_output_tokens: int | None = Field(None, ge=1)
+    max_reasoning_tokens: int | None = Field(None, ge=1)
+    counter_profile_id: str | None = Field(None, min_length=1, max_length=128)
+    counter_profile_version: str | None = Field(None, min_length=1, max_length=64)
+    counter_profile_hash: str | None = Field(None, pattern="^sha256:[a-f0-9]{64}$")
+    billing_semantics_version: str | None = Field(None, min_length=1, max_length=64)
 
 
 class ResourceContentRuntimeTarget(BaseModel):

@@ -1,6 +1,7 @@
 """Composition for the durable Outbox-to-Temporal routing boundary."""
 
 from collections.abc import Mapping
+from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from temporalio.client import Client
@@ -15,6 +16,7 @@ from packages.application.artifacts import (
     ArtifactDownloadRevocationDispatcher,
     ArtifactLifecycleDispatcher,
     ArtifactQuarantineContentReader,
+    ArtifactRetentionPolicy,
     ArtifactScanDispatcher,
     ArtifactScanProcessor,
     ArtifactSecurityScanner,
@@ -141,7 +143,9 @@ def build_artifact_scan_dispatcher(
 ) -> ArtifactScanDispatcher:
     """Build the isolated Artifact quarantine scan dispatcher."""
 
-    artifact_store = SqlAlchemyArtifactStore(session_factory)
+    artifact_store = SqlAlchemyArtifactStore(
+        session_factory, retention_policy=_artifact_retention_policy(settings)
+    )
     return ArtifactScanDispatcher(
         SqlAlchemyOutboxStore(
             session_factory,
@@ -165,7 +169,9 @@ def build_artifact_lifecycle_dispatcher(
 ) -> ArtifactLifecycleDispatcher:
     """Build expiry sweeping and isolated Artifact deletion dispatch."""
 
-    artifact_store = SqlAlchemyArtifactStore(session_factory)
+    artifact_store = SqlAlchemyArtifactStore(
+        session_factory, retention_policy=_artifact_retention_policy(settings)
+    )
     return ArtifactLifecycleDispatcher(
         artifact_store,
         SqlAlchemyOutboxStore(
@@ -208,3 +214,18 @@ def _merge_without_override[T](
     if overlap:
         raise ValueError(f"Outbox routes cannot be overridden: {sorted(overlap)}")
     target.update(additions)
+
+
+def _artifact_retention_policy(settings: AppSettings) -> ArtifactRetentionPolicy:
+    return ArtifactRetentionPolicy(
+        available_retention=timedelta(seconds=settings.artifact_retention_seconds),
+        forensic_retention=timedelta(
+            seconds=settings.artifact_forensic_retention_seconds
+        ),
+        delete_recovery_delay=timedelta(
+            seconds=settings.artifact_delete_recovery_delay_seconds
+        ),
+        delete_recovery_max_operations=(
+            settings.artifact_delete_recovery_max_operations
+        ),
+    )

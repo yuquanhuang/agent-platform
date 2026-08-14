@@ -1426,6 +1426,12 @@ async def _create_model_binding_snapshot(
             default_parameters_json=dict(model_config_content.default_parameters),
             max_context_tokens=model_config_content.max_context_tokens,
             rate_limit_rpm=model_config_content.rate_limit_rpm,
+            max_output_tokens=model_config_content.max_output_tokens,
+            max_reasoning_tokens=model_config_content.max_reasoning_tokens,
+            counter_profile_id=model_config_content.counter_profile_id,
+            counter_profile_version=model_config_content.counter_profile_version,
+            counter_profile_hash=model_config_content.counter_profile_hash,
+            billing_semantics_version=model_config_content.billing_semantics_version,
             snapshot_hash=_snapshot_hash(payload),
             created_at=version.published_at,
         )
@@ -1476,6 +1482,12 @@ async def _clone_or_create_model_binding_snapshot(
             default_parameters_json=dict(source.default_parameters_json),
             max_context_tokens=source.max_context_tokens,
             rate_limit_rpm=source.rate_limit_rpm,
+            max_output_tokens=source.max_output_tokens,
+            max_reasoning_tokens=source.max_reasoning_tokens,
+            counter_profile_id=source.counter_profile_id,
+            counter_profile_version=source.counter_profile_version,
+            counter_profile_hash=source.counter_profile_hash,
+            billing_semantics_version=source.billing_semantics_version,
             snapshot_hash=source.snapshot_hash,
             created_at=version.published_at,
         )
@@ -1498,6 +1510,12 @@ def _model_binding_snapshot_payload(
         "default_parameters": dict(model_config.default_parameters),
         "max_context_tokens": model_config.max_context_tokens,
         "rate_limit_rpm": model_config.rate_limit_rpm,
+        "max_output_tokens": model_config.max_output_tokens,
+        "max_reasoning_tokens": model_config.max_reasoning_tokens,
+        "counter_profile_id": model_config.counter_profile_id,
+        "counter_profile_version": model_config.counter_profile_version,
+        "counter_profile_hash": model_config.counter_profile_hash,
+        "billing_semantics_version": model_config.billing_semantics_version,
     }
 
 

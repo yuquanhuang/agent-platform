@@ -1,6 +1,6 @@
 # Agent 平台非功能与验收基线
 
-> 文档版本：V1.2  
+> 文档版本：V1.3
 > 文档状态：开发输入基线  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
 > 关联架构：[Agent平台架构与流程设计](./Agent平台架构与流程设计.md)
@@ -83,6 +83,8 @@ Codex 容量不能用 AgentScope 指标代替，必须单独测量进程、内�
 | 运行编排月可用性 | >= 99.5% |
 
 模型首 Token 延迟单独统计，不混入平台排队和事件传输延迟。
+
+SLO 只能从可抓取的指标和明确的计算窗口得出。单元测试、Fake 依赖、手工调用或未记录工作负载的局部采样只验证埋点和规则，不作为 SLO 已达标证据。容量、耐久和资源池隔离结论由 AP-E7-005 的可复现报告给出。
 
 ### 3.3 数据正确性
 
@@ -241,6 +243,21 @@ session_id, run_id, workflow_id, runtime_session_id, sandbox_id
 
 高基数 ID 用于 Trace/Log 查询，不直接作为长期 Metrics Label。
 
+最低可观测输入包括：
+
+- API 请求量、错误率和延迟分布。
+- Run 排队/准入/超时、Capacity Domain 活动 Lease 和槽位饱和。
+- Event 批量写入量、延迟、失败、fencing/序号/终态冲突。
+- SSE 在线连接、新事件可见延迟、Redis 不可用时的 PostgreSQL 回退和慢消费者发送超时。
+- Outbox/Worker/Reconciliation 的积压、DEAD、重试耗尽、unresolved 和修复结果。
+- Model Gateway 的错误、限流、fallback、Token/费用和预算拒绝。
+
+上述指标不改变事实边界：PostgreSQL 仍是 Event、Outbox、Queue、Capacity Lease 和对账的持久事实源，Prometheus 和 Redis 不参与业务状态判定。
+
+AP-E7-004 当前最小实现已覆盖 Event 批次结果/延迟、SSE 连接/回退/发送超时/可见延迟、Outbox 发布结果、Worker 恢复、Reconciliation 结果、Run Queue 准入/超时、Capacity Lease 续租/释放和 Model Gateway 请求/Token/fallback。队列当前深度/最老等待、Outbox 持久 backlog/最老年龄、活动 Lease/配置 slots/饱和度，以及控制面和运行面的其余完整 SLI 仍需从 PostgreSQL 有界聚合后输出 Gauge/Histogram；不得用“最近一次认领数”或事件 Counter 冒充持久积压/饱和事实。
+
+当前 Trace 关联保证 durable payload/RunEvent/结构化日志中的 `trace_id` 与 API Span 属性可检索关联，但尚未从 durable Outbox payload 恢复完整 OpenTelemetry Span Context；在完成跨进程 propagation 前不得声明单一端到端 Trace 已贯通。
+
 ### 12.2 必备告警
 
 - Run 创建或首事件延迟超 SLO。
@@ -254,6 +271,10 @@ session_id, run_id, workflow_id, runtime_session_id, sandbox_id
 - Artifact 扫描失败、对象存储错误和配额不足。
 
 每个告警定义严重等级、阈值、持续时间、责任人、Runbook 和自动恢复条件。
+
+代码库内告警规则必须可静态校验，且 Runbook 链接指向真实文件。生产 Alertmanager 或等价系统的 receiver、通知 Secret、排班和升级路由由部署方上线前配置；未配置时不得声称生产告警闭环已完成。
+
+当前代码库规则是 Worker/Event/SSE/Reconciliation/Queue 的最小规则集。Model Gateway、容量饱和、完整控制面/运行面 SLO、Sandbox 与安全异常的必备告警，在对应持久 Gauge、生产 scrape 目标和部署组合具备后补齐；AP-E7-004 的局部规则通过不代表本节全部生产告警已经闭环。
 
 ## 13. 测试金字塔
 

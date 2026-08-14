@@ -1,6 +1,6 @@
 # Agent 平台工程技术与配置基线
 
-> 文档版本：V1.5
+> 文档版本：V2.0
 > 文档状态：开发输入基线
 
 ## 1. 固定选型
@@ -135,11 +135,37 @@ AP_OIDC_CLIENT_ID
 AP_OIDC_CLIENT_SECRET_REF
 AP_SECRET_BACKEND
 AP_OTEL_EXPORTER_OTLP_ENDPOINT
+AP_METRICS_ALLOWED_NETWORKS
+AP_WORKER_METRICS_HOST
+AP_WORKER_METRICS_PORT
 AP_LOG_LEVEL
 AP_CONTRACT_BASELINE_ID
+AP_ARTIFACT_MAX_RESERVED_BYTES_PER_TENANT
+AP_ARTIFACT_MAX_RESERVED_COUNT_PER_TENANT
+AP_ARTIFACT_RETENTION_SECONDS
+AP_ARTIFACT_FORENSIC_RETENTION_SECONDS
+AP_ARTIFACT_DELETE_RECOVERY_DELAY_SECONDS
+AP_ARTIFACT_DELETE_RECOVERY_MAX_OPERATIONS
+AP_WORKSPACE_MAX_RESERVED_BYTES_PER_TENANT
+AP_WORKSPACE_MAX_RESERVED_COUNT_PER_TENANT
+AP_RUN_CAPACITY_DOMAIN_SLOTS
+AP_RUN_CAPACITY_LEASE_TTL_SECONDS
+AP_RUN_CAPACITY_TENANT_QUANTUM
 ```
 
 `*_REF` 指向 Secret Backend，不包含明文值。启动时必须校验 `AP_CONTRACT_BASELINE_ID` 与部署 Bundle 一致。
+
+API 和独立 Worker 必须使用各自的 Prometheus `CollectorRegistry`，不依赖 Python 全局默认 Registry。指标暴露只允许受控内网或 Kubernetes 监控身份访问；端口、抓取路由和网络策略由部署配置管理，不进入公开业务 OpenAPI。`AP_METRICS_ALLOWED_NETWORKS` 继续控制 API `/metrics` 来源；独立 Worker 使用固定 `/metrics`，`AP_WORKER_METRICS_HOST`/`AP_WORKER_METRICS_PORT` 开发默认为 `127.0.0.1:9090`，Kubernetes 只能在 NetworkPolicy 和监控抓取边界同时生效时受控覆盖为 Pod 可访问地址。Worker 抓取不得通过暴露 API 管理员凭证解决。
+
+Metric Label 只允许固定枚举或有明确上界的 `process/outcome/method/status_class/provider/mode/runtime_type` 等维度。`tenant_id`、`run_id`、`workflow_id`、`session_id`、`sandbox_id`、Prompt、文件名、具体模型标识和用户输入只允许在脱敏 Trace/Log 中关联，不得作为长期 Metrics Label。
+
+当前 Kubernetes base 只为 Event Worker 以及可选的 Reconciliation Worker 定义受控 metrics Service/ServiceMonitor。API 虽提供 CIDR 限制的 `/metrics`，但 base 尚无 API Deployment/Service；API、Temporal Worker、Sandbox Manager 和 Runtime Worker 必须在各自生产 Deployment 进入 overlay 时同步补齐受控 scrape 目标，未接入前不得把对应 API/Event/SSE 或进程指标声明为生产可告警。Prometheus Operator CRD（或等价受控 scrape/rule 系统）是部署前置。
+
+启用 Artifact 对象存储时，staging/production 必须配置两项租户级硬上限。Sandbox Manager 的 Workspace 部署默认上限为 10 GiB/100 个，可通过两项 `AP_WORKSPACE_*` 配置覆盖。durable StoragePolicy 将 Workspace/Artifact 作为分离额度池，ACTIVE 版本只能逐维收紧部署值，DISABLED/不存在时回退部署值；两条准入均统计 `DELETED` 以外预留并写入策略版本审计。
+
+Event Worker 每轮先分批回收 `upload_expires_at` 已过期的 `UPLOADING`，再处理 AVAILABLE 到期、Retention purge、失败删除恢复和删除 Outbox。AVAILABLE 的 `expires_at` 在创建时按默认 30 天固化；FAILED/REJECTED/EXPIRED 的 `retention_delete_after` 在进入取证状态时按默认 7 天固化。删除恢复默认延迟 1 小时、最多 3 个 Operation。API 和 Event Worker 必须注入相同四项 Retention 配置，已固化的 Artifact deadline 不随配置更改。
+
+Reconciliation Worker 使用 `AP_RUN_CAPACITY_DOMAIN_SLOTS` JSON 把 `runtime_target_id` 映射到明确正整数 slots；staging/production 不得空配置或根据 Worker 数量猜测容量。Lease TTL 默认 300 秒，tenant quantum 默认 1；只有 Reconciliation Worker 需要这三项运行配置。
 
 Reconciliation Worker 必须配置稳定 SERVICE subject、Sandbox Manager 内部地址、Ed25519 签名私钥引用和独立 Execution Ticket HMAC Key 引用；Sandbox Manager 配置同一 Issuer/Audience/Key ID、验证公钥引用和允许的 SERVICE subject。签名/验证 Key 不得复用模型、OIDC、Checkpoint 或 Execution Ticket Key。
 

@@ -95,7 +95,13 @@
         "capabilities": { "type": "array", "uniqueItems": true, "items": { "enum": ["stream", "tools", "vision", "structured_output", "reasoning"] } },
         "default_parameters": { "type": "object", "maxProperties": 50, "additionalProperties": { "type": ["string", "number", "integer", "boolean", "null"] } },
         "max_context_tokens": { "type": ["integer", "null"], "minimum": 1 },
-        "rate_limit_rpm": { "type": ["integer", "null"], "minimum": 1 }
+        "rate_limit_rpm": { "type": ["integer", "null"], "minimum": 1 },
+        "max_output_tokens": { "type": ["integer", "null"], "minimum": 1, "default": null },
+        "max_reasoning_tokens": { "type": ["integer", "null"], "minimum": 1, "default": null },
+        "counter_profile_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 128, "default": null },
+        "counter_profile_version": { "type": ["string", "null"], "minLength": 1, "maxLength": 64, "default": null },
+        "counter_profile_hash": { "type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$", "default": null },
+        "billing_semantics_version": { "type": ["string", "null"], "minLength": 1, "maxLength": 64, "default": null }
       }
     },
     "runtime_target": {

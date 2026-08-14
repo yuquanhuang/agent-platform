@@ -383,8 +383,13 @@ async def append_control_run_event(
 ) -> RunEventModel:
     """Append one trusted control-plane event in the caller's transaction."""
 
-    if candidate.event_type not in {"approval_required", "approval_resolved"}:
-        raise ValueError("Only Approval control events may use this append boundary")
+    if candidate.event_type not in {
+        "approval_required",
+        "approval_resolved",
+        "run_cancelled",
+        "run_timeout",
+    }:
+        raise ValueError("Only trusted control events may use this append boundary")
     existing = await session.scalar(
         select(RunEventModel).where(
             RunEventModel.tenant_id == run.tenant_id,

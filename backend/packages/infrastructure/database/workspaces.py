@@ -6,9 +6,14 @@ from datetime import datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from packages.application.policy import (
+    TenantStoragePolicy,
+    WorkspaceStorageAdmissionDenied,
+    admit_workspace_storage,
+)
 from packages.application.sandbox.policy import FrozenSandboxPolicy
 from packages.contracts.public import PlatformError, TenantContext
 from packages.domain.public import (
@@ -19,6 +24,9 @@ from packages.domain.public import (
     ensure_workspace_usage,
 )
 from packages.infrastructure.database.models import WorkspaceModel
+from packages.infrastructure.database.storage_policies import (
+    load_active_storage_policy_version,
+)
 from packages.infrastructure.database.uow import TenantUnitOfWork
 
 _MEBIBYTE = 1024 * 1024
@@ -107,7 +115,8 @@ async def ensure_workspace_for_sandbox(
     workspace_uri: str,
     policy: FrozenSandboxPolicy,
     now: datetime,
-) -> WorkspaceModel:
+    deployment_storage_policy: TenantStoragePolicy | None = None,
+) -> tuple[WorkspaceModel, UUID | None]:
     parsed = _parse_workspace_uri(workspace_uri)
     expected = WorkspaceUri.root(
         tenant_id=str(tenant_id),
@@ -146,7 +155,40 @@ async def ensure_workspace_for_sandbox(
                 "WORKSPACE_URI_INVALID",
                 "The Run Workspace identity or frozen quota has changed.",
             )
-        return existing
+        return existing, None
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": f"storage-policy:{tenant_id}"},
+    )
+    storage_policy_version_id, tenant_storage_policy = (
+        await load_active_storage_policy_version(session, tenant_id)
+    )
+    effective_storage_policy = deployment_storage_policy or TenantStoragePolicy()
+    if tenant_storage_policy is not None:
+        effective_storage_policy = effective_storage_policy.narrowed_by(
+            tenant_storage_policy
+        )
+    reserved_bytes, reserved_workspaces = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(WorkspaceModel.quota_bytes), 0),
+                func.count(WorkspaceModel.id),
+            ).where(
+                WorkspaceModel.tenant_id == tenant_id,
+                WorkspaceModel.status != "DELETED",
+            )
+        )
+    ).one()
+    try:
+        admit_workspace_storage(
+            effective_storage_policy,
+            reserved_bytes=int(reserved_bytes or 0),
+            reserved_workspaces=int(reserved_workspaces or 0),
+            requested_bytes=quota_bytes,
+        )
+    except WorkspaceStorageAdmissionDenied as denial:
+        denial.storage_policy_version_id = storage_policy_version_id
+        raise
     workspace = WorkspaceModel(
         id=uuid4(),
         tenant_id=tenant_id,
@@ -166,7 +208,7 @@ async def ensure_workspace_for_sandbox(
     )
     session.add(workspace)
     await session.flush()
-    return workspace
+    return workspace, storage_policy_version_id
 
 
 async def transition_workspace_for_sandbox(

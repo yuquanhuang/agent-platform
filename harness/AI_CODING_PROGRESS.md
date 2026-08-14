@@ -67,7 +67,8 @@
 | 50 | `AP-E6-007` AgentScope Runtime Bridge 与高风险工具纵向 E2E | ✅ 已完成 | AgentScope 暂停/审批、Ticket 取回、Tool Gateway 受控执行、ExternalExecutionResult 恢复和 PostgreSQL/Temporal 纵向验证完成 |
 | 51 | `AP-E7-001` Reconciliation 规则和状态修复 | ✅ 已完成 | Approval/Ticket/Signal、Run 启动/取消和 run scope Sandbox 安全对账完成；不可唯一推导项保持 unresolved |
 | 52 | `AP-E7-002` API、Worker、Temporal、Redis、S3 故障恢复 | 🟡 进行中 | Event/Reconciliation 生产组合、Redis/MinIO、Download Gateway、Secret、Runtime checkpoint 与 Kubernetes 基线完成；AgentScope Runtime Worker 和 Sandbox Manager Provider 仍待继续 |
-| 53 | `AP-E7-003` 配额、预算、限流和背压 | 🟡 第二子阶段完成 | durable QuotaPolicy、不可变版本、RLS/RBAC/Audit 和 Run 原子准入完成；BudgetPolicy、有界排队、Sandbox/存储配额及 Event/SSE 背压待后续子阶段 |
+| 53 | `AP-E7-003` 配额、预算、限流和背压 | ✅ 已完成 | Run/Policy、durable queue/StoragePolicy、Artifact retention/Legal Hold、Capacity Domain/Lease 与 C2b Cost Budget 代码/契约完成；生产组合和容量验收留后续 |
+| 54 | `AP-E7-004` SLO、指标、告警和 Trace 关联 | 🟡 进行中 | 已确认私有 Registry、低基数标签、Worker 抓取、Event/SSE/Queue/Capacity 观测和告警 Runbook 边界；实现与验证结果待完成 |
 
 ## 执行记录
 
@@ -871,3 +872,106 @@
 - 未完整实现与后续待办：BudgetPolicy 周期 Token/费用预算、可信价格表与聚合；有界队列、最大等待、取消和 Temporal Replay；集群级全局并发；Sandbox/Workspace/Artifact 配额；Event/SSE 背压、容量指标、SLO 和告警均保留到后续子阶段，不用占位 API 或配置冒充完成。
 - 持续保留的非阻塞项：真实 OIDC/JWKS、外部 AV/Malware Scanner、Registry digest 与生产 CIDR overlay、Sandbox Manager 真实 Provider/Policy Resolver/Provision Token Verifier、AgentScope Runtime Worker 生产组合、RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、AJV standalone codegen、Run Attachment、Audit 归档和可信 Workflow 终态物化。
 - 下一子阶段建议：进入 AP-E7-003 子阶段 C，先冻结 BudgetPolicy 的周期、币种/精度、价格版本、Token/费用事实来源、预约/结算/释放与幂等契约，再实现 PostgreSQL 原子预算准入；不要与排队和存储配额在同一轮铺开。
+
+### 2026-08-12 — AP-E7-003 C1：durable BudgetPolicy 与 Model Gateway 周期 Token 准入
+
+- [x] 将资源 OpenAPI 升至 `1.3.0`，新增 7 个 BudgetPolicy operationId：list/create/get/update/disable/enable/listVersions；重新生成 17 个 Python/TypeScript 契约文件。前端本轮只同步生成类型，管理页面留后续 UI 子切片。
+- [x] 新增 `BudgetPolicy`/`BudgetPolicyVersion` 领域模型、应用管理 Service、FastAPI Router、SQLAlchemy Store、ORM 和迁移 `0035_budget_policy`；每租户单策略、创建 ACTIVE、更新不可变 Version、ETag/CAS、幂等、Audit、RLS/RBAC 与当前 Tenant 绑定已接通 API composition。
+- [x] C1 明确只支持 UTC 日历 `DAILY/MONTHLY`、`HARD` Token 限制；`cost_limit`/`price_catalog_version` 当前固定 `null`。无可信 PriceCatalog 时 `cost_budget` 继续失败关闭为 `COST_BUDGET_UNAVAILABLE`，未虚构 OpenAI/Qwen/DeepSeek 价格。SOFT、费用聚合、告警留 C2。
+- [x] Model Gateway 现在会加载 Tenant ACTIVE BudgetPolicy 当前 Version，按周期统计 `model_usage.finished_at` 和未过期 RESERVED，使用稳定 advisory lock 按租户周期与 Run 求交；无 Run token_budget 时周期策略仍生效，Run 与租户余额取最小值。Reservation 固化 Policy/Version/UTC 周期快照，DISABLED 后回退 Run 预算，保留既有 settle/release/幂等语义。
+- [x] 补齐 BudgetPolicy 管理/API/组合/ORM/迁移/契约测试；定向测试 `63 passed`。真实 PostgreSQL migration/RLS 完整升降级与 BudgetPolicy 周期求交、跨 Run 并发、禁用回退、快照校验 `1 passed`。
+- [x] `make backend-check`：`736 passed, 18 skipped`；`make frontend-check`：26 个测试文件、`85 passed`、生产构建通过。此前契约固定数量断言已同步为资源 `141`、全局 `183` operationId。
+- [x] R15 契约门禁通过：31 个完整性文件、183 个唯一 operationId、17 个生成文件零漂移。`make check` 为后端 `736 passed, 18 skipped`、前端 `85 passed` 并完成生产构建；真实 PostgreSQL/Temporal/Redis/MinIO `make check-all` 为后端 `751 passed, 3 skipped`、前端 `85 passed` 并完成生产构建。3 个 skip 是显式 Redis/MinIO unavailable 故障模式，正常依赖链路已实际执行。
+- 环境提示：首次 `make check-all` 被沙箱阻止读取用户 uv cache，受控重跑后通过；`.npmrc` 权限告警和 Rollup 上游 PURE 注释是既有非阻断环境告警，未修改项目安全或构建配置绕过。
+- 未完整实现与临时验证边界：PriceCatalog/正式费用、COST/SOFT、user/agent 分级周期预算、有界队列/取消/Replay、Sandbox/Workspace/Artifact 配额、Event/SSE 背压和 AP-E7-004 指标告警继续保留；真实 OIDC/JWKS、外部 Scanner、Registry digest、Sandbox Manager/AgentScope Runtime 生产组合、RunEvent 全局登记表+月分区、AJV standalone、Run Attachment、Audit 归档和可信 Workflow 终态物化仍是后续待办。
+
+### 2026-08-12 — AP-E7-003 C2a：可信 PriceCatalog 与调用后费用归因
+
+- [x] 将 C2 拆分为 C2a/C2b：本轮不改变公开 `cost_budget` 成功语义，只实现调用后的可信费用事实。原因是冻结请求尚无可靠调用前最大费用上界，Provider 返回 cost 只能作为已发生事实，不能安全用于本次 HARD 准入。
+- [x] 新增不可变 `price_catalog_version`/`price_catalog_rate` 和迁移 `0036_model_usage_cost_provenance`：按 Tenant、Provider、Model、UTC 生效时间选择，费率使用 `numeric(28,12)`，版本/费率 FORCE RLS 并由 Trigger 禁止 Update/Delete；未内置或虚构 OpenAI/Qwen/DeepSeek 正式价格。
+- [x] 新增 `CostAttributor`、生产 `SqlAlchemyPriceCatalogReader` 和 Decimal 计算器。Provider 明确返回金额时记录 `PROVIDER_REPORTED`；否则仅在完整命中可信目录和所有非零 Token 维度时生成 `CATALOG_CALCULATED`，目录/费率/Usage 缺失时费用保持未知。
+- [x] `model_usage` 增加 `cost_source`、`price_catalog_version_id`、`cost_details_json`，固化目录版本、费率分量、来源 Ref 和 Content Hash；Usage 与目录均为不可变事实，历史费用可审计解释。现有 Token Budget 预约/结算、fallback 和 `COST_BUDGET_UNAVAILABLE` 均保持不变。
+- [x] 定向验证：PriceCatalog/Decimal/归因 `6 passed`；Model Gateway 相关 `58 passed`；ORM/离线迁移 `54 passed`；Black、Ruff、Pyright strict 通过。`make backend-check` 为 `744 passed, 18 skipped`。
+- [x] 真实 PostgreSQL 验证 `1 passed`：完整 migration upgrade/downgrade、两张目录表 RLS/不可变 Guard、有效目录/费率读取、跨租户不可见，以及 C1 Run/租户 Token Budget 协同无回归。首轮发现 RLS 固定清单遗漏，已同步测试；新增 fixture 需显式 flush 父版本后写费率，未修改生产约束绕过。
+- [x] 最终门禁：R16 契约校验 31 个完整性文件、183 个唯一 operationId 和 17 个生成文件零漂移；`make check` 为后端 `744 passed, 18 skipped`、前端 `85 passed` 并完成生产构建；真实 PostgreSQL/Temporal/Redis/MinIO `make check-all` 为后端 `759 passed, 3 skipped`、前端 `85 passed` 并完成生产构建。3 个 skip 仍是显式 Redis/MinIO unavailable 故障模式，正常依赖链路已执行。
+- 兼容与迁移：部署前执行 `0036_model_usage_cost_provenance`；未新增 Python/Node 依赖，未修改 OpenAPI、生成 Client 或前端代码。回滚会删除目录及 Usage provenance，执行前必须确认历史费用事实无需保留或已导出。
+- C2b 已确认仅支持 USD/CNY、不做换汇，币种不一致失败关闭；实施时仍需冻结调用前费用上界、正式价格来源与发布/回滚、HARD/SOFT 语义和 Tenant/User/Agent/Run 聚合维度。在此之前 `cost_budget` 继续失败关闭，不能用调用后金额冒充调用前准入。
+- 持续保留的未完成项：user/agent 分级周期预算、有界队列/取消/Replay、集群级并发、Sandbox/Workspace/Artifact 配额、Event/SSE 背压和 AP-E7-004 指标告警；真实 OIDC/JWKS、外部 Scanner、Registry digest、Sandbox Manager/AgentScope Runtime 生产组合、RunEvent 全局登记表+月分区、AJV standalone、Run Attachment、Audit 归档和可信 Workflow 终态物化仍统一留待后续补齐和生产全链路验证。
+
+### 2026-08-12 — AP-E7-003 D1：Artifact 租户存储硬上限与上传原子准入
+
+- [x] 新增部署级 `ArtifactStoragePolicy`，支持每租户预留字节和 Artifact 数量两项硬上限；默认 local/test 未配置时保持兼容，staging/production 仅在 Artifact 对象存储启用时强制要求 `AP_ARTIFACT_MAX_RESERVED_BYTES_PER_TENANT` 与 `AP_ARTIFACT_MAX_RESERVED_COUNT_PER_TENANT`。
+- [x] `SqlAlchemyArtifactStore.create_upload` 使用租户级 PostgreSQL advisory transaction lock，按 `DELETED` 以外 Artifact 的声明大小和数量原子求和后再写入。UPLOADING、隔离扫描、可信可用、失败、过期和删除中均继续占用容量，只有物理删除完成为 DELETED 后释放，避免对象仍存在时低估。
+- [x] 超限复用冻结 429 `RATE_LIMITED`，details 只返回 tenant scope 与稳定 reason_code；独立 Tenant UoW 写 `artifact.upload.admission_deny` Audit，记录 current/requested/limit，不泄露对象 URI。原上传事务回滚，拒绝请求不留下 Artifact 或幂等 claim。
+- [x] 真实 PostgreSQL 验证两个并发上传竞争最后容量槽位时至多一个成功，并验证拒绝审计、幂等回滚和异步删除完成后的容量释放。定向 Admission/配置/组合 `27 passed`，真实 PostgreSQL 完整 migration/RLS 协同 `1 passed`。
+- [x] 全链路发现并修复基线漂移：冻结文档/任务已为 R16，但后端启动常量仍为 R10、Kubernetes ConfigMap 为 R13；已统一推进到 R17，避免生产启动配置与契约基线不一致。未修改 OpenAPI 或前端业务代码。
+- [x] 验证：Black、Ruff、Pyright、`make backend-check`、`make check`、`make contract-check` 均通过；`make check-all` 首轮受 uv cache 权限和沙箱 multiprocessing socket 限制，使用工作区临时 uv cache 并经授权在沙箱外重跑通过。未新增依赖。
+- 未完整实现与后续待办：C2b 的调用前费用上界、正式价格发布/回滚、多币种、费用聚合和 SOFT 告警仍需人工确认；Workspace/Artifact 联合 durable Policy、Tenant/User/Agent/Run 分级、软阈值、过期/失败对象自动回收和对象存储事实对账口径尚未冻结。Sandbox CPU/内存/PID、真实有界排队/取消/Replay、集群级并发、Event Store/SSE 容量阈值和 AP-E7-004 指标告警继续保留。
+
+### 2026-08-12 — AP-E7-003 D2：过期上传主动回收与容量释放闭环
+
+- [x] Event Worker 的 Artifact Lifecycle 每轮先调用过期上传回收，再处理 AVAILABLE 保留期过期和既有删除 Outbox；未新增公共 API、公共事件或依赖。
+- [x] PostgreSQL Store 使用 `tenant_id + status + upload_expires_at` 索引与 `FOR UPDATE SKIP LOCKED` 分批认领 `UPLOADING AND upload_expires_at <= now`。同一事务先持久化 `FAILED/ARTIFACT_UPLOAD_EXPIRED`，再按状态机进入 `DELETING`，创建 `artifact.delete` Operation、确定性 `artifact.delete_requested.v1` Outbox 和两类 Audit。
+- [x] 复用既有 `ArtifactDeleteProcessor` 撤销下载能力并删除 quarantine/trusted 对象；成功后原子写 `DELETED` 与 Operation `SUCCEEDED`，D1 容量统计随之释放。重复 sweep 不创建重复 Operation/Outbox，不走公共幂等 API。
+- [x] 新增迁移 `0037_artifact_upload_reclamation`；部署顺序为先升级迁移，再滚动 Event Worker。回滚只移除 sweep 索引，不逆转已形成的生命周期事实。
+- [x] 验证：应用/ORM/离线迁移/受控 E2E 定向测试 `59 passed`；真实 PostgreSQL 完整迁移/RLS、并发 sweeper、重复 sweep、未过期与 AVAILABLE 防误删、DeleteProcessor 和删除后容量重申请 `1 passed`；Black、Ruff、Pyright、`make backend-check` 通过。R18 契约为 31 个完整性文件、183 个唯一 operationId、17 个生成文件零漂移；带真实 PostgreSQL/Temporal/Redis/MinIO 的 `make check-all` 通过。
+- 未完整实现与后续待办：`FAILED/REJECTED/EXPIRED` 自动删除保留时长和取证窗口仍需人工确认；Workspace/Artifact 联合 durable Policy、对象存储事实对账、有界队列/取消/Replay、Sandbox CPU/内存/PID、Event/SSE 背压与 AP-E7-004 指标告警继续保留。C2b 仍等待调用前费用上界、正式价格发布/回滚、多币种、聚合维度及 HARD/SOFT 语义确认。
+
+### 2026-08-12 — AP-E7-003 E1：durable Run admission queue
+
+- [x] 新增 PostgreSQL `run_admission_queue` 与迁移 `0038`：create/retry 原子写 Run `QUEUED` 和 Queue `WAITING`，按 priority/FIFO、deadline 与部署/租户容量求交，`ADMITTED` 后才写确定性 `agent.run_requested.v1` Outbox 并启动 Temporal。
+- [x] WAITING 取消直接形成 Run/Queue `CANCELLED` 与 `run_cancelled`；到期形成 `TIMEOUT/RUN_QUEUE_TIMEOUT` 与 `run_timeout(stage=queue)`。两条路径都不创建 Workflow、Attempt、Sandbox 或 Run start Outbox；已绑定 Workflow 的取消继续使用 `CANCELLING + Signal`。
+- [x] 修正全链路容量口径：仅 `QUEUED+ADMITTED` 或执行状态占槽，历史 ADMITTED 终态事实不永久计数；同批每次准入后 flush，后续候选能观察本批已占槽位，避免 Scheduler 批内超配。
+- [x] 队列最大等待、每租户 WAITING 上限、准入批次和轮询周期全部配置化，开发默认值分别为 `300/1000/50/1s`。Reconciliation Worker 内拆分独立低延迟 Run admission 循环，完整 Run/Approval/Sandbox 对账继续按 `AP_RECONCILIATION_WORKER_POLL_INTERVAL_SECONDS=30` 执行。
+- [x] 真实 PostgreSQL Resource Registry 全资源回归 `1 passed`，覆盖队列准入/取消/Retry、RunEvent、Workflow Attempt、Approval、AgentScope Bridge 与 Sandbox；定向迁移/模型/配置/Reconciler/Starter 测试 `81 passed`，Black、Ruff、Pyright 通过。
+- [x] 最终全链路发现并修复两个协同遗漏：RunSpec 准备仍只接受旧 `CREATED`，现已接受 durable admission 后的 `QUEUED`；准备阶段失败允许 `QUEUED → FAILED`，避免失败收敛因状态机拒绝而遮蔽原始错误。纵向验收先排空历史 WAITING 并封存历史 Outbox，只调度目标 Run，恢复 `1` 次准入和 `1` 次发布的精确断言，并等待目标 Workflow 完成后校验 API 终态。
+- [x] 最终验证通过：真实 PostgreSQL + Temporal Resource Registry `1 passed`；`make backend-check` 为 `751 passed, 18 skipped`；真实 PostgreSQL/Temporal/Redis/MinIO `make check-all` 为后端 `766 passed, 3 skipped`、前端 26 个测试文件 `85 passed` 并完成生产构建；R19 契约为 31 个完整性文件、183 个唯一 operationId、17 个生成文件零漂移。
+- 契约与兼容：公共 OpenAPI、RunSpec 和 RunEvent Schema 不变；Workflow Definition 未增加 Queue Signal/Timer。R19 只冻结内部 durable queue、配置和启动顺序，Temporal 历史 Replay 必须在最终 check-all 中继续验证。
+- 已确认后续顺序：durable StoragePolicy → Artifact retention → Capacity Domain/Lease → C2b Cost Budget。所有数值阈值保持配置项并提供默认值；C2b 仅支持 USD/CNY、不做换汇，币种不一致失败关闭。
+- 持续待办：RunEvent“全局唯一登记表 + `recorded_at` 月分区事件表”、真实 OIDC/JWKS、外部 Scanner、Registry digest、Sandbox Manager/AgentScope Runtime 生产组合、AJV standalone、Run Attachment、Audit 归档和可信 Workflow 终态物化继续保留。
+
+### 2026-08-12 — AP-E7-003 F1：durable StoragePolicy 与运行时存储准入
+
+- [x] 资源 OpenAPI 升至 `1.4.0`，新增 StoragePolicy list/create/get/update/disable/enable/listVersions；每租户单策略、创建 ACTIVE、更新不可变 Version、强 ETag/CAS、幂等、RLS/RBAC 与 Audit 已接通 API composition。
+- [x] Workspace 与 Artifact 使用四个分离维度：预留字节/数量分别独立；ACTIVE 租户版本与部署硬上限逐维取最小值，DISABLED/不存在回退部署配置。租户策略不得扩大平台硬上限。
+- [x] Artifact 上传在 storage-policy 与 artifact-storage 租户事务锁内读取当前版本、统计 `DELETED` 以外预留并插入；Workspace 新建在同一策略锁内按 `quota_bytes` 统计和准入。已有 Run Workspace 先走幂等身份/冻结 quota 校验，不受后续策略收紧影响。
+- [x] 成功与拒绝 Audit 均记录实际 StoragePolicy Version ID；拒绝事务回滚后由独立 UoW 写审计，不残留 Artifact/Workspace 或幂等 claim。`tenant.storage_policy_id` 使用复合租户外键，阻止数据库层跨租户绑定。
+- [x] Workspace 部署配置新增开发默认 `AP_WORKSPACE_MAX_RESERVED_BYTES_PER_TENANT=10737418240`、`AP_WORKSPACE_MAX_RESERVED_COUNT_PER_TENANT=100`；由 Sandbox Manager composition 消费，未误放到 Event/Reconciliation Worker ConfigMap。生产 overlay 应经容量测试覆盖默认值。
+- [x] 定向验证已通过：管理 API/Service/Composition、Admission、配置、ORM、离线迁移、Ruff 与 Pyright；真实 PostgreSQL Artifact 策略收紧/版本审计/禁用回退和 RLS `1 passed`；真实 PostgreSQL/Temporal Workspace 拒绝审计、幂等回滚、禁用回退及全资源协同 `1 passed`。
+- [x] 最终门禁通过：`make backend-check` 为 `763 passed, 18 skipped`；`make frontend-check` 为 26 个测试文件、`85 passed` 并完成生产构建；R20 契约校验为 31 个完整性文件、190 个唯一 operationId 和 17 个生成文件零漂移；真实 PostgreSQL/Temporal/Redis/MinIO `make check-all` 为后端 `779 passed, 2 skipped`、前端 `85 passed` 并完成生产构建。两个 skip 仅为显式 Redis/MinIO unavailable 故障注入开关，正常依赖链路均已执行。
+- 迁移与兼容：部署前执行 `0039_storage_policy`；新增 API 为向后兼容扩展，未新增 Python/Node 依赖。降级会删除策略和版本事实，必须先确认生产没有依赖租户存储限制的准入决策或审计调查。
+- 未完整实现与后续待办：Artifact retention/取证窗口、StoragePolicy 软阈值告警、对象存储事实对账、Capacity Domain/Lease 和 C2b Cost Budget 继续后续子阶段；RunEvent 全局唯一登记表+月分区、真实 OIDC/JWKS、外部 Scanner、Registry digest、生产 Sandbox Manager/AgentScope Runtime、AJV standalone、Run Attachment 和 Audit 归档继续统一保留。
+
+### 2026-08-13 — AP-E7-003 Artifact retention 与 Legal Hold
+
+- [x] 新增迁移 `0040_artifact_retention`：Artifact 创建时按默认 30 天固化 AVAILABLE `expires_at`，进入 FAILED/REJECTED/EXPIRED 时按默认 7 天固化 `retention_delete_after`；后续配置或 `updated_at` 变化不追溯改写。
+- [x] 支持同一 Artifact 按 `case_ref` 并存多个活动 Legal Hold；任一活动 Hold 阻断保留期自动删除和手动删除，解除后恢复原冻结 deadline。放置、解除和删除恢复均审计，且仅作为内部管理边界。
+- [x] Event Worker 生命周期顺序固定为过期上传回收、AVAILABLE 到期、Retention purge、失败删除恢复、删除 Outbox；删除失败默认 1 小时后恢复，最多创建 3 次删除 Operation。
+- 契约与边界：未扩展公共 OpenAPI、RunEvent 或前端；应用 API 和 Event Worker 必须注入相同 Retention 参数。对象存储事实对账和法规覆盖默认期限仍是上线前待办。
+
+### 2026-08-13 — AP-E7-003 Capacity Domain/Lease
+
+- [x] 新增迁移 `0041_capacity_domain_lease`，`run_admission_queue.capacity_domain` 统一固化为 Deployment `runtime_target_id`；`run_capacity_domain` 持久化显式 slots/状态/配置 Hash，`run_capacity_lease` 为每个 Run 保留全局唯一执行槽。
+- [x] 全局 Scheduler 在同一 Domain 中先按租户 quantum 轮转，再保持租户内 HIGH/FIFO；Lease、Queue `ADMITTED`、确定性 Outbox 和 Audit 同事务持久化，WAITING 取消/超时不创建 Lease。
+- [x] Reconciliation Worker 释放终态/孤儿 Lease；运行中过期 Lease 只能续租或失败关闭，不盲目释放供其他 Run 占用。默认 TTL 300 秒、tenant quantum 1，slots 必须以 `AP_RUN_CAPACITY_DOMAIN_SLOTS` JSON 显式配置。
+- 契约与边界：不扩展公共 API、RunEvent、Temporal Workflow 或前端；Redis 不是 Lease 事实源，slots 也不冒充 Worker 自动发现。生产容量值须由容量验收后覆盖示例。
+
+### 2026-08-13 — AP-E7-003 完成
+
+- [x] C2b Cost Budget 完成代码与契约：BudgetPolicy 支持 HARD/SOFT 与可选 USD/CNY `cost_limit`；调用前使用冻结 Route cap、Counter 版本/Hash、billing semantics 和 PUBLISHED PriceCatalog 计算可信上界，fallback 取最大 Route 上界；append-only ledger 与 Provider attempt 固化费用和提交事实，币种不一致不换汇并失败关闭。
+- [x] 全链路审查修复 0041 迁移 guard 回填阻塞、费用已结算重复计费、过期 reservation 旧预留冲销与 Counter 事实刷新、币种不一致 UNKNOWN 保守记账，以及数据库目录读取遗漏 PUBLISHED 过滤。`make backend-check` 为 `783 passed, 20 skipped`；前端 26 个测试文件、`85 passed`，生产构建通过；生成的 17 个契约文件零漂移。
+- [ ] Capacity Domain/Lease 真实 PostgreSQL 专项因沙箱网络限制且授权审批服务异常未执行，不记为通过；R21 契约门禁已复跑通过，真实数据库专项仍待可用执行环境补验。
+- 统一待办：生产 Model Gateway 组合注入 Counter/Planner/Attempt Store；Provider 官方 Tokenizer/Count API 锁定版本/Hash并做 Golden 对账；durable PriceCatalog 管理入口、真实 source 录入、生产 SOFT 通知渠道、user/agent 分级预算、Sandbox CPU/内存/PID、对象存储事实对账和 AP-E7-004/005 后续实施。
+- 跨任务待办继续保留：AP-E7-002 生产项、RunEvent“全局唯一登记表 + 月分区事件表”、AJV standalone、Run Attachment 和 Audit 归档。
+
+### 2026-08-13 — AP-E7-004 SLO、指标、告警和 Trace 关联
+
+- [x] 已从冻结文档确认任务边界：AP-E7-004 交付可计算 SLI、低基数指标、受控 Worker 抓取、告警元数据/Runbook 和 Trace 关联；AP-E7-005 独立负责容量、耐久、尖峰、慢消费者和 AgentScope/Codex 资源池隔离报告。
+- [x] 指标契约继承现有 `PlatformMetrics` 每进程私有 `CollectorRegistry`；只允许 process/outcome/method/status_class/provider/mode/runtime_type 等低基数维度。`tenant_id`、`run_id`、`workflow_id`、Prompt、文件名、具体模型和用户输入不进入 Metric Label。
+- [x] 事实边界不变：PostgreSQL 是 Event、Outbox、Queue、Capacity Lease 和 Reconciliation 事实源；Redis 只唤醒，Prometheus 只观测，Trace/Log 承载高基数关联。本任务不扩展公开 OpenAPI、RunEvent Schema 或 Temporal Workflow Definition。
+- [x] 完成最小可观测实现：API 复用单一 `PlatformMetrics`，Event Worker/Reconciliation Worker 以私有 `CollectorRegistry` 暴露受控 `/metrics`；指标覆盖 HTTP、Temporal start、Outbox、RunEvent batch/candidate、SSE 连接/回退/发送超时/可见延迟、Reconciliation、Run Queue、Capacity Lease 和 Model Gateway。
+- [x] 收紧失败与告警语义：Temporal RPC 失败记录 `rpc_error`；RunEvent 授权拒绝、Store failure/rejected 使用固定低基数 outcome；SSE notification fallback 在降级开始时计数；Worker Down、Outbox、Reconciliation、Queue、Temporal、RunEvent、SSE 规则均有 severity/owner/for/recovery/Runbook。
+- [x] 验证结果：AP-E7-004 定向测试 `40 passed`；`make backend-check` 为 `792 passed, 20 skipped`；`make frontend-check` 为 26 个测试文件、`85 passed` 并完成生产构建；R22 `make contract-check` 通过（31 个完整性文件、190 个 operationId、7 个 Schema、184 个引用、4 个 Golden、17 个生成文件零漂移）；`kubectl kustomize` 本地渲染 590 行通过。
+- [x] 统一 `make check` 的契约步骤通过，但编排在 Black 启动阶段因沙箱禁止 multiprocessing SyncManager 本地 socket 中止；设置 `BLACK_NUM_WORKERS=1` 仍复现。未将统一编排命令记为通过，三个组成门禁已分别完成。
+- [x] 发现并记录协同边界：当前 Kustomize base 仅抓取已进入组合的 Event/Reconciliation Worker，API `/metrics` 尚无 base Service/ServiceMonitor；`outbox_claimed` 只是最新有界 poll 数，不代表持久 backlog；Queue depth/oldest wait、active Lease/configured slots/saturation Gauge、完整控制面/运行面 SLO、Model Gateway/容量告警和跨进程 OTel Span Context 仍需后续补齐。
+- 未完整实现与后续待办：Event 写入侧功能性有限缓冲、Delta 合并、终态优先与恢复阈值失败关闭在 AP-E7-005 前另行冻结；生产 Alertmanager receiver/排班/通知 Secret；RunEvent 全局唯一登记表 + `recorded_at` 月分区；API/Temporal/Sandbox/Runtime metrics overlay；真实容量/耐久/慢消费者和资源池隔离报告。

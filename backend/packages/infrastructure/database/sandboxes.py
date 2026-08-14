@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from packages.application.policy import (
     AdmissionDenied,
     RuntimeBundleAdmissionFacts,
+    TenantStoragePolicy,
+    WorkspaceStorageAdmissionDenied,
     admit_runtime_bundle,
 )
 from packages.application.reconciliation import SandboxReconciliationCandidate
@@ -24,7 +26,7 @@ from packages.application.sandbox.service import (
     SandboxProvisionClaim,
     SandboxServiceAccess,
 )
-from packages.contracts.public import PlatformError, TenantContext
+from packages.contracts.public import PlatformError, TenantContext, rate_limited
 from packages.contracts.sandbox_api import (
     SandboxLeaseControlRequest,
     SandboxLeaseRequest,
@@ -62,8 +64,14 @@ from packages.infrastructure.database.workspaces import (
 class SqlAlchemySandboxLifecycleStore:
     """Own all tenant-scoped Sandbox state transitions and fencing decisions."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        storage_policy: TenantStoragePolicy | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._storage_policy = storage_policy or TenantStoragePolicy()
 
     async def list_sandbox_reconciliation_candidates(
         self,
@@ -131,6 +139,42 @@ class SqlAlchemySandboxLifecycleStore:
         )
 
     async def begin_provision(
+        self,
+        access: SandboxServiceAccess,
+        *,
+        request: SandboxProvisionRequest,
+        idempotency_key: str,
+        request_hash: str,
+        policy: FrozenSandboxPolicy,
+        now: datetime,
+    ) -> SandboxProvisionClaim:
+        try:
+            return await self._begin_provision(
+                access,
+                request=request,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                policy=policy,
+                now=now,
+            )
+        except WorkspaceStorageAdmissionDenied as denial:
+            await self._record_workspace_storage_denial(
+                access,
+                run_id=_uuid(request.run_id, "run_id"),
+                denial=denial,
+                storage_policy_version_id=cast(
+                    UUID | None, denial.storage_policy_version_id
+                ),
+                now=now,
+            )
+            raise rate_limited(
+                details={
+                    "scope": "tenant",
+                    "reason_code": denial.reason_code,
+                }
+            ) from denial
+
+    async def _begin_provision(
         self,
         access: SandboxServiceAccess,
         *,
@@ -248,7 +292,7 @@ class SqlAlchemySandboxLifecycleStore:
                 )
             except AdmissionDenied as error:
                 raise _sandbox_error(403, error.code, str(error)) from error
-            await ensure_workspace_for_sandbox(
+            _, storage_policy_version_id = await ensure_workspace_for_sandbox(
                 session,
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -257,6 +301,7 @@ class SqlAlchemySandboxLifecycleStore:
                 workspace_uri=request.workspace_uri,
                 policy=policy,
                 now=now,
+                deployment_storage_policy=self._storage_policy,
             )
             sandbox_id = uuid4()
             operation_id = uuid4()
@@ -311,6 +356,11 @@ class SqlAlchemySandboxLifecycleStore:
                     "operation_id": str(operation_id),
                     "policy_hash": policy.policy_hash,
                     "bundle_hash": request.bundle_hash,
+                    "storage_policy_version_id": (
+                        str(storage_policy_version_id)
+                        if storage_policy_version_id is not None
+                        else None
+                    ),
                 },
                 now=now,
             )
@@ -320,6 +370,47 @@ class SqlAlchemySandboxLifecycleStore:
                 instance=_instance_record(instance),
                 idempotency_record_id=idempotency_id,
                 replayed=False,
+            )
+
+    async def _record_workspace_storage_denial(
+        self,
+        access: SandboxServiceAccess,
+        *,
+        run_id: UUID,
+        denial: WorkspaceStorageAdmissionDenied,
+        storage_policy_version_id: UUID | None,
+        now: datetime,
+    ) -> None:
+        metadata = {
+            "scope": "tenant",
+            "dimension": denial.dimension,
+            "reason_code": denial.reason_code,
+            "current": denial.current,
+            "requested": denial.requested,
+            "limit": denial.limit,
+            "storage_policy_version_id": (
+                str(storage_policy_version_id)
+                if storage_policy_version_id is not None
+                else None
+            ),
+        }
+        async with TenantUnitOfWork(self._session_factory, access.context) as unit:
+            unit.session.add(
+                AuditLogModel(
+                    tenant_id=UUID(access.context.tenant_id),
+                    actor_type="service",
+                    actor_id=UUID(access.context.subject_id),
+                    action="workspace.admission_deny",
+                    resource_type="workspace",
+                    resource_id=run_id,
+                    result="DENIED",
+                    reason_codes=["RATE_LIMITED", denial.reason_code],
+                    request_id=access.context.request_id,
+                    trace_id=access.context.trace_id,
+                    metadata_schema_version=1,
+                    metadata_json=metadata,
+                    created_at=now,
+                )
             )
 
     async def mark_provisioning(

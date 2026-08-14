@@ -47,6 +47,13 @@ class TenantModel(Base):
         ),
         CheckConstraint("resource_version >= 1", name="resource_version"),
         Index("ix_tenant__status", "status"),
+        ForeignKeyConstraint(
+            ["id", "storage_policy_id"],
+            ["storage_policy.tenant_id", "storage_policy.id"],
+            name="fk_tenant__storage_policy_id__storage_policy",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -58,6 +65,8 @@ class TenantModel(Base):
         String(20), nullable=False, server_default=text("'ACTIVE'")
     )
     quota_policy_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    budget_policy_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    storage_policy_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
     resource_version: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("1")
     )
@@ -248,6 +257,279 @@ class QuotaPolicyVersionModel(Base):
     )
     max_nonterminal_codex_runs: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
+    )
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class BudgetPolicyModel(Base):
+    """Tenant singleton selecting one immutable periodic model budget version."""
+
+    __tablename__ = "budget_policy"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_budget_policy__tenant_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_budget_policy__tenant_id_id"),
+        CheckConstraint("status IN ('ACTIVE', 'DISABLED')", name="status"),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "current_version_id"],
+            [
+                "budget_policy_version.tenant_id",
+                "budget_policy_version.policy_id",
+                "budget_policy_version.id",
+            ],
+            name="fk_budget_policy__current_version",
+            ondelete="RESTRICT",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        Index("ix_budget_policy__tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'ACTIVE'")
+    )
+    current_version_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class StoragePolicyModel(Base):
+    """Tenant singleton selecting one immutable storage capacity version."""
+
+    __tablename__ = "storage_policy"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_storage_policy__tenant_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_storage_policy__tenant_id_id"),
+        CheckConstraint("status IN ('ACTIVE', 'DISABLED')", name="status"),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "current_version_id"],
+            [
+                "storage_policy_version.tenant_id",
+                "storage_policy_version.policy_id",
+                "storage_policy_version.id",
+            ],
+            name="fk_storage_policy__current_version",
+            ondelete="RESTRICT",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        Index("ix_storage_policy__tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'ACTIVE'")
+    )
+    current_version_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class StoragePolicyVersionModel(Base):
+    """Immutable separate Workspace and Artifact storage capacity version."""
+
+    __tablename__ = "storage_policy_version"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "policy_id",
+            "version_no",
+            name="uq_storage_policy_version__tenant_policy_version",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "policy_id",
+            "id",
+            name="uq_storage_policy_version__tenant_policy_id",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "policy_id"],
+            ["storage_policy.tenant_id", "storage_policy.id"],
+            name="fk_storage_policy_version__tenant_policy",
+            ondelete="RESTRICT",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint("version_no >= 1", name="version_no"),
+        CheckConstraint(
+            "max_reserved_workspace_bytes IS NOT NULL OR "
+            "max_reserved_workspaces IS NOT NULL OR "
+            "max_reserved_artifact_bytes IS NOT NULL OR "
+            "max_reserved_artifacts IS NOT NULL",
+            name="at_least_one_limit",
+        ),
+        CheckConstraint(
+            "max_reserved_workspace_bytes IS NULL OR "
+            "max_reserved_workspace_bytes BETWEEN 1 AND 1125899906842624",
+            name="workspace_bytes_limit",
+        ),
+        CheckConstraint(
+            "max_reserved_workspaces IS NULL OR "
+            "max_reserved_workspaces BETWEEN 1 AND 1000000000",
+            name="workspace_count_limit",
+        ),
+        CheckConstraint(
+            "max_reserved_artifact_bytes IS NULL OR "
+            "max_reserved_artifact_bytes BETWEEN 1 AND 1125899906842624",
+            name="artifact_bytes_limit",
+        ),
+        CheckConstraint(
+            "max_reserved_artifacts IS NULL OR "
+            "max_reserved_artifacts BETWEEN 1 AND 1000000000",
+            name="artifact_count_limit",
+        ),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        Index(
+            "ix_storage_policy_version__tenant_policy_created",
+            "tenant_id",
+            "policy_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    policy_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    version_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_reserved_workspace_bytes: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    max_reserved_workspaces: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    max_reserved_artifact_bytes: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    max_reserved_artifacts: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class BudgetPolicyVersionModel(Base):
+    """Immutable UTC calendar-period model token budget version."""
+
+    __tablename__ = "budget_policy_version"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "policy_id",
+            "version_no",
+            name="uq_budget_policy_version__tenant_policy_version",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "policy_id",
+            "id",
+            name="uq_budget_policy_version__tenant_policy_id",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "policy_id"],
+            ["budget_policy.tenant_id", "budget_policy.id"],
+            name="fk_budget_policy_version__tenant_policy",
+            ondelete="RESTRICT",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint("version_no >= 1", name="version_no"),
+        CheckConstraint("period IN ('DAILY', 'MONTHLY')", name="period"),
+        CheckConstraint("enforcement IN ('HARD', 'SOFT')", name="enforcement"),
+        CheckConstraint("token_limit >= 1", name="token_limit"),
+        CheckConstraint(
+            "(cost_limit_amount IS NULL) = (cost_limit_currency IS NULL)",
+            name="cost_pair",
+        ),
+        CheckConstraint(
+            "cost_limit_amount IS NULL OR cost_limit_amount >= 0", name="cost_amount"
+        ),
+        CheckConstraint(
+            "cost_limit_currency IS NULL OR cost_limit_currency IN ('USD', 'CNY')",
+            name="cost_currency",
+        ),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        Index(
+            "ix_budget_policy_version__tenant_policy_created",
+            "tenant_id",
+            "policy_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    policy_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    version_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    period: Mapped[str] = mapped_column(String(20), nullable=False)
+    enforcement: Mapped[str] = mapped_column(String(20), nullable=False)
+    token_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_limit_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(28, 8), nullable=True
+    )
+    cost_limit_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    price_catalog_version: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
     )
     content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
     created_by: Mapped[UUID] = mapped_column(
@@ -624,9 +906,28 @@ class ModelUsageModel(Base):
         CheckConstraint(
             "(cost_amount IS NULL) = (cost_currency IS NULL)", name="cost_pair"
         ),
+        CheckConstraint(
+            "(cost_amount IS NULL) = (cost_source IS NULL)", name="cost_source_pair"
+        ),
+        CheckConstraint(
+            "cost_source IS NULL OR cost_source IN "
+            "('PROVIDER_REPORTED', 'CATALOG_CALCULATED')",
+            name="cost_source",
+        ),
+        CheckConstraint(
+            "(cost_source = 'CATALOG_CALCULATED') = "
+            "(price_catalog_version_id IS NOT NULL)",
+            name="catalog_provenance",
+        ),
         CheckConstraint("finished_at >= started_at", name="time_order"),
         Index("ix_model_usage__tenant_id_run_id", "tenant_id", "run_id"),
         Index("ix_model_usage__tenant_id_finished_at", "tenant_id", "finished_at"),
+        ForeignKeyConstraint(
+            ["tenant_id", "price_catalog_version_id"],
+            ["price_catalog_version.tenant_id", "price_catalog_version.id"],
+            name="fk_model_usage__tenant_price_catalog_version",
+            ondelete="RESTRICT",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
@@ -647,6 +948,13 @@ class ModelUsageModel(Base):
     token_estimated: Mapped[bool] = mapped_column(Boolean, nullable=False)
     cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(28, 8), nullable=True)
     cost_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    cost_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    price_catalog_version_id: Mapped[UUID | None] = mapped_column(
+        UUID_TYPE, nullable=True
+    )
+    cost_details_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -655,8 +963,113 @@ class ModelUsageModel(Base):
     )
 
 
+class PriceCatalogVersionModel(Base):
+    """Immutable tenant-scoped trusted price catalog version."""
+
+    __tablename__ = "price_catalog_version"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_price_catalog_version__tenant_id_id"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "model",
+            "effective_from",
+            name="uq_price_catalog_version__tenant_provider_model_effective",
+        ),
+        CheckConstraint("currency IN ('USD', 'CNY')", name="currency"),
+        CheckConstraint("status IN ('DRAFT', 'PUBLISHED')", name="status"),
+        CheckConstraint(
+            "effective_to IS NULL OR effective_to > effective_from",
+            name="effective_range",
+        ),
+        CheckConstraint("content_hash ~ '^sha256:[a-f0-9]{64}$'", name="content_hash"),
+        Index(
+            "ix_price_catalog_version__tenant_provider_model_effective",
+            "tenant_id",
+            "provider",
+            "model",
+            "effective_from",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'PUBLISHED'")
+    )
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    effective_to: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_ref: Mapped[str] = mapped_column(String(2048), nullable=False)
+    source_digest: Mapped[str] = mapped_column(String(80), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_by: Mapped[UUID] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("app_user.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class PriceCatalogRateModel(Base):
+    """One immutable token dimension rate inside a catalog version."""
+
+    __tablename__ = "price_catalog_rate"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "catalog_version_id",
+            "dimension",
+            name="uq_price_catalog_rate__tenant_version_dimension",
+        ),
+        CheckConstraint(
+            "dimension IN ('input_tokens', 'output_tokens', 'reasoning_tokens', "
+            "'cache_read_tokens', 'cache_write_tokens')",
+            name="dimension",
+        ),
+        CheckConstraint("unit_tokens >= 1", name="unit_tokens"),
+        CheckConstraint("unit_price >= 0", name="unit_price"),
+        ForeignKeyConstraint(
+            ["tenant_id", "catalog_version_id"],
+            ["price_catalog_version.tenant_id", "price_catalog_version.id"],
+            name="fk_price_catalog_rate__tenant_catalog_version",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_price_catalog_rate__tenant_catalog_version",
+            "tenant_id",
+            "catalog_version_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    catalog_version_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    dimension: Mapped[str] = mapped_column(String(32), nullable=False)
+    unit_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(28, 12), nullable=False)
+
+
 class BudgetReservationModel(Base):
-    """Conservative Run token reservation guarding concurrent model calls."""
+    """Conservative Run and tenant-period token reservation."""
 
     __tablename__ = "budget_reservation"
     __table_args__ = (
@@ -681,10 +1094,38 @@ class BudgetReservationModel(Base):
             "(status = 'RESERVED') = (finished_at IS NULL)",
             name="finished_status",
         ),
+        CheckConstraint(
+            "(budget_policy_id IS NULL AND budget_policy_version_id IS NULL "
+            "AND budget_period_started_at IS NULL AND budget_period_ends_at IS NULL) "
+            "OR (budget_policy_id IS NOT NULL "
+            "AND budget_policy_version_id IS NOT NULL "
+            "AND budget_period_started_at IS NOT NULL "
+            "AND budget_period_ends_at IS NOT NULL "
+            "AND budget_period_started_at < budget_period_ends_at)",
+            name="policy_period_snapshot",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "budget_policy_id", "budget_policy_version_id"],
+            [
+                "budget_policy_version.tenant_id",
+                "budget_policy_version.policy_id",
+                "budget_policy_version.id",
+            ],
+            name="fk_budget_reservation__budget_policy_version",
+            ondelete="RESTRICT",
+        ),
         Index(
             "ix_budget_reservation__tenant_run_status_expires",
             "tenant_id",
             "run_id",
+            "status",
+            "expires_at",
+        ),
+        Index(
+            "ix_budget_reservation__tenant_policy_period_status",
+            "tenant_id",
+            "budget_policy_id",
+            "budget_period_started_at",
             "status",
             "expires_at",
         ),
@@ -700,9 +1141,32 @@ class BudgetReservationModel(Base):
     user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_id: Mapped[str] = mapped_column(String(255), nullable=False)
     model_binding_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    budget_policy_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    budget_policy_version_id: Mapped[UUID | None] = mapped_column(
+        UUID_TYPE, nullable=True
+    )
+    budget_period_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    budget_period_ends_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
     consumed_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reserved_cost_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(28, 8), nullable=True
+    )
+    reserved_cost_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    canonical_input_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    counter_profile_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    counter_profile_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    counter_profile_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    upper_bound_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -715,6 +1179,123 @@ class BudgetReservationModel(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class CostLedgerEntryModel(Base):
+    """Append-only cost reservation, settlement and unknown-attempt fact."""
+
+    __tablename__ = "cost_ledger_entry"
+    __table_args__ = (
+        CheckConstraint(
+            "entry_type IN ('RESERVE', 'RELEASE', 'SETTLE', 'ADJUST', 'UNKNOWN')",
+            name="entry_type",
+        ),
+        CheckConstraint("currency IN ('USD', 'CNY')", name="currency"),
+        CheckConstraint("amount >= 0", name="amount"),
+        CheckConstraint("period_started_at < period_ends_at", name="period_range"),
+        CheckConstraint("entry_hash ~ '^sha256:[a-f0-9]{64}$'", name="entry_hash"),
+        Index(
+            "ix_cost_ledger__tenant_period_currency",
+            "tenant_id",
+            "period_started_at",
+            "currency",
+            "entry_type",
+        ),
+        Index(
+            "ix_cost_ledger__tenant_run_created", "tenant_id", "run_id", "created_at"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    reservation_id: Mapped[UUID | None] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("budget_reservation.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    budget_policy_id: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    budget_policy_version_id: Mapped[UUID | None] = mapped_column(
+        UUID_TYPE, nullable=True
+    )
+    price_catalog_version_id: Mapped[UUID | None] = mapped_column(
+        UUID_TYPE, nullable=True
+    )
+    entry_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(28, 8), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    period_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    period_ends_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    model_binding_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider_attempt_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    details_json: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    entry_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ModelProviderAttemptModel(Base):
+    """Immutable fact for every submitted or submission-unknown provider attempt."""
+
+    __tablename__ = "model_provider_attempt"
+    __table_args__ = (
+        CheckConstraint(
+            "submission_state IN ('submitted', 'unknown')", name="submission_state"
+        ),
+        CheckConstraint("attempt_no >= 1", name="attempt_no"),
+        CheckConstraint("finished_at >= started_at", name="time_order"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "idempotency_key",
+            "attempt_no",
+            name="uq_model_provider_attempt__request_attempt",
+        ),
+        Index(
+            "ix_model_provider_attempt__tenant_run",
+            "tenant_id",
+            "run_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    reservation_id: Mapped[UUID | None] = mapped_column(
+        UUID_TYPE,
+        ForeignKey("budget_reservation.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_request_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    submission_state: Mapped[str] = mapped_column(String(20), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
 
@@ -1737,6 +2318,206 @@ class AgentRunModel(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class RunAdmissionQueueModel(Base):
+    """Durable, tenant-scoped Run admission and deadline fact."""
+
+    __tablename__ = "run_admission_queue"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["agent_run.tenant_id", "agent_run.id"],
+            name="fk_run_admission_queue__tenant_run__agent_run",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_run_admission_queue__tenant_id_id"
+        ),
+        UniqueConstraint(
+            "tenant_id", "run_id", name="uq_run_admission_queue__tenant_run"
+        ),
+        CheckConstraint("priority IN ('NORMAL','HIGH')", name="priority"),
+        CheckConstraint(
+            "status IN ('WAITING','ADMITTED','CANCELLED','TIMED_OUT')",
+            name="status",
+        ),
+        CheckConstraint(
+            "length(capacity_domain) BETWEEN 1 AND 255", name="capacity_domain"
+        ),
+        CheckConstraint("deadline_at > queued_at", name="deadline_after_queue"),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        CheckConstraint(
+            "(status = 'WAITING' AND admitted_at IS NULL AND cancelled_at IS NULL) OR "
+            "(status = 'ADMITTED' AND admitted_at IS NOT NULL AND cancelled_at IS NULL) OR "
+            "(status IN ('CANCELLED','TIMED_OUT') AND admitted_at IS NULL "
+            "AND cancelled_at IS NOT NULL)",
+            name="terminal_timestamps",
+        ),
+        CheckConstraint(
+            "capacity_snapshot_json IS NULL OR "
+            "jsonb_typeof(capacity_snapshot_json) = 'object'",
+            name="capacity_snapshot_json",
+        ),
+        Index(
+            "ix_run_admission_queue__tenant_status_priority_queued",
+            "tenant_id",
+            "status",
+            "priority",
+            "queued_at",
+            "id",
+        ),
+        Index(
+            "ix_run_admission_queue__tenant_status_deadline",
+            "tenant_id",
+            "status",
+            "deadline_at",
+            "id",
+        ),
+        Index(
+            "ix_run_admission_queue__domain_status_queued",
+            "capacity_domain",
+            "status",
+            "queued_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    priority: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'NORMAL'")
+    )
+    capacity_domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'WAITING'")
+    )
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deadline_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    admitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    quota_policy_version_id: Mapped[UUID | None] = mapped_column(UUID_TYPE)
+    capacity_snapshot_json: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True, default=None
+    )
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class RunCapacityDomainModel(Base):
+    """Operator-configured hard ceiling for one frozen Runtime Target."""
+
+    __tablename__ = "run_capacity_domain"
+    __table_args__ = (
+        CheckConstraint("length(domain_key) BETWEEN 1 AND 255", name="domain_key"),
+        CheckConstraint(
+            "configured_slots BETWEEN 1 AND 1000000", name="configured_slots"
+        ),
+        CheckConstraint("status IN ('ACTIVE','DRAINING','DISABLED')", name="status"),
+        CheckConstraint(
+            "config_hash ~ '^sha256:[a-f0-9]{64}$' OR "
+            "config_hash = 'migration:unconfigured'",
+            name="config_hash",
+        ),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        Index("ix_run_capacity_domain__status_domain", "status", "domain_key"),
+    )
+
+    domain_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    configured_slots: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'DRAINING'")
+    )
+    config_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class RunCapacityLeaseModel(Base):
+    """Durable admission reservation; expiry alone never frees a live Run."""
+
+    __tablename__ = "run_capacity_lease"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["agent_run.tenant_id", "agent_run.id"],
+            name="fk_run_capacity_lease__tenant_run__agent_run",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_run_capacity_lease__tenant_id_id"),
+        UniqueConstraint("run_id", name="uq_run_capacity_lease__run_id"),
+        CheckConstraint("expires_at > acquired_at", name="expires_at"),
+        CheckConstraint("renewed_at >= acquired_at", name="renewed_at"),
+        CheckConstraint(
+            "(released_at IS NULL AND release_reason IS NULL) OR "
+            "(released_at IS NOT NULL AND released_at >= acquired_at AND "
+            "release_reason IN ('RUN_TERMINAL','ORPHANED'))",
+            name="release_state",
+        ),
+        CheckConstraint("resource_version >= 1", name="resource_version"),
+        Index(
+            "ix_run_capacity_lease__domain_active",
+            "domain_key",
+            "acquired_at",
+            "id",
+            postgresql_where=text("released_at IS NULL"),
+        ),
+        Index(
+            "ix_run_capacity_lease__tenant_expires",
+            "tenant_id",
+            "expires_at",
+            "id",
+            postgresql_where=text("released_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    domain_key: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("run_capacity_domain.domain_key", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False
+    )
+    run_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    renewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    release_reason: Mapped[str | None] = mapped_column(String(32))
+    resource_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+
+
 class RunAttemptModel(Base):
     """One fenced execution attempt belonging to a Run."""
 
@@ -2251,6 +3032,14 @@ class ArtifactModel(Base):
             "(status <> 'DELETED' AND deleted_at IS NULL)",
             name="deleted_at_status",
         ),
+        CheckConstraint(
+            "(status IN ('REJECTED','FAILED','EXPIRED') "
+            "AND retention_delete_after IS NOT NULL) OR "
+            "(status IN ('UPLOADING','SCANNING','AVAILABLE') "
+            "AND retention_delete_after IS NULL) OR "
+            "status IN ('DELETING','DELETED')",
+            name="retention_delete_after_status",
+        ),
         Index(
             "ix_artifact__tenant_owner_created_at",
             "tenant_id",
@@ -2265,6 +3054,18 @@ class ArtifactModel(Base):
         ),
         Index(
             "ix_artifact__tenant_status_expires_at", "tenant_id", "status", "expires_at"
+        ),
+        Index(
+            "ix_artifact__tenant_status_upload_expires_at",
+            "tenant_id",
+            "status",
+            "upload_expires_at",
+        ),
+        Index(
+            "ix_artifact__tenant_status_retention_delete_after",
+            "tenant_id",
+            "status",
+            "retention_delete_after",
         ),
     )
 
@@ -2304,7 +3105,61 @@ class ArtifactModel(Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    retention_delete_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ArtifactLegalHoldModel(Base):
+    """One independently releasable compliance hold on an Artifact."""
+
+    __tablename__ = "artifact_legal_hold"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "artifact_id"],
+            ["artifact.tenant_id", "artifact.id"],
+            name="fk_artifact_legal_hold__tenant_artifact",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_artifact_legal_hold__tenant_id"),
+        CheckConstraint("length(case_ref) BETWEEN 1 AND 255", name="case_ref"),
+        CheckConstraint("length(reason) BETWEEN 1 AND 2000", name="reason"),
+        CheckConstraint(
+            "(released_at IS NULL AND released_by IS NULL) OR "
+            "(released_at IS NOT NULL AND released_by IS NOT NULL "
+            "AND released_at >= placed_at)",
+            name="release_fact",
+        ),
+        Index(
+            "ix_artifact_legal_hold__tenant_artifact_active",
+            "tenant_id",
+            "artifact_id",
+            postgresql_where=text("released_at IS NULL"),
+        ),
+        Index(
+            "uq_artifact_legal_hold__tenant_artifact_case_active",
+            "tenant_id",
+            "artifact_id",
+            "case_ref",
+            unique=True,
+            postgresql_where=text("released_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        UUID_TYPE, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    artifact_id: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    case_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(String(2000), nullable=False)
+    placed_by: Mapped[UUID] = mapped_column(UUID_TYPE, nullable=False)
+    placed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    released_by: Mapped[UUID | None] = mapped_column(UUID_TYPE, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -3020,6 +3875,21 @@ class ModelBindingSnapshotModel(Base):
             "rate_limit_rpm IS NULL OR rate_limit_rpm >= 1", name="rate_limit_rpm"
         ),
         CheckConstraint(
+            "max_output_tokens IS NULL OR max_output_tokens >= 1",
+            name="output_cap",
+        ),
+        CheckConstraint(
+            "max_reasoning_tokens IS NULL OR max_reasoning_tokens >= 1",
+            name="reasoning_cap",
+        ),
+        CheckConstraint(
+            "(counter_profile_id IS NULL AND counter_profile_version IS NULL "
+            "AND counter_profile_hash IS NULL) OR (counter_profile_id IS NOT NULL "
+            "AND counter_profile_version IS NOT NULL AND counter_profile_hash IS NOT NULL "
+            "AND counter_profile_hash ~ '^sha256:[a-f0-9]{64}$')",
+            name="counter_profile",
+        ),
+        CheckConstraint(
             "snapshot_hash ~ '^sha256:[a-f0-9]{64}$'", name="snapshot_hash"
         ),
         Index(
@@ -3054,6 +3924,16 @@ class ModelBindingSnapshotModel(Base):
     )
     max_context_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     rate_limit_rpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_output_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_reasoning_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    counter_profile_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    counter_profile_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    counter_profile_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    billing_semantics_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     snapshot_hash: Mapped[str] = mapped_column(String(80), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")

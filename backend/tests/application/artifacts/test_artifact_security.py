@@ -278,5 +278,6 @@ def _artifact(content: bytes) -> ArtifactRecord:
         created_at=NOW - timedelta(minutes=10),
         updated_at=NOW - timedelta(minutes=1),
         expires_at=NOW + timedelta(days=30),
+        retention_delete_after=None,
         deleted_at=None,
     )

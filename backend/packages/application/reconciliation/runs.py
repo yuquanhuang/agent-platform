@@ -11,7 +11,7 @@ from packages.application.outbox.run import RunWorkflowStartStore
 from packages.contracts.public import TenantContext
 from packages.contracts.temporal import CancelRunSignal
 
-ReconciledRunStatus = Literal["CREATED", "CANCELLING"]
+ReconciledRunStatus = Literal["CREATED", "QUEUED", "CANCELLING"]
 WorkflowExecutionStatus = Literal[
     "RUNNING",
     "COMPLETED",
@@ -42,6 +42,22 @@ class RunWorkflowExecution:
 
 
 class RunReconciliationStore(RunWorkflowStartStore, Protocol):
+    async def process_capacity_admission_domains(
+        self,
+        scheduler_context: TenantContext,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> tuple[int, int, int, int]: ...
+
+    async def process_admission_queue(
+        self,
+        context: TenantContext,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> tuple[int, int]: ...
+
     async def list_stalled_runs(
         self,
         context: TenantContext,
@@ -90,6 +106,10 @@ class RunReconciliationSummary:
     requests_requeued: int = 0
     cancellations_signalled: int = 0
     unresolved: int = 0
+    queue_admitted: int = 0
+    queue_timed_out: int = 0
+    capacity_leases_released: int = 0
+    capacity_leases_renewed: int = 0
 
 
 class RunReconciler:
@@ -174,6 +194,40 @@ class RunReconciler:
             requests_requeued=requests_requeued,
             cancellations_signalled=cancellations_signalled,
             unresolved=unresolved,
+        )
+
+    async def process_admission_queue(
+        self, context: TenantContext, *, now: datetime
+    ) -> RunReconciliationSummary:
+        """Run only the bounded scheduler pass for a low-latency queue loop."""
+
+        queue_admitted = queue_timed_out = 0
+        process_queue = getattr(self._store, "process_admission_queue", None)
+        if process_queue is not None:
+            queue_admitted, queue_timed_out = await process_queue(
+                context, now=now, limit=self._batch_size
+            )
+        return RunReconciliationSummary(
+            queue_admitted=queue_admitted,
+            queue_timed_out=queue_timed_out,
+        )
+
+    async def process_capacity_admission_domains(
+        self, scheduler_context: TenantContext, *, now: datetime
+    ) -> RunReconciliationSummary:
+        process_domains = getattr(
+            self._store, "process_capacity_admission_domains", None
+        )
+        if process_domains is None:
+            return await self.process_admission_queue(scheduler_context, now=now)
+        admitted, timed_out, released, renewed = await process_domains(
+            scheduler_context, now=now, limit=self._batch_size
+        )
+        return RunReconciliationSummary(
+            queue_admitted=admitted,
+            queue_timed_out=timed_out,
+            capacity_leases_released=released,
+            capacity_leases_renewed=renewed,
         )
 
 

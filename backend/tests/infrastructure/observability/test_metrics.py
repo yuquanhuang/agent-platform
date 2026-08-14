@@ -94,3 +94,34 @@ def test_worker_recovery_metrics_remain_low_cardinality() -> None:
     assert "agent_platform_worker_consecutive_failures" in payload
     assert "tenant_id" not in payload
     assert "run_id" not in payload
+
+
+def test_event_sse_queue_and_capacity_metrics_remain_low_cardinality() -> None:
+    metrics = PlatformMetrics()
+    metrics.observe_run_event_batch(
+        outcome="success", duration=0.025, created=2, duplicate=1
+    )
+    metrics.sse_opened()
+    metrics.observe_sse_frame(frame_type="run_event", visibility_delay_seconds=0.1)
+    metrics.sse_closed(outcome="terminal")
+    metrics.observe_run_reconciliation(
+        examined=0,
+        mappings_recorded=0,
+        requests_requeued=0,
+        cancellations_signalled=0,
+        unresolved=0,
+        queue_admitted=2,
+        queue_timed_out=1,
+    )
+    metrics.observe_capacity_leases(released=1, renewed=1)
+
+    payload = generate_latest(metrics.registry).decode()
+
+    assert 'agent_platform_run_events_total{outcome="created"} 2.0' in payload
+    assert "agent_platform_sse_connections 0.0" in payload
+    assert 'agent_platform_run_queue_events_total{outcome="admitted"} 2.0' in payload
+    assert (
+        'agent_platform_capacity_lease_events_total{outcome="renewed"} 1.0' in payload
+    )
+    for forbidden in ("tenant_id", "run_id", "workflow_id", "session_id"):
+        assert forbidden not in payload

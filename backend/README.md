@@ -167,9 +167,38 @@ Staging and production API composition fail closed unless all five limits are
 configured: `AP_RUN_MAX_NONTERMINAL_PER_TENANT`,
 `AP_RUN_MAX_NONTERMINAL_PER_USER`, `AP_RUN_MAX_NONTERMINAL_PER_AGENT`,
 `AP_RUN_MAX_NONTERMINAL_AGENTSCOPE` and `AP_RUN_MAX_NONTERMINAL_CODEX`.
-This is a hard-rejection boundary, not a durable queue. Bounded waiting,
-budget/quota policy, Sandbox/storage quota and Event/SSE backpressure remain
-later AP-E7-003/AP-E7-004 work.
+
+When Artifact storage is enabled, staging and production must also configure
+`AP_ARTIFACT_MAX_RESERVED_BYTES_PER_TENANT` and
+`AP_ARTIFACT_MAX_RESERVED_COUNT_PER_TENANT`. Upload reservations that would
+exceed either tenant hard limit return the existing `RATE_LIMITED` error before
+an object-store grant is issued. Artifacts continue to reserve capacity until
+physical deletion reaches `DELETED`.
+
+Tenant administrators can manage one durable StoragePolicy with separate
+Workspace byte/count and Artifact byte/count pools. ACTIVE limits only narrow
+the deployment hard limits; DISABLED or absent policies fall back to deployment
+configuration. Sandbox Manager defaults Workspace tenant reservations to 10 GiB
+and 100 Workspaces through `AP_WORKSPACE_MAX_RESERVED_BYTES_PER_TENANT` and
+`AP_WORKSPACE_MAX_RESERVED_COUNT_PER_TENANT`. Existing Run Workspace quotas stay
+frozen; only new Workspace admission observes the current policy version.
+
+Artifact retention is frozen per lifecycle fact. `AVAILABLE` Artifacts default
+to 30 days and `FAILED`/`REJECTED`/`EXPIRED` Artifacts default to a seven-day
+forensic window. Active legal holds are keyed by case reference and block both
+automatic and manual deletion. The API and Event Worker must receive identical
+values for `AP_ARTIFACT_RETENTION_SECONDS`,
+`AP_ARTIFACT_FORENSIC_RETENTION_SECONDS`,
+`AP_ARTIFACT_DELETE_RECOVERY_DELAY_SECONDS` and
+`AP_ARTIFACT_DELETE_RECOVERY_MAX_OPERATIONS`; existing deadlines never drift
+when configuration changes.
+
+The Reconciliation Worker owns global capacity admission by Deployment
+`runtime_target_id`. `AP_RUN_CAPACITY_DOMAIN_SLOTS` is a required JSON mapping
+for staging/production reconciliation, while lease TTL and cross-tenant quantum
+default to 300 seconds and 1. A live Run's expired lease is renewed or fails
+closed; only terminal or orphaned leases are released. Redis is not the lease
+fact source.
 
 Migration `0003_temporal_outbox` adds the tenant-scoped `outbox_event` table,
 RLS and the `status + next_attempt_at` claim index. Business use cases add rows

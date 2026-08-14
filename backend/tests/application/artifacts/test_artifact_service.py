@@ -12,6 +12,7 @@ from packages.application.artifacts import (
     ArtifactGrantUrlPolicy,
     ArtifactManagementService,
     ArtifactObjectObservation,
+    ArtifactRetentionPolicy,
     ArtifactStore,
     ArtifactUploadGrant,
 )
@@ -68,6 +69,7 @@ class ArtifactStub:
         self.marked_scanning = False
         self.download_calls = 0
         self.download_confirmed = True
+        self.created_expires_at: datetime | None = None
 
     async def resolve_tenant_access(
         self, principal: AuthenticatedPrincipal, metadata: RequestMetadata
@@ -86,6 +88,7 @@ class ArtifactStub:
         )
 
     async def create_upload(self, context: TenantContext, **kwargs: object):
+        self.created_expires_at = cast(datetime, kwargs["expires_at"])
         return self.record
 
     async def get_owned(self, context: TenantContext, **kwargs: object):
@@ -166,6 +169,7 @@ def _record(
         created_at=NOW,
         updated_at=NOW,
         expires_at=expires_at or NOW + timedelta(days=30),
+        retention_delete_after=None,
         deleted_at=None,
     )
 
@@ -180,7 +184,10 @@ class StaticDownloadCredentials:
 
 
 def _service(
-    stub: ArtifactStub, *, base_url: str = "https://objects.test"
+    stub: ArtifactStub,
+    *,
+    base_url: str = "https://objects.test",
+    retention_policy: ArtifactRetentionPolicy | None = None,
 ) -> ArtifactManagementService:
     return ArtifactManagementService(
         stub,
@@ -189,6 +196,7 @@ def _service(
         ArtifactGrantUrlPolicy(frozenset({"https://objects.test"})),
         StaticDownloadCredentials(),
         base_url,
+        retention_policy,
     )
 
 
@@ -231,6 +239,29 @@ async def test_create_upload_returns_restricted_object_store_grant() -> None:
 
     assert accepted.artifact_id == str(ARTIFACT_ID)
     assert accepted.required_headers == {"Content-Type": "text/plain"}
+
+
+@pytest.mark.asyncio
+async def test_create_upload_freezes_configured_available_retention() -> None:
+    stub = ArtifactStub()
+    before = datetime.now(UTC)
+
+    await _service(
+        stub,
+        retention_policy=ArtifactRetentionPolicy(
+            available_retention=timedelta(days=45)
+        ),
+    ).create_upload(
+        _principal(),
+        request=_create_request(),
+        idempotency_key="artifact-create-retention",
+        metadata=_metadata(),
+    )
+    after = datetime.now(UTC)
+
+    assert stub.created_expires_at is not None
+    assert before + timedelta(days=45) <= stub.created_expires_at
+    assert stub.created_expires_at <= after + timedelta(days=45)
 
 
 @pytest.mark.asyncio
@@ -322,16 +353,19 @@ async def test_get_artifact_requires_read_permission() -> None:
 async def test_download_returns_short_lived_single_artifact_grant() -> None:
     stub = ArtifactStub()
     stub.record = _record(status="AVAILABLE")
+    before = datetime.now(UTC)
 
     result = await _service(stub).create_download(
         _principal(), artifact_id=str(ARTIFACT_ID), metadata=_metadata()
     )
+    after = datetime.now(UTC)
 
     assert result.url.startswith(
         "https://objects.test/api/v1/artifact-downloads/55555555-5555-4555-8555-555555555555"
     )
     assert "token=" in result.url
-    assert result.expires_at <= NOW + timedelta(minutes=6)
+    assert before + timedelta(minutes=5) <= result.expires_at
+    assert result.expires_at <= after + timedelta(minutes=5)
     assert stub.download_calls == 1
 
 

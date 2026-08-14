@@ -170,5 +170,6 @@ def _artifact(artifact_id: UUID) -> ArtifactRecord:
         created_at=now,
         updated_at=now,
         expires_at=now + timedelta(days=1),
+        retention_delete_after=None,
         deleted_at=None,
     )

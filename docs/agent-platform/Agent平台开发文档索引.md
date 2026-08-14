@@ -1,6 +1,6 @@
 # Agent 平台开发文档索引
 
-> 文档版本：V2.4
+> 文档版本：V2.10
 > 文档状态：开发输入基线
 
 ## 1. 文档集合与阅读顺序
@@ -110,7 +110,7 @@ Epic 8：Codex ACP
 Epic 9：Session Sandbox、知识库、评测、Schedule、A2A Client
 ```
 
-R14 在 Epic 7 增加 durable QuotaPolicy：资源管理 OpenAPI、不可变版本、RLS/RBAC/Audit 和 Run 原子准入已冻结；BudgetPolicy、存储/速率配额和排队仍按 AP-E7-003 后续子阶段推进。
+R20 之后，AP-E7-003 代码与契约已完成：Artifact 创建时冻结 AVAILABLE `expires_at`（默认 30 天），取证状态冻结 `retention_delete_after`（默认 7 天），多 Hold 阻断自动/手动删除；Run 容量以 `runtime_target_id` 为全局域，通过明确 slots、Lease 和跨租户 quantum 防止超配；Cost Budget 已扩展 HARD/SOFT、USD/CNY `cost_limit`、可信调用前上界、append-only ledger 和 Provider attempt 事实。生产 Counter/Planner/Attempt Store 组合、官方 Counter Golden、durable PriceCatalog 管理入口、SOFT 通知和真实 PostgreSQL Capacity 专项仍是明确待办；准确基线版本与 SHA-256 以 `agent-platform-baseline.yaml` 最终冻结为准。
 
 每个 Epic 必须以纵向可验收场景结束，不能只交付数据库表或管理页面。
 
@@ -130,7 +130,7 @@ R14 在 Epic 7 增加 durable QuotaPolicy：资源管理 OpenAPI、不可变版�
 
 机器可读契约与自然语言示例冲突时不得继续编码，必须先更新基线和变更记录。
 
-当前冻结版本：核心 OpenAPI 1.6.0，资源管理 OpenAPI 1.1.0。准确文件版本和 SHA-256 以 `agent-platform-baseline.yaml` 为准。
+当前冻结版本：核心 OpenAPI 1.6.0，资源管理 OpenAPI 1.4.0。准确文件版本和 SHA-256 以 `agent-platform-baseline.yaml` 为准。
 
 ## 9. 版本变更摘要
 

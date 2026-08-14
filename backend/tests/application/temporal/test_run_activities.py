@@ -105,7 +105,7 @@ def source() -> RunSpecCompilationSource:
         cost_budget_amount=Decimal("1.25"),
         cost_budget_currency="USD",
         idempotency_key="run-request-1",
-        status="CREATED",
+        status="QUEUED",
         current_attempt=0,
         workflow_id=None,
     )
@@ -341,7 +341,7 @@ def activities(
 
 
 @pytest.mark.asyncio
-async def test_prepare_allocates_attempt_then_compiles_from_immutable_source() -> None:
+async def test_prepare_allocates_admitted_queued_run_then_compiles_source() -> None:
     store = StoreStub()
     compiler = CompilerStub()
     result = await activities(store, compiler, ExecutorStub()).prepare_agent_run(

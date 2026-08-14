@@ -27,6 +27,12 @@ from packages.application.artifacts.lifecycle import (
     PermanentArtifactDeleteError,
     RetryableArtifactDeleteError,
 )
+from packages.application.artifacts.retention import (
+    ArtifactLegalHoldRecord,
+    ArtifactRetentionAdministrationService,
+    ArtifactRetentionAdministrationStore,
+    ArtifactRetentionPolicy,
+)
 from packages.application.artifacts.revocations import (
     ArtifactDownloadRevocationDispatcher,
     ArtifactDownloadRevocationNotification,
@@ -94,6 +100,7 @@ __all__ = [
     "ArtifactDownloadRevocationSubscription",
     "ArtifactDownloadRevocationUnavailable",
     "ArtifactGrantUrlPolicy",
+    "ArtifactLegalHoldRecord",
     "ArtifactLifecycleDispatcher",
     "ArtifactLifecycleStore",
     "ArtifactManagementService",
@@ -102,6 +109,9 @@ __all__ = [
     "ArtifactObjectStore",
     "ArtifactObjectStoreUnavailable",
     "ArtifactQuarantineContentReader",
+    "ArtifactRetentionAdministrationService",
+    "ArtifactRetentionAdministrationStore",
+    "ArtifactRetentionPolicy",
     "ArtifactScanDispatcher",
     "ArtifactScanProcessor",
     "ArtifactScanStore",

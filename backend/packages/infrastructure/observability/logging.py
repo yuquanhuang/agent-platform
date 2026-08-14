@@ -10,6 +10,9 @@ from datetime import UTC, datetime
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 _trace_id: ContextVar[str | None] = ContextVar("trace_id", default=None)
 _tenant_id: ContextVar[str | None] = ContextVar("tenant_id", default=None)
+_run_id: ContextVar[str | None] = ContextVar("run_id", default=None)
+_workflow_id: ContextVar[str | None] = ContextVar("workflow_id", default=None)
+_release_id: ContextVar[str | None] = ContextVar("release_id", default=None)
 
 
 @contextmanager
@@ -18,6 +21,9 @@ def bind_log_context(
     request_id: str | None = None,
     trace_id: str | None = None,
     tenant_id: str | None = None,
+    run_id: str | None = None,
+    workflow_id: str | None = None,
+    release_id: str | None = None,
 ) -> Generator[None, None, None]:
     """Bind safe correlation identifiers for the current async context."""
 
@@ -27,6 +33,9 @@ def bind_log_context(
             (_request_id, request_id),
             (_trace_id, trace_id),
             (_tenant_id, tenant_id),
+            (_run_id, run_id),
+            (_workflow_id, workflow_id),
+            (_release_id, release_id),
         ):
             if value is not None:
                 tokens.append((variable, variable.set(value)))
@@ -57,6 +66,9 @@ class JsonLogFormatter(logging.Formatter):
             ("request_id", _request_id.get()),
             ("trace_id", _trace_id.get()),
             ("tenant_id", _tenant_id.get()),
+            ("run_id", _run_id.get()),
+            ("workflow_id", _workflow_id.get()),
+            ("release_id", _release_id.get()),
         ):
             if value is not None:
                 payload[key] = value

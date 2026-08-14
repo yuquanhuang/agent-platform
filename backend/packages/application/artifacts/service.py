@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from packages.application.artifacts.downloads import (
     ArtifactDownloadCredentialIssuer,
 )
+from packages.application.artifacts.retention import ArtifactRetentionPolicy
 from packages.application.artifacts.url_security import ArtifactGrantUrlPolicy
 from packages.application.metadata import RequestMetadata
 from packages.application.resources.hashing import canonical_request_hash
@@ -45,7 +46,6 @@ ARTIFACT_SCAN_REQUESTED_EVENT = "artifact.scan_requested.v1"
 ARTIFACT_DELETE_REQUESTED_EVENT = "artifact.delete_requested.v1"
 ARTIFACT_UPLOAD_TTL = timedelta(minutes=15)
 ARTIFACT_DOWNLOAD_TTL = timedelta(minutes=5)
-ARTIFACT_RETENTION = timedelta(days=30)
 _CONTENT_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 _HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _FORBIDDEN_UPLOAD_HEADERS = frozenset(
@@ -198,6 +198,7 @@ class ArtifactManagementService:
         url_policy: ArtifactGrantUrlPolicy,
         download_credentials: ArtifactDownloadCredentialIssuer,
         download_gateway_base_url: str,
+        retention_policy: ArtifactRetentionPolicy | None = None,
     ) -> None:
         self._access_resolver = access_resolver
         self._store = store
@@ -205,6 +206,7 @@ class ArtifactManagementService:
         self._url_policy = url_policy
         self._download_credentials = download_credentials
         self._download_gateway_base_url = download_gateway_base_url.rstrip("/")
+        self._retention_policy = retention_policy or ArtifactRetentionPolicy()
 
     async def create_upload(
         self,
@@ -232,7 +234,7 @@ class ArtifactManagementService:
                 f"artifact/{artifact_id}/source"
             ),
             upload_expires_at=now + ARTIFACT_UPLOAD_TTL,
-            expires_at=now + ARTIFACT_RETENTION,
+            expires_at=now + self._retention_policy.available_retention,
             idempotency_key=idempotency_key,
             request_hash=canonical_request_hash("artifact.upload.create", request),
             metadata=metadata,

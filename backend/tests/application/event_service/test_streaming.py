@@ -1,11 +1,12 @@
 """History-first SSE wake-up, fallback polling and terminal-close tests."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
 import pytest
+from prometheus_client import generate_latest
 from pydantic import JsonValue
 
 from packages.application.event_service import (
@@ -21,6 +22,7 @@ from packages.application.event_service import (
 from packages.application.public import RequestMetadata
 from packages.contracts.public import AuthenticatedPrincipal, SubjectType, TenantContext
 from packages.domain.public import TenantAccess
+from packages.infrastructure.observability import PlatformMetrics
 
 TENANT_ID = UUID("11111111-1111-4111-8111-111111111111")
 ACTOR_ID = UUID("22222222-2222-4222-8222-222222222222")
@@ -230,11 +232,13 @@ async def test_stream_polls_postgresql_when_notification_source_is_unavailable()
         sleeps += 1
         store.events.append(record(2, "run_succeeded"))
 
+    metrics = PlatformMetrics()
     service = RunEventStreamService(
         query_service(store),
         cast(RunEventNotificationSource, UnavailableSource()),
         poll_interval_seconds=0.1,
         sleep=sleep,
+        metrics=metrics,
     )
 
     stream = await service.open_stream(
@@ -245,3 +249,41 @@ async def test_stream_polls_postgresql_when_notification_source_is_unavailable()
     assert sleeps == 1
     assert b": heartbeat\n\n" in payload
     assert payload.count(b"event: run_event") == 2
+    metrics_payload = generate_latest(metrics.registry).decode()
+    assert 'outcome="notification_fallback"' in metrics_payload
+    assert 'outcome="terminal"' in metrics_payload
+
+
+@pytest.mark.asyncio
+async def test_stream_records_connection_frames_and_fallback_metrics() -> None:
+    store = MutableEventStore([record(1, "run_created"), record(2, "run_succeeded")])
+    metrics = PlatformMetrics()
+    service = RunEventStreamService(query_service(store), metrics=metrics)
+
+    stream = await service.open_stream(
+        principal(), run_id=str(RUN_ID), after=0, metadata=METADATA
+    )
+    await collect(stream)
+    payload = generate_latest(metrics.registry).decode()
+
+    assert "agent_platform_sse_connections 0.0" in payload
+    assert 'frame_type="run_event"' in payload
+    assert 'outcome="terminal"' in payload
+
+
+@pytest.mark.asyncio
+async def test_stream_counts_connection_only_while_generator_is_running() -> None:
+    store = MutableEventStore([record(1, "run_created"), record(2, "run_succeeded")])
+    metrics = PlatformMetrics()
+    service = RunEventStreamService(query_service(store), metrics=metrics)
+
+    stream = await service.open_stream(
+        principal(), run_id=str(RUN_ID), after=0, metadata=METADATA
+    )
+    assert metrics.registry.get_sample_value("agent_platform_sse_connections") == 0
+
+    await anext(stream)
+    assert metrics.registry.get_sample_value("agent_platform_sse_connections") == 1
+
+    await cast(AsyncGenerator[bytes, None], stream).aclose()
+    assert metrics.registry.get_sample_value("agent_platform_sse_connections") == 0

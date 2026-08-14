@@ -25,10 +25,20 @@ def test_local_defaults_are_safe_and_match_frozen_baseline() -> None:
     assert settings.sse_heartbeat_seconds == 15.0
     assert settings.sse_poll_interval_seconds == 1.0
     assert settings.sse_send_timeout_seconds == 15.0
+    assert settings.worker_metrics_host == "127.0.0.1"
+    assert settings.worker_metrics_port == 9090
     assert settings.sandbox_provider_timeout_seconds == 60.0
     assert settings.artifact_public_origins == ()
+    assert settings.artifact_max_reserved_bytes_per_tenant is None
+    assert settings.artifact_max_reserved_count_per_tenant is None
+    assert settings.workspace_max_reserved_bytes_per_tenant == 10_737_418_240
+    assert settings.workspace_max_reserved_count_per_tenant == 100
     assert settings.run_max_nonterminal_per_tenant is None
     assert settings.run_max_nonterminal_codex is None
+    assert settings.run_queue_max_wait_seconds == 300
+    assert settings.run_queue_max_pending_per_tenant == 1_000
+    assert settings.run_queue_admission_batch_size == 50
+    assert settings.run_queue_poll_interval_seconds == 1.0
     assert settings.internal_service_token_audience == "sandbox-manager"
     assert settings.internal_service_token_ttl_seconds == 60
     assert settings.sandbox_manager_request_timeout_seconds == 10.0
@@ -82,6 +92,52 @@ def test_artifact_public_origins_load_as_explicit_tuple() -> None:
     assert settings.artifact_public_origins == ("https://artifacts.example.test",)
 
 
+def test_artifact_storage_limits_are_positive_and_bounded() -> None:
+    settings = AppSettings.model_validate(
+        {
+            "artifact_max_reserved_bytes_per_tenant": 1_073_741_824,
+            "artifact_max_reserved_count_per_tenant": 10_000,
+        }
+    )
+
+    assert settings.artifact_max_reserved_bytes_per_tenant == 1_073_741_824
+    assert settings.artifact_max_reserved_count_per_tenant == 10_000
+
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"artifact_max_reserved_bytes_per_tenant": 0})
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"artifact_max_reserved_count_per_tenant": 0})
+
+
+def test_workspace_storage_limits_are_positive_and_bounded() -> None:
+    settings = AppSettings.model_validate(
+        {
+            "workspace_max_reserved_bytes_per_tenant": 2_147_483_648,
+            "workspace_max_reserved_count_per_tenant": 20,
+        }
+    )
+
+    assert settings.workspace_max_reserved_bytes_per_tenant == 2_147_483_648
+    assert settings.workspace_max_reserved_count_per_tenant == 20
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"workspace_max_reserved_bytes_per_tenant": 0})
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"workspace_max_reserved_count_per_tenant": 0})
+
+
+def test_artifact_retention_defaults_and_bounds() -> None:
+    settings = AppSettings()
+
+    assert settings.artifact_retention_seconds == 2_592_000
+    assert settings.artifact_forensic_retention_seconds == 604_800
+    assert settings.artifact_delete_recovery_delay_seconds == 3_600
+    assert settings.artifact_delete_recovery_max_operations == 3
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"artifact_retention_seconds": 299})
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"artifact_delete_recovery_max_operations": 0})
+
+
 def test_run_capacity_limits_are_positive_and_bounded() -> None:
     settings = AppSettings.model_validate(
         {
@@ -98,6 +154,47 @@ def test_run_capacity_limits_are_positive_and_bounded() -> None:
 
     with pytest.raises(ValidationError):
         AppSettings.model_validate({"run_max_nonterminal_per_user": 0})
+
+
+def test_run_queue_limits_are_positive_and_bounded() -> None:
+    settings = AppSettings.model_validate(
+        {
+            "run_queue_max_wait_seconds": 600,
+            "run_queue_max_pending_per_tenant": 2_000,
+            "run_queue_admission_batch_size": 75,
+            "run_queue_poll_interval_seconds": 0.5,
+        }
+    )
+
+    assert settings.run_queue_max_wait_seconds == 600
+    assert settings.run_queue_max_pending_per_tenant == 2_000
+    assert settings.run_queue_admission_batch_size == 75
+    assert settings.run_queue_poll_interval_seconds == 0.5
+
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"run_queue_max_wait_seconds": 0})
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"run_queue_admission_batch_size": 501})
+
+
+def test_run_capacity_domain_settings_parse_json_and_are_bounded() -> None:
+    settings = AppSettings.model_validate(
+        {
+            "run_capacity_domain_slots": '{"rt_agentscope_default": 100}',
+            "run_capacity_lease_ttl_seconds": 600,
+            "run_capacity_tenant_quantum": 2,
+        }
+    )
+
+    assert settings.run_capacity_domain_slots == {"rt_agentscope_default": 100}
+    assert settings.run_capacity_lease_ttl_seconds == 600
+    assert settings.run_capacity_tenant_quantum == 2
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"run_capacity_lease_ttl_seconds": 29})
+    with pytest.raises(ValidationError):
+        AppSettings.model_validate({"run_capacity_tenant_quantum": 101})
+    with pytest.raises(ValidationError, match="JSON object"):
+        AppSettings.model_validate({"run_capacity_domain_slots": "not-json"})
 
 
 def test_internal_service_token_limits_are_bounded() -> None:

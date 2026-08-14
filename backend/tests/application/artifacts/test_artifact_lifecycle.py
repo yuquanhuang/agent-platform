@@ -33,7 +33,10 @@ class LifecycleStub:
     def __init__(self) -> None:
         self.artifact = _artifact()
         self.events = [_event()]
+        self.reclaimed = 0
         self.expired = 0
+        self.purged = 0
+        self.recovered = 0
         self.deleted = 0
         self.failed_codes: list[str] = []
         self.published: list[UUID] = []
@@ -44,6 +47,24 @@ class LifecycleStub:
 
     async def expire_due(self, context: TenantContext, **kwargs: object) -> int:
         self.expired += 1
+        return 0
+
+    async def reclaim_expired_uploads(
+        self, context: TenantContext, **kwargs: object
+    ) -> int:
+        self.reclaimed += 1
+        return 0
+
+    async def purge_retention_due(
+        self, context: TenantContext, **kwargs: object
+    ) -> int:
+        self.purged += 1
+        return 0
+
+    async def recover_failed_deletes(
+        self, context: TenantContext, **kwargs: object
+    ) -> int:
+        self.recovered += 1
         return 0
 
     async def get_for_delete(self, context: TenantContext, **kwargs: object):
@@ -111,6 +132,7 @@ def _artifact(*, status: str = "DELETING") -> ArtifactRecord:
         created_at=NOW,
         updated_at=NOW,
         expires_at=NOW + timedelta(days=30),
+        retention_delete_after=None,
         deleted_at=NOW if status == "DELETED" else None,
     )
 
@@ -165,7 +187,10 @@ async def test_lifecycle_expires_due_then_deletes_objects_and_tombstones() -> No
 
     summary = await _dispatcher(stub).dispatch_tenant_once(_context(), now=NOW)
 
+    assert stub.reclaimed == 1
     assert stub.expired == 1
+    assert stub.purged == 1
+    assert stub.recovered == 1
     assert stub.deleted == 1
     assert stub.object_actions == ["revoke", "delete"]
     assert stub.published == [EVENT_ID]

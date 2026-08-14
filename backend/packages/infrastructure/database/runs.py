@@ -1,14 +1,15 @@
-"""PostgreSQL Run persistence with one atomic Session/message/outbox transaction."""
+"""PostgreSQL Run persistence with atomic Session, queue and Outbox facts."""
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import JsonValue
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -35,6 +36,7 @@ from packages.contracts.generated.core_models import (
     RetryRunRequest,
     RunCreateRequest,
 )
+from packages.contracts.generated.run_event import RUNTIME_EVENT_CANDIDATE_ADAPTER
 from packages.contracts.public import (
     TenantContext,
     rate_limited,
@@ -49,6 +51,7 @@ from packages.contracts.temporal import (
     RunRequestedPayloadV1,
 )
 from packages.domain.public import (
+    EXECUTION_CAPACITY_RUN_STATUSES,
     NON_TERMINAL_RUN_STATUSES,
     MutationOutcome,
     OutboxEvent,
@@ -62,6 +65,7 @@ from packages.domain.public import (
     ensure_run_transition,
     parse_message_content_parts,
 )
+from packages.infrastructure.database.events import append_control_run_event
 from packages.infrastructure.database.idempotency import (
     claim_idempotency,
     complete_idempotency,
@@ -76,14 +80,17 @@ from packages.infrastructure.database.models import (
     ChatSessionModel,
     DeploymentModel,
     OutboxEventModel,
+    RunAdmissionQueueModel,
     RunAttemptModel,
+    RunCapacityDomainModel,
+    RunCapacityLeaseModel,
     RuntimeBundleModel,
 )
 from packages.infrastructure.database.outbox import SqlAlchemyOutboxWriter
 from packages.infrastructure.database.quota_policies import (
-    load_active_run_capacity_policy,
+    load_active_run_capacity_policy_version,
 )
-from packages.infrastructure.database.uow import TenantUnitOfWork
+from packages.infrastructure.database.uow import PlatformUnitOfWork, TenantUnitOfWork
 
 
 class SqlAlchemyRunStore:
@@ -94,9 +101,31 @@ class SqlAlchemyRunStore:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         run_capacity_policy: RunCapacityPolicy | None = None,
+        queue_max_wait: timedelta = timedelta(minutes=5),
+        queue_max_pending_per_tenant: int = 1_000,
+        capacity_domain_slots: Mapping[str, int] | None = None,
+        capacity_lease_ttl: timedelta = timedelta(minutes=5),
+        capacity_tenant_quantum: int = 1,
     ) -> None:
+        if queue_max_wait <= timedelta(0) or queue_max_wait > timedelta(days=1):
+            raise ValueError("Run queue max wait must be between 1 second and 1 day")
+        if not 1 <= queue_max_pending_per_tenant <= 1_000_000:
+            raise ValueError("Run queue pending limit must be between 1 and 1000000")
+        if capacity_lease_ttl < timedelta(seconds=30) or capacity_lease_ttl > timedelta(
+            days=1
+        ):
+            raise ValueError(
+                "Run capacity lease TTL must be between 30 seconds and 1 day"
+            )
+        if not 1 <= capacity_tenant_quantum <= 100:
+            raise ValueError("Run capacity tenant quantum must be between 1 and 100")
         self._session_factory = session_factory
         self._run_capacity_policy = run_capacity_policy or RunCapacityPolicy()
+        self._queue_max_wait = queue_max_wait
+        self._queue_max_pending_per_tenant = queue_max_pending_per_tenant
+        self._capacity_domain_slots = dict(capacity_domain_slots or {})
+        self._capacity_lease_ttl = capacity_lease_ttl
+        self._capacity_tenant_quantum = capacity_tenant_quantum
 
     async def _record_capacity_denial(
         self,
@@ -118,6 +147,482 @@ class SqlAlchemyRunStore:
                 denial=denial,
                 metadata=metadata,
             )
+
+    async def _enqueue_run(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        run: AgentRunModel,
+        now: datetime,
+    ) -> RunAdmissionQueueModel:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(" "hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"run-queue:tenant:{tenant_id}"},
+        )
+        pending = await session.scalar(
+            select(func.count(RunAdmissionQueueModel.id)).where(
+                RunAdmissionQueueModel.tenant_id == tenant_id,
+                RunAdmissionQueueModel.status == "WAITING",
+            )
+        )
+        if int(pending or 0) >= self._queue_max_pending_per_tenant:
+            raise rate_limited(
+                details={
+                    "scope": "tenant",
+                    "reason_code": "RUN_QUEUE_PENDING_LIMIT",
+                }
+            )
+        capacity_domain = await session.scalar(
+            select(DeploymentModel.runtime_target_id).where(
+                DeploymentModel.tenant_id == tenant_id,
+                DeploymentModel.id == run.deployment_id,
+            )
+        )
+        if capacity_domain is None:
+            raise resource_state_conflict(
+                "The Run Deployment capacity domain is unavailable."
+            )
+        queue = RunAdmissionQueueModel(
+            id=uuid5(NAMESPACE_URL, f"run-admission/{tenant_id}/{run.id}"),
+            tenant_id=tenant_id,
+            run_id=run.id,
+            priority="NORMAL",
+            capacity_domain=capacity_domain,
+            status="WAITING",
+            queued_at=now,
+            deadline_at=now + self._queue_max_wait,
+            admitted_at=None,
+            cancelled_at=None,
+            quota_policy_version_id=None,
+            capacity_snapshot_json=None,
+            resource_version=1,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(queue)
+        return queue
+
+    async def process_admission_queue(
+        self,
+        context: TenantContext,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> tuple[int, int]:
+        """Expire due entries, then admit a bounded priority/FIFO tenant batch."""
+
+        if not 1 <= limit <= 500:
+            raise ValueError("Run queue admission limit must be between 1 and 500")
+        tenant_id = UUID(context.tenant_id)
+        async with TenantUnitOfWork(self._session_factory, context) as unit_of_work:
+            session = unit_of_work.session
+            expired_rows = list(
+                await session.scalars(
+                    select(RunAdmissionQueueModel)
+                    .where(
+                        RunAdmissionQueueModel.tenant_id == tenant_id,
+                        RunAdmissionQueueModel.status == "WAITING",
+                        RunAdmissionQueueModel.deadline_at <= now,
+                    )
+                    .order_by(
+                        RunAdmissionQueueModel.deadline_at,
+                        RunAdmissionQueueModel.id,
+                    )
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            expired = 0
+            for queue in expired_rows:
+                run = (
+                    await session.execute(
+                        select(AgentRunModel)
+                        .where(
+                            AgentRunModel.tenant_id == tenant_id,
+                            AgentRunModel.id == queue.run_id,
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if run is None or run.status != "QUEUED":
+                    continue
+                queue.status = "TIMED_OUT"
+                queue.cancelled_at = now
+                queue.updated_at = now
+                queue.resource_version += 1
+                ensure_run_transition("QUEUED", "TIMEOUT")
+                run.status = "TIMEOUT"
+                run.error_code = "RUN_QUEUE_TIMEOUT"
+                run.error_detail_json = {
+                    "message": "The Run exceeded its admission queue deadline.",
+                    "request_id": context.request_id,
+                    "retryable": True,
+                    "stage": "queue",
+                }
+                run.finished_at = now
+                await append_control_run_event(
+                    session,
+                    context,
+                    run=run,
+                    execution_attempt=1,
+                    candidate=RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                        {
+                            "source_event_id": f"queue-timeout:{run.id}",
+                            "event_type": "run_timeout",
+                            "occurred_at": now,
+                            "payload_version": "1.0",
+                            "payload": {
+                                "timeout_seconds": max(
+                                    1,
+                                    int(
+                                        (
+                                            queue.deadline_at - queue.queued_at
+                                        ).total_seconds()
+                                    ),
+                                ),
+                                "stage": "queue",
+                            },
+                        }
+                    ),
+                )
+                _reconciliation_audit(
+                    session,
+                    context=context,
+                    run_id=run.id,
+                    action="run.queue.timed_out",
+                    change={"deadline_at": queue.deadline_at.isoformat()},
+                    occurred_at=now,
+                )
+                expired += 1
+
+            remaining = limit - expired
+            if remaining <= 0:
+                return 0, expired
+            candidates = list(
+                await session.scalars(
+                    select(RunAdmissionQueueModel)
+                    .join(
+                        AgentRunModel,
+                        and_(
+                            AgentRunModel.tenant_id == RunAdmissionQueueModel.tenant_id,
+                            AgentRunModel.id == RunAdmissionQueueModel.run_id,
+                        ),
+                    )
+                    .where(
+                        RunAdmissionQueueModel.tenant_id == tenant_id,
+                        RunAdmissionQueueModel.status == "WAITING",
+                        RunAdmissionQueueModel.deadline_at > now,
+                    )
+                    .order_by(
+                        (RunAdmissionQueueModel.priority == "HIGH").desc(),
+                        RunAdmissionQueueModel.queued_at,
+                        RunAdmissionQueueModel.id,
+                    )
+                    .limit(remaining)
+                    .with_for_update(of=RunAdmissionQueueModel, skip_locked=True)
+                )
+            )
+            admitted = 0
+            for queue in candidates:
+                run = (
+                    await session.execute(
+                        select(AgentRunModel)
+                        .where(
+                            AgentRunModel.tenant_id == tenant_id,
+                            AgentRunModel.id == queue.run_id,
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if run is None or run.status != "QUEUED" or run.workflow_id is not None:
+                    continue
+                deployment = await session.scalar(
+                    select(DeploymentModel).where(
+                        DeploymentModel.tenant_id == tenant_id,
+                        DeploymentModel.id == run.deployment_id,
+                    )
+                )
+                if deployment is None:
+                    continue
+                try:
+                    policy_version_id, effective_policy, runtime_type = (
+                        await _admit_run_capacity(
+                            session,
+                            policy=self._run_capacity_policy,
+                            tenant_id=tenant_id,
+                            user_id=run.created_by,
+                            agent_id=run.agent_id,
+                            deployment=deployment,
+                        )
+                    )
+                except CapacityAdmissionDenied:
+                    break
+                queue.status = "ADMITTED"
+                queue.admitted_at = now
+                queue.quota_policy_version_id = policy_version_id
+                queue.capacity_snapshot_json = cast(
+                    dict[str, object],
+                    _capacity_snapshot(effective_policy, runtime_type),
+                )
+                queue.updated_at = now
+                queue.resource_version += 1
+                payload = RunRequestedPayloadV1(
+                    tenant_id=tenant_id,
+                    run_id=run.id,
+                    request_id=context.request_id,
+                    trace_id=context.trace_id,
+                )
+                SqlAlchemyOutboxWriter(session, context).add(
+                    OutboxEvent(
+                        id=uuid5(NAMESPACE_URL, f"run-outbox/{tenant_id}/{run.id}"),
+                        tenant_id=tenant_id,
+                        aggregate_type="run",
+                        aggregate_id=run.id,
+                        event_type=RUN_REQUESTED_EVENT,
+                        payload=payload.model_dump(mode="json"),
+                        payload_schema_version=1,
+                        status=OutboxStatus.PENDING,
+                        attempts=0,
+                        next_attempt_at=now,
+                        created_at=now,
+                    )
+                )
+                _reconciliation_audit(
+                    session,
+                    context=context,
+                    run_id=run.id,
+                    action="run.queue.admitted",
+                    change={
+                        "capacity_domain": queue.capacity_domain,
+                        "runtime_type": runtime_type,
+                        "quota_policy_version_id": (
+                            str(policy_version_id) if policy_version_id else None
+                        ),
+                    },
+                    occurred_at=now,
+                )
+                admitted += 1
+                # The next candidate must observe this batch's reserved slot.
+                await session.flush()
+            await session.flush()
+            return admitted, expired
+
+    async def process_capacity_admission_domains(
+        self,
+        scheduler_context: TenantContext,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> tuple[int, int, int, int]:
+        """Reconcile leases and admit a fair cross-tenant domain batch."""
+
+        if not 1 <= limit <= 500:
+            raise ValueError("Run queue admission limit must be between 1 and 500")
+        if not self._capacity_domain_slots:
+            admitted, timed_out = await self.process_admission_queue(
+                scheduler_context, now=now, limit=limit
+            )
+            return admitted, timed_out, 0, 0
+
+        async with PlatformUnitOfWork(self._session_factory) as unit_of_work:
+            session = unit_of_work.session
+            scheduler_lock = await session.scalar(
+                text(
+                    "SELECT pg_try_advisory_xact_lock("
+                    "hashtextextended('run-capacity-domain-scheduler', 0))"
+                )
+            )
+            if scheduler_lock is not True:
+                return 0, 0, 0, 0
+            await _sync_capacity_domains(
+                session, configured=self._capacity_domain_slots, now=now
+            )
+            released, renewed = await _reconcile_capacity_leases(
+                session, now=now, lease_ttl=self._capacity_lease_ttl, limit=limit
+            )
+            timed_out = await _expire_capacity_queue_entries(
+                session,
+                scheduler_context=scheduler_context,
+                now=now,
+                limit=limit,
+            )
+            remaining = limit - timed_out
+            if remaining <= 0:
+                return 0, timed_out, released, renewed
+            ranked_queue = _ranked_capacity_candidates(
+                now=now,
+                capacity_domains=tuple(self._capacity_domain_slots),
+            )
+            candidates = list(
+                await session.scalars(
+                    select(RunAdmissionQueueModel)
+                    .where(
+                        RunAdmissionQueueModel.id.in_(
+                            select(ranked_queue.c.queue_id).where(
+                                ranked_queue.c.tenant_position
+                                <= self._capacity_tenant_quantum
+                            )
+                        )
+                    )
+                    .order_by(
+                        RunAdmissionQueueModel.capacity_domain,
+                        (RunAdmissionQueueModel.priority == "HIGH").desc(),
+                        RunAdmissionQueueModel.queued_at,
+                        RunAdmissionQueueModel.id,
+                    )
+                    .limit(500)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            last_rows = (
+                await session.execute(
+                    select(
+                        RunAdmissionQueueModel.capacity_domain,
+                        RunAdmissionQueueModel.tenant_id,
+                        func.max(RunAdmissionQueueModel.admitted_at),
+                    )
+                    .where(RunAdmissionQueueModel.status == "ADMITTED")
+                    .group_by(
+                        RunAdmissionQueueModel.capacity_domain,
+                        RunAdmissionQueueModel.tenant_id,
+                    )
+                )
+            ).all()
+            ordered = _fair_capacity_candidates(
+                candidates,
+                last_admitted={
+                    (domain, tenant): value for domain, tenant, value in last_rows
+                },
+                tenant_quantum=self._capacity_tenant_quantum,
+            )
+            admitted = 0
+            for queue in ordered:
+                if admitted >= remaining:
+                    break
+                await _bind_scheduler_tenant(session, queue.tenant_id)
+                context = _scheduler_tenant_context(
+                    scheduler_context, tenant_id=queue.tenant_id
+                )
+                run = await session.scalar(
+                    select(AgentRunModel)
+                    .where(
+                        AgentRunModel.tenant_id == queue.tenant_id,
+                        AgentRunModel.id == queue.run_id,
+                    )
+                    .with_for_update()
+                )
+                if run is None or run.status != "QUEUED" or run.workflow_id is not None:
+                    continue
+                deployment = await session.scalar(
+                    select(DeploymentModel).where(
+                        DeploymentModel.tenant_id == queue.tenant_id,
+                        DeploymentModel.id == run.deployment_id,
+                    )
+                )
+                domain = await session.scalar(
+                    select(RunCapacityDomainModel)
+                    .where(RunCapacityDomainModel.domain_key == queue.capacity_domain)
+                    .with_for_update()
+                )
+                if (
+                    deployment is None
+                    or deployment.runtime_target_id != queue.capacity_domain
+                    or domain is None
+                    or domain.status != "ACTIVE"
+                ):
+                    continue
+                active = int(
+                    await session.scalar(
+                        select(func.count(RunCapacityLeaseModel.id)).where(
+                            RunCapacityLeaseModel.domain_key == domain.domain_key,
+                            RunCapacityLeaseModel.released_at.is_(None),
+                        )
+                    )
+                    or 0
+                )
+                if active >= domain.configured_slots:
+                    continue
+                try:
+                    policy_version_id, effective_policy, runtime_type = (
+                        await _admit_run_capacity(
+                            session,
+                            policy=self._run_capacity_policy,
+                            tenant_id=queue.tenant_id,
+                            user_id=run.created_by,
+                            agent_id=run.agent_id,
+                            deployment=deployment,
+                        )
+                    )
+                except CapacityAdmissionDenied:
+                    continue
+                lease = RunCapacityLeaseModel(
+                    id=uuid5(NAMESPACE_URL, f"run-capacity-lease/{queue.run_id}"),
+                    domain_key=domain.domain_key,
+                    tenant_id=queue.tenant_id,
+                    run_id=queue.run_id,
+                    acquired_at=now,
+                    renewed_at=now,
+                    expires_at=now + self._capacity_lease_ttl,
+                    released_at=None,
+                    release_reason=None,
+                    resource_version=1,
+                )
+                session.add(lease)
+                queue.status = "ADMITTED"
+                queue.admitted_at = now
+                queue.quota_policy_version_id = policy_version_id
+                snapshot = _capacity_snapshot(effective_policy, runtime_type)
+                snapshot.update(
+                    {
+                        "capacity_domain": domain.domain_key,
+                        "capacity_domain_config_hash": domain.config_hash,
+                        "capacity_domain_slots": domain.configured_slots,
+                        "capacity_lease_id": str(lease.id),
+                        "capacity_lease_expires_at": lease.expires_at.isoformat(),
+                    }
+                )
+                queue.capacity_snapshot_json = cast(dict[str, object], snapshot)
+                queue.updated_at = now
+                queue.resource_version += 1
+                SqlAlchemyOutboxWriter(session, context).add(
+                    OutboxEvent(
+                        id=uuid5(
+                            NAMESPACE_URL,
+                            f"run-outbox/{queue.tenant_id}/{queue.run_id}",
+                        ),
+                        tenant_id=queue.tenant_id,
+                        aggregate_type="run",
+                        aggregate_id=queue.run_id,
+                        event_type=RUN_REQUESTED_EVENT,
+                        payload=RunRequestedPayloadV1(
+                            tenant_id=queue.tenant_id,
+                            run_id=queue.run_id,
+                            request_id=context.request_id,
+                            trace_id=context.trace_id,
+                        ).model_dump(mode="json"),
+                        payload_schema_version=1,
+                        status=OutboxStatus.PENDING,
+                        attempts=0,
+                        next_attempt_at=now,
+                        created_at=now,
+                    )
+                )
+                _reconciliation_audit(
+                    session,
+                    context=context,
+                    run_id=run.id,
+                    action="run.queue.admitted",
+                    change={
+                        "capacity_domain": domain.domain_key,
+                        "capacity_lease_id": str(lease.id),
+                        "runtime_type": runtime_type,
+                    },
+                    occurred_at=now,
+                )
+                admitted += 1
+                await session.flush()
+            return admitted, timed_out, released, renewed
 
     async def record_workflow_start(
         self,
@@ -205,6 +710,22 @@ class SqlAlchemyRunStore:
                             AgentRunModel.created_at <= created_before,
                         ),
                         and_(
+                            AgentRunModel.status == "QUEUED",
+                            AgentRunModel.queued_at <= created_before,
+                            or_(
+                                AgentRunModel.workflow_id.is_not(None),
+                                exists(
+                                    select(RunAdmissionQueueModel.id).where(
+                                        RunAdmissionQueueModel.tenant_id
+                                        == AgentRunModel.tenant_id,
+                                        RunAdmissionQueueModel.run_id
+                                        == AgentRunModel.id,
+                                        RunAdmissionQueueModel.status == "ADMITTED",
+                                    )
+                                ),
+                            ),
+                        ),
+                        and_(
                             AgentRunModel.status == "CANCELLING",
                             AgentRunModel.cancelling_at.is_not(None),
                             AgentRunModel.cancelling_at <= cancelling_before,
@@ -218,7 +739,7 @@ class SqlAlchemyRunStore:
                 RunReconciliationCandidate(
                     run_id=row.id,
                     tenant_id=row.tenant_id,
-                    status=cast(Literal["CREATED", "CANCELLING"], row.status),
+                    status=cast(Literal["CREATED", "QUEUED", "CANCELLING"], row.status),
                     created_by=row.created_by,
                     workflow_id=row.workflow_id,
                     temporal_run_id=row.temporal_run_id,
@@ -244,8 +765,17 @@ class SqlAlchemyRunStore:
                 )
                 .with_for_update()
             )
-            if run is None or run.status not in {"CREATED", "CANCELLING"}:
+            if run is None or run.status not in {"CREATED", "QUEUED", "CANCELLING"}:
                 return False
+            if run.status == "QUEUED":
+                queue_status = await session.scalar(
+                    select(RunAdmissionQueueModel.status).where(
+                        RunAdmissionQueueModel.tenant_id == tenant_id,
+                        RunAdmissionQueueModel.run_id == run_id,
+                    )
+                )
+                if queue_status != "ADMITTED":
+                    return False
             event = await session.scalar(
                 select(OutboxEventModel)
                 .where(
@@ -480,30 +1010,6 @@ class SqlAlchemyRunStore:
                         else None
                     ),
                 )
-                try:
-                    await _admit_run_capacity(
-                        session,
-                        policy=self._run_capacity_policy,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        agent_id=chat_session.agent_id,
-                        deployment=deployment,
-                    )
-                except CapacityAdmissionDenied as denial:
-                    await self._record_capacity_denial(
-                        context,
-                        actor_id=user_id,
-                        resource_id=None,
-                        operation="create",
-                        denial=denial,
-                        metadata=metadata,
-                    )
-                    raise rate_limited(
-                        details={
-                            "scope": denial.scope,
-                            "reason_code": denial.reason_code,
-                        }
-                    ) from denial
                 now = datetime.now(UTC)
                 user_message = ChatMessageModel(
                     tenant_id=tenant_id,
@@ -530,7 +1036,7 @@ class SqlAlchemyRunStore:
                     agent_id=chat_session.agent_id,
                     snapshot_id=deployment.snapshot_id,
                     deployment_id=deployment.id,
-                    status="CREATED",
+                    status="QUEUED",
                     current_attempt=0,
                     latest_sequence_no=0,
                     idempotency_key=idempotency_key,
@@ -553,33 +1059,19 @@ class SqlAlchemyRunStore:
                     ),
                     created_by=user_id,
                     created_at=now,
+                    queued_at=now,
                 )
                 session.add(run)
                 await session.flush()
+                await self._enqueue_run(
+                    session,
+                    tenant_id=tenant_id,
+                    run=run,
+                    now=now,
+                )
                 chat_session.cursor_message_id = user_message.id
                 chat_session.updated_at = now
                 chat_session.resource_version += 1
-                payload = RunRequestedPayloadV1(
-                    tenant_id=tenant_id,
-                    run_id=run.id,
-                    request_id=metadata.request_id,
-                    trace_id=metadata.trace_id,
-                )
-                SqlAlchemyOutboxWriter(session, context).add(
-                    OutboxEvent(
-                        id=uuid4(),
-                        tenant_id=tenant_id,
-                        aggregate_type="run",
-                        aggregate_id=run.id,
-                        event_type=RUN_REQUESTED_EVENT,
-                        payload=payload.model_dump(mode="json"),
-                        payload_schema_version=1,
-                        status=OutboxStatus.PENDING,
-                        attempts=0,
-                        next_attempt_at=now,
-                        created_at=now,
-                    )
-                )
                 result = _run_record(run)
                 accepted = _accepted_json(result)
                 await _audit(
@@ -597,6 +1089,8 @@ class SqlAlchemyRunStore:
                         "input_text_length": len(request.input.text),
                         "has_token_budget": run.token_budget is not None,
                         "has_cost_budget": run.cost_budget_amount is not None,
+                        "queue_priority": "NORMAL",
+                        "queue_deadline_at": (now + self._queue_max_wait).isoformat(),
                     },
                 )
                 await complete_idempotency(
@@ -684,6 +1178,44 @@ class SqlAlchemyRunStore:
             )
             if run is None:
                 return None
+            queue = None
+            if run.status == "QUEUED" and run.workflow_id is None:
+                queue = await session.scalar(
+                    select(RunAdmissionQueueModel)
+                    .where(
+                        RunAdmissionQueueModel.tenant_id == tenant_id,
+                        RunAdmissionQueueModel.run_id == run.id,
+                    )
+                    .with_for_update()
+                )
+            if queue is not None and queue.status == "WAITING":
+                now = datetime.now(UTC)
+                ensure_run_transition("QUEUED", "CANCELLED")
+                run.status = "CANCELLED"
+                run.finished_at = now
+                queue.status = "CANCELLED"
+                queue.cancelled_at = now
+                queue.updated_at = now
+                queue.resource_version += 1
+                await append_control_run_event(
+                    session,
+                    context,
+                    run=run,
+                    execution_attempt=1,
+                    candidate=RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                        {
+                            "source_event_id": f"queue-cancel:{run.id}",
+                            "event_type": "run_cancelled",
+                            "occurred_at": now,
+                            "payload_version": "1.0",
+                            "payload": {
+                                "reason": request.reason or "Cancelled while queued.",
+                                "cancelled_by": str(user_id),
+                                "forced": False,
+                            },
+                        }
+                    ),
+                )
             if (
                 run.status not in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT"}
                 and run.status != "CANCELLING"
@@ -798,30 +1330,6 @@ class SqlAlchemyRunStore:
                     source=source,
                     policy=request.deployment_policy,
                 )
-                try:
-                    await _admit_run_capacity(
-                        session,
-                        policy=self._run_capacity_policy,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        agent_id=source.agent_id,
-                        deployment=deployment,
-                    )
-                except CapacityAdmissionDenied as denial:
-                    await self._record_capacity_denial(
-                        context,
-                        actor_id=user_id,
-                        resource_id=source.id,
-                        operation="retry",
-                        denial=denial,
-                        metadata=metadata,
-                    )
-                    raise rate_limited(
-                        details={
-                            "scope": denial.scope,
-                            "reason_code": denial.reason_code,
-                        }
-                    ) from denial
                 message = await session.scalar(
                     select(ChatMessageModel).where(
                         ChatMessageModel.tenant_id == tenant_id,
@@ -846,7 +1354,7 @@ class SqlAlchemyRunStore:
                     agent_id=source.agent_id,
                     snapshot_id=deployment.snapshot_id,
                     deployment_id=deployment.id,
-                    status="CREATED",
+                    status="QUEUED",
                     current_attempt=0,
                     latest_sequence_no=0,
                     idempotency_key=idempotency_key,
@@ -858,33 +1366,19 @@ class SqlAlchemyRunStore:
                     cost_budget_currency=source.cost_budget_currency,
                     created_by=user_id,
                     created_at=now,
+                    queued_at=now,
                 )
                 session.add(run)
                 await session.flush()
+                await self._enqueue_run(
+                    session,
+                    tenant_id=tenant_id,
+                    run=run,
+                    now=now,
+                )
                 chat_session.cursor_message_id = source.user_message_id
                 chat_session.updated_at = now
                 chat_session.resource_version += 1
-                payload = RunRequestedPayloadV1(
-                    tenant_id=tenant_id,
-                    run_id=run.id,
-                    request_id=metadata.request_id,
-                    trace_id=metadata.trace_id,
-                )
-                SqlAlchemyOutboxWriter(session, context).add(
-                    OutboxEvent(
-                        id=uuid4(),
-                        tenant_id=tenant_id,
-                        aggregate_type="run",
-                        aggregate_id=run.id,
-                        event_type=RUN_REQUESTED_EVENT,
-                        payload=payload.model_dump(mode="json"),
-                        payload_schema_version=1,
-                        status=OutboxStatus.PENDING,
-                        attempts=0,
-                        next_attempt_at=now,
-                        created_at=now,
-                    )
-                )
                 result = _run_record(run)
                 await _audit(
                     session,
@@ -899,6 +1393,8 @@ class SqlAlchemyRunStore:
                         "deployment_id": str(deployment.id),
                         "snapshot_id": str(deployment.snapshot_id),
                         "reused_user_message_id": str(source.user_message_id),
+                        "queue_priority": "NORMAL",
+                        "queue_deadline_at": (now + self._queue_max_wait).isoformat(),
                     },
                 )
                 await complete_idempotency(
@@ -1082,9 +1578,20 @@ class SqlAlchemyRunStore:
                 raise RunStageError(
                     "RUN_CANCELLING", "The Run cancellation is already pending."
                 )
-            if run.status != "CREATED" or run.current_attempt != 0:
+            if run.status != "QUEUED" or run.current_attempt != 0:
                 raise resource_state_conflict(
                     "The Run cannot be prepared from its current state."
+                )
+            queue = await session.scalar(
+                select(RunAdmissionQueueModel).where(
+                    RunAdmissionQueueModel.tenant_id == tenant_id,
+                    RunAdmissionQueueModel.run_id == run_id,
+                    RunAdmissionQueueModel.status == "ADMITTED",
+                )
+            )
+            if queue is None:
+                raise resource_state_conflict(
+                    "The Run does not have a durable admission decision."
                 )
             if attempt is not None or execution_attempt != 1:
                 raise resource_state_conflict("The Run attempt allocation is invalid.")
@@ -1092,12 +1599,7 @@ class SqlAlchemyRunStore:
                 raise resource_state_conflict(
                     "The Run is already bound to another Workflow."
                 )
-            now = datetime.now(UTC)
-            ensure_run_transition(cast(RunStatus, run.status), "QUEUED")
             run.workflow_id = workflow_id
-            run.status = "QUEUED"
-            run.queued_at = now
-            await session.flush()
             attempt = RunAttemptModel(
                 id=uuid5(
                     NAMESPACE_URL,
@@ -1331,6 +1833,32 @@ class SqlAlchemyRunStore:
                     ),
                     assistant_message_id=run.assistant_message_id,
                 )
+            if run.status == "QUEUED" and run.workflow_id is None:
+                queue = await session.scalar(
+                    select(RunAdmissionQueueModel)
+                    .where(
+                        RunAdmissionQueueModel.tenant_id == tenant_id,
+                        RunAdmissionQueueModel.run_id == run.id,
+                    )
+                    .with_for_update()
+                )
+                if queue is not None and queue.status == "WAITING":
+                    now = datetime.now(UTC)
+                    queue.status = "CANCELLED"
+                    queue.cancelled_at = now
+                    queue.updated_at = now
+                    queue.resource_version += 1
+                    ensure_run_transition("QUEUED", "CANCELLED")
+                    run.status = "CANCELLED"
+                    run.finished_at = now
+                    run.error_code = None
+                    run.error_detail_json = None
+                    await session.flush()
+                    return FinalizeAgentRunResult(
+                        run_id=run.id,
+                        status="CANCELLED",
+                        assistant_message_id=None,
+                    )
             attempt = None
             if input.execution_attempt > 0:
                 attempt = await session.scalar(
@@ -1685,25 +2213,21 @@ async def _admit_run_capacity(
     user_id: UUID,
     agent_id: UUID,
     deployment: DeploymentModel,
-) -> None:
-    tenant_policy = await load_active_run_capacity_policy(session, tenant_id)
+) -> tuple[UUID | None, RunCapacityPolicy, Literal["agentscope", "codex"]]:
+    tenant_policy_version_id, tenant_policy = (
+        await load_active_run_capacity_policy_version(session, tenant_id)
+    )
     effective_policy = (
         policy.narrowed_by(tenant_policy) if tenant_policy is not None else policy
     )
     if not effective_policy.enabled:
-        return
-    runtime_type_value = await session.scalar(
-        select(RuntimeBundleModel.runtime_type).where(
-            RuntimeBundleModel.tenant_id == tenant_id,
-            RuntimeBundleModel.id == deployment.bundle_id,
-            RuntimeBundleModel.snapshot_id == deployment.snapshot_id,
+        runtime_type = await _deployment_runtime_type(
+            session, tenant_id=tenant_id, deployment=deployment
         )
+        return tenant_policy_version_id, effective_policy, runtime_type
+    runtime_type = await _deployment_runtime_type(
+        session, tenant_id=tenant_id, deployment=deployment
     )
-    if runtime_type_value not in {"agentscope", "codex"}:
-        raise resource_state_conflict(
-            "The Deployment Runtime type is unavailable for capacity admission."
-        )
-    runtime_type = cast(Literal["agentscope", "codex"], runtime_type_value)
     lock_keys: list[str] = []
     if effective_policy.max_nonterminal_runs_per_tenant is not None:
         lock_keys.append(f"run-capacity:tenant:{tenant_id}")
@@ -1721,20 +2245,61 @@ async def _admit_run_capacity(
 
     base = (
         AgentRunModel.tenant_id == tenant_id,
-        AgentRunModel.status.in_(NON_TERMINAL_RUN_STATUSES),
+        AgentRunModel.status.in_(EXECUTION_CAPACITY_RUN_STATUSES),
     )
     tenant_count = await session.scalar(
         select(func.count(AgentRunModel.id)).where(*base)
+    )
+    admitted_base = (
+        RunAdmissionQueueModel.tenant_id == tenant_id,
+        RunAdmissionQueueModel.status == "ADMITTED",
+        AgentRunModel.status == "QUEUED",
+    )
+    admitted_tenant_count = await session.scalar(
+        select(func.count(RunAdmissionQueueModel.id))
+        .select_from(RunAdmissionQueueModel)
+        .join(
+            AgentRunModel,
+            and_(
+                AgentRunModel.tenant_id == RunAdmissionQueueModel.tenant_id,
+                AgentRunModel.id == RunAdmissionQueueModel.run_id,
+            ),
+        )
+        .where(*admitted_base)
     )
     user_count = await session.scalar(
         select(func.count(AgentRunModel.id)).where(
             *base, AgentRunModel.created_by == user_id
         )
     )
+    admitted_user_count = await session.scalar(
+        select(func.count(RunAdmissionQueueModel.id))
+        .select_from(RunAdmissionQueueModel)
+        .join(
+            AgentRunModel,
+            and_(
+                AgentRunModel.tenant_id == RunAdmissionQueueModel.tenant_id,
+                AgentRunModel.id == RunAdmissionQueueModel.run_id,
+            ),
+        )
+        .where(*admitted_base, AgentRunModel.created_by == user_id)
+    )
     agent_count = await session.scalar(
         select(func.count(AgentRunModel.id)).where(
             *base, AgentRunModel.agent_id == agent_id
         )
+    )
+    admitted_agent_count = await session.scalar(
+        select(func.count(RunAdmissionQueueModel.id))
+        .select_from(RunAdmissionQueueModel)
+        .join(
+            AgentRunModel,
+            and_(
+                AgentRunModel.tenant_id == RunAdmissionQueueModel.tenant_id,
+                AgentRunModel.id == RunAdmissionQueueModel.run_id,
+            ),
+        )
+        .where(*admitted_base, AgentRunModel.agent_id == agent_id)
     )
     runtime_count = await session.scalar(
         select(func.count(AgentRunModel.id))
@@ -1756,16 +2321,67 @@ async def _admit_run_capacity(
         )
         .where(*base, RuntimeBundleModel.runtime_type == runtime_type)
     )
+    admitted_runtime_count = await session.scalar(
+        select(func.count(RunAdmissionQueueModel.id))
+        .select_from(RunAdmissionQueueModel)
+        .join(
+            AgentRunModel,
+            and_(
+                AgentRunModel.tenant_id == RunAdmissionQueueModel.tenant_id,
+                AgentRunModel.id == RunAdmissionQueueModel.run_id,
+            ),
+        )
+        .join(
+            DeploymentModel,
+            and_(
+                DeploymentModel.tenant_id == AgentRunModel.tenant_id,
+                DeploymentModel.id == AgentRunModel.deployment_id,
+            ),
+        )
+        .join(
+            RuntimeBundleModel,
+            and_(
+                RuntimeBundleModel.tenant_id == DeploymentModel.tenant_id,
+                RuntimeBundleModel.id == DeploymentModel.bundle_id,
+                RuntimeBundleModel.snapshot_id == DeploymentModel.snapshot_id,
+            ),
+        )
+        .where(*admitted_base, RuntimeBundleModel.runtime_type == runtime_type)
+    )
     admit_run_capacity(
         effective_policy,
         RunCapacityFacts(
-            tenant_nonterminal_runs=int(tenant_count or 0),
-            user_nonterminal_runs=int(user_count or 0),
-            agent_nonterminal_runs=int(agent_count or 0),
-            runtime_nonterminal_runs=int(runtime_count or 0),
+            tenant_nonterminal_runs=int(tenant_count or 0)
+            + int(admitted_tenant_count or 0),
+            user_nonterminal_runs=int(user_count or 0) + int(admitted_user_count or 0),
+            agent_nonterminal_runs=int(agent_count or 0)
+            + int(admitted_agent_count or 0),
+            runtime_nonterminal_runs=int(runtime_count or 0)
+            + int(admitted_runtime_count or 0),
             runtime_type=runtime_type,
         ),
     )
+    return tenant_policy_version_id, effective_policy, runtime_type
+
+
+async def _deployment_runtime_type(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    deployment: DeploymentModel,
+) -> Literal["agentscope", "codex"]:
+    runtime_type_value = await session.scalar(
+        select(RuntimeBundleModel.runtime_type).where(
+            RuntimeBundleModel.tenant_id == tenant_id,
+            RuntimeBundleModel.id == deployment.bundle_id,
+            RuntimeBundleModel.snapshot_id == deployment.snapshot_id,
+        )
+    )
+    if runtime_type_value not in {"agentscope", "codex"}:
+        raise resource_state_conflict(
+            "The Deployment Runtime type is unavailable for capacity admission."
+        )
+    return cast(Literal["agentscope", "codex"], runtime_type_value)
 
 
 def _resource_id(value: str) -> UUID:
@@ -1773,6 +2389,285 @@ def _resource_id(value: str) -> UUID:
         return UUID(value)
     except ValueError as exc:
         raise validation_error("Resource identifier is invalid.") from exc
+
+
+def _capacity_snapshot(
+    policy: RunCapacityPolicy,
+    runtime_type: Literal["agentscope", "codex"],
+) -> dict[str, JsonValue]:
+    return {
+        "runtime_type": runtime_type,
+        "max_nonterminal_runs_per_tenant": policy.max_nonterminal_runs_per_tenant,
+        "max_nonterminal_runs_per_user": policy.max_nonterminal_runs_per_user,
+        "max_nonterminal_runs_per_agent": policy.max_nonterminal_runs_per_agent,
+        "max_nonterminal_agentscope_runs": policy.max_nonterminal_agentscope_runs,
+        "max_nonterminal_codex_runs": policy.max_nonterminal_codex_runs,
+    }
+
+
+def _capacity_config_hash(domain_key: str, slots: int) -> str:
+    encoded = json.dumps(
+        {"domain_key": domain_key, "configured_slots": slots},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+async def _sync_capacity_domains(
+    session: AsyncSession,
+    *,
+    configured: Mapping[str, int],
+    now: datetime,
+) -> None:
+    existing = {
+        model.domain_key: model
+        for model in await session.scalars(
+            select(RunCapacityDomainModel).with_for_update()
+        )
+    }
+    for domain_key, slots in sorted(configured.items()):
+        config_hash = _capacity_config_hash(domain_key, slots)
+        model = existing.pop(domain_key, None)
+        if model is None:
+            session.add(
+                RunCapacityDomainModel(
+                    domain_key=domain_key,
+                    configured_slots=slots,
+                    status="ACTIVE",
+                    config_hash=config_hash,
+                    resource_version=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            continue
+        if (
+            model.configured_slots != slots
+            or model.status != "ACTIVE"
+            or model.config_hash != config_hash
+        ):
+            model.configured_slots = slots
+            model.status = "ACTIVE"
+            model.config_hash = config_hash
+            model.updated_at = now
+            model.resource_version += 1
+    for model in existing.values():
+        if model.status == "ACTIVE":
+            model.status = "DRAINING"
+            model.updated_at = now
+            model.resource_version += 1
+    await session.flush()
+
+
+async def _reconcile_capacity_leases(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    lease_ttl: timedelta,
+    limit: int,
+) -> tuple[int, int]:
+    leases = list(
+        await session.scalars(
+            select(RunCapacityLeaseModel)
+            .where(RunCapacityLeaseModel.released_at.is_(None))
+            .order_by(RunCapacityLeaseModel.expires_at, RunCapacityLeaseModel.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+    )
+    released = renewed = 0
+    for lease in leases:
+        await _bind_scheduler_tenant(session, lease.tenant_id)
+        run = await session.scalar(
+            select(AgentRunModel).where(
+                AgentRunModel.tenant_id == lease.tenant_id,
+                AgentRunModel.id == lease.run_id,
+            )
+        )
+        if run is None:
+            lease.released_at = now
+            lease.release_reason = "ORPHANED"
+            lease.resource_version += 1
+            released += 1
+            continue
+        if run.status in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT"}:
+            lease.released_at = now
+            lease.release_reason = "RUN_TERMINAL"
+            lease.resource_version += 1
+            released += 1
+            continue
+        if lease.expires_at <= now:
+            lease.renewed_at = now
+            lease.expires_at = now + lease_ttl
+            lease.resource_version += 1
+            renewed += 1
+    await session.flush()
+    return released, renewed
+
+
+async def _expire_capacity_queue_entries(
+    session: AsyncSession,
+    *,
+    scheduler_context: TenantContext,
+    now: datetime,
+    limit: int,
+) -> int:
+    queues = list(
+        await session.scalars(
+            select(RunAdmissionQueueModel)
+            .where(
+                RunAdmissionQueueModel.status == "WAITING",
+                RunAdmissionQueueModel.deadline_at <= now,
+            )
+            .order_by(
+                RunAdmissionQueueModel.deadline_at,
+                RunAdmissionQueueModel.id,
+            )
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+    )
+    expired = 0
+    for queue in queues:
+        await _bind_scheduler_tenant(session, queue.tenant_id)
+        context = _scheduler_tenant_context(
+            scheduler_context, tenant_id=queue.tenant_id
+        )
+        run = await session.scalar(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.tenant_id == queue.tenant_id,
+                AgentRunModel.id == queue.run_id,
+            )
+            .with_for_update()
+        )
+        if run is None or run.status != "QUEUED":
+            continue
+        queue.status = "TIMED_OUT"
+        queue.cancelled_at = now
+        queue.updated_at = now
+        queue.resource_version += 1
+        ensure_run_transition("QUEUED", "TIMEOUT")
+        run.status = "TIMEOUT"
+        run.error_code = "RUN_QUEUE_TIMEOUT"
+        run.error_detail_json = {
+            "message": "The Run exceeded its admission queue deadline.",
+            "request_id": context.request_id,
+            "retryable": True,
+            "stage": "queue",
+        }
+        run.finished_at = now
+        await append_control_run_event(
+            session,
+            context,
+            run=run,
+            execution_attempt=1,
+            candidate=RUNTIME_EVENT_CANDIDATE_ADAPTER.validate_python(
+                {
+                    "source_event_id": f"queue-timeout:{run.id}",
+                    "event_type": "run_timeout",
+                    "occurred_at": now,
+                    "payload_version": "1.0",
+                    "payload": {
+                        "timeout_seconds": max(
+                            1,
+                            int((queue.deadline_at - queue.queued_at).total_seconds()),
+                        ),
+                        "stage": "queue",
+                    },
+                }
+            ),
+        )
+        _reconciliation_audit(
+            session,
+            context=context,
+            run_id=run.id,
+            action="run.queue.timed_out",
+            change={"deadline_at": queue.deadline_at.isoformat()},
+            occurred_at=now,
+        )
+        expired += 1
+    await session.flush()
+    return expired
+
+
+async def _bind_scheduler_tenant(session: AsyncSession, tenant_id: UUID) -> None:
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+        {"tenant_id": str(tenant_id)},
+    )
+
+
+def _scheduler_tenant_context(
+    scheduler_context: TenantContext, *, tenant_id: UUID
+) -> TenantContext:
+    return scheduler_context.model_copy(update={"tenant_id": str(tenant_id)})
+
+
+def _fair_capacity_candidates(
+    candidates: list[RunAdmissionQueueModel],
+    *,
+    last_admitted: Mapping[tuple[str, UUID], datetime | None],
+    tenant_quantum: int,
+) -> list[RunAdmissionQueueModel]:
+    groups: dict[tuple[str, UUID], list[RunAdmissionQueueModel]] = {}
+    for candidate in candidates:
+        groups.setdefault((candidate.capacity_domain, candidate.tenant_id), []).append(
+            candidate
+        )
+    ordered: list[RunAdmissionQueueModel] = []
+    by_domain: dict[str, list[tuple[str, UUID]]] = {}
+    for key in groups:
+        by_domain.setdefault(key[0], []).append(key)
+    for domain_key in sorted(by_domain):
+        keys = sorted(
+            by_domain[domain_key],
+            key=lambda key: (
+                last_admitted.get(key) or datetime.min.replace(tzinfo=UTC),
+                groups[key][0].queued_at,
+                str(key[1]),
+            ),
+        )
+        while keys:
+            remaining_keys: list[tuple[str, UUID]] = []
+            for key in keys:
+                group = groups[key]
+                ordered.extend(group[:tenant_quantum])
+                del group[:tenant_quantum]
+                if group:
+                    remaining_keys.append(key)
+            keys = remaining_keys
+    return ordered
+
+
+def _ranked_capacity_candidates(*, now: datetime, capacity_domains: tuple[str, ...]):
+    """Rank each domain/tenant backlog before the scheduler applies its global bound."""
+
+    return (
+        select(
+            RunAdmissionQueueModel.id.label("queue_id"),
+            func.row_number()
+            .over(
+                partition_by=(
+                    RunAdmissionQueueModel.capacity_domain,
+                    RunAdmissionQueueModel.tenant_id,
+                ),
+                order_by=(
+                    (RunAdmissionQueueModel.priority == "HIGH").desc(),
+                    RunAdmissionQueueModel.queued_at,
+                    RunAdmissionQueueModel.id,
+                ),
+            )
+            .label("tenant_position"),
+        )
+        .where(
+            RunAdmissionQueueModel.status == "WAITING",
+            RunAdmissionQueueModel.deadline_at > now,
+            RunAdmissionQueueModel.capacity_domain.in_(capacity_domains),
+        )
+        .subquery()
+    )
 
 
 def _run_record(model: AgentRunModel) -> RunRecord:

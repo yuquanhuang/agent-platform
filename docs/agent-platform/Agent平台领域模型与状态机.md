@@ -1,6 +1,6 @@
 # Agent 平台领域模型与状态机
 
-> 文档版本：V1.4
+> 文档版本：V1.8
 > 文档状态：开发输入基线  
 > 关联需求：[Agent平台需求规格说明书](./Agent平台需求规格说明书.md)  
 > 接口契约：[Agent平台核心接口与事件契约](./Agent平台核心接口与事件契约.md)
@@ -133,12 +133,32 @@ Hash 变化时禁止复用。
 |---|---|---|
 | QuotaPolicy | tenant, status, current_version, resource_version | 租户 Run 准入策略；每租户最多一个 |
 | QuotaPolicyVersion | tenant/user/agent/runtime Run concurrency, content_hash | 不可变并发限制版本 |
-| BudgetPolicy | token, cost, period, hard_or_soft | 模型费用限制 |
-| BudgetReservation | run_id, reserved, consumed, released | 并发预算预占 |
+| BudgetPolicy | tenant, status, current_version, resource_version | 租户周期模型预算；每租户最多一个 |
+| BudgetPolicyVersion | UTC period, HARD token_limit, price version | 不可变预算版本；C1 费用字段为空 |
+| StoragePolicy | tenant, status, current_version, resource_version | 租户 Workspace/Artifact 存储配额；每租户最多一个 |
+| StoragePolicyVersion | Workspace/Artifact bytes/count, content_hash | 四维分离硬限制的不可变版本 |
+| BudgetReservation | run_id, policy/version/period snapshot, token/cost reserve, counter evidence, status | Run 与租户周期共用的并发预算预占 |
+| PriceCatalogVersion | provider, model, currency, effective time, source/hash | 不可变可信计价版本；具体供应商价格由受控发布提供 |
+| PriceCatalogRate | dimension, unit_tokens, unit_price | 版本内 Token 计价维度 |
+| CostLedgerEntry | reservation, entry_type, amount/currency, frozen scope/hash | append-only 费用预留、释放、结算和未知事实 |
+| ModelProviderAttempt | request attempt, provider/model, submission state | submitted/unknown Provider 尝试的不可变幂等事实 |
+| RunCapacityDomain | runtime_target_id, slots, status, config_hash | 全局执行容量域；只由平台 Scheduler 管理 |
+| RunCapacityLease | domain, tenant, run, expires/released | 不可超配的 Run 执行槽事实 |
+| ArtifactLegalHold | artifact, case_ref, placed/released | 可并存的受审计保留例外 |
 
 硬预算超限阻止新调用；软预算超限产生告警。取消和失败后释放未消费预占，已产生费用不回退。
 
 QuotaPolicy 创建即 ACTIVE；配置更新创建新 Version 并原子切换 `current_version`；`ACTIVE <-> DISABLED` 使用 ETag/CAS。租户版本只能收紧部署硬上限，Run 创建和重试在同一 PostgreSQL 事务读取有效版本、获取 advisory lock、计数并写入事实。
+
+BudgetPolicy 创建即 ACTIVE，支持 UTC 日历 `DAILY/MONTHLY`、`HARD/SOFT`、`token_limit` 与可选 USD/CNY `cost_limit`；更新生成不可变 Version，禁用后 Model Gateway 回退到 Run 自带预算。Gateway 在同一事务按稳定顺序获取 Run、策略周期和币种锁，Token 余额取 Run/租户更严格值；费用上界由冻结 Route cap、Counter 版本/Hash、billing semantics 和 PUBLISHED PriceCatalog 计算，fallback 取最大 Route 上界。HARD 在提交前拒绝，SOFT 放行并幂等写 Outbox/Audit；任一可信事实缺失或币种不一致均失败关闭。
+
+StoragePolicy 创建即 ACTIVE，更新生成不可变 Version；Workspace/Artifact 额度池不互相借用。新建资源读取 ACTIVE Version 并与部署值逐维取最小值，DISABLED 回退部署值。Workspace 以 Run 的冻结 `quota_bytes` 预留，已有 Workspace 不因后续版本变化而修改；两类资源只有进入 `DELETED` 才从租户预留统计释放。
+
+C2a 的调用后费用归因继续保留：Provider 明确返回的金额作为供应商事实；否则只允许使用调用完成时有效的不可变 PriceCatalog 和完整 Token 维度以 Decimal 计算。C2b 在调用前固化 canonical input hash、Counter profile 和各 Route 上界，并以 append-only ledger 记录 RESERVE/RELEASE/SETTLE/ADJUST/UNKNOWN。受控内存目录发布仅供 local/test；生产仍需官方 Counter Golden、durable PriceCatalog 管理入口以及 Planner/Attempt Store 组合。
+
+Artifact retention 状态规则：AVAILABLE 使用 Artifact 创建时一次固化的 `expires_at`（默认 30 天）；FAILED、REJECTED、EXPIRED 进入时一次生成 `retention_delete_after`（默认 7 天）。无活动 Legal Hold 且对应 deadline 到期才允许进入 DELETING。Hold 解除不改变 deadline；删除失败按 1 小时/最多 3 个 Operation 进入可审计恢复。
+
+Capacity Lease 状态规则：WAITING Run 无 Lease；准入时原子创建活动 Lease。Run 未终态时，过期 Lease 只能续租或将调度失败关闭；Run 终态或 Lease 孤儿时才填写 `released_at/release_reason`。Domain `DRAINING/DISABLED` 不再准入新 Lease。
 
 ### 3.8 知识库与评测
 

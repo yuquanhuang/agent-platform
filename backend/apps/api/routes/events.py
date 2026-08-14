@@ -3,6 +3,7 @@
 from typing import Protocol
 
 from fastapi import APIRouter, Request
+from opentelemetry import trace
 
 from packages.application.event_service import (
     EventWriteAccess,
@@ -13,6 +14,7 @@ from packages.contracts.generated.core_models import (
     RunEventBatchResponse,
 )
 from packages.contracts.public import dependency_unavailable
+from packages.infrastructure.observability import bind_log_context
 
 
 class InternalServiceIdentityProvider(Protocol):
@@ -41,6 +43,11 @@ def create_event_router(
         if identity_provider is None or service is None:
             raise dependency_unavailable("Internal Event service is not configured.")
         access = await identity_provider.authenticate(request)
-        return await service.append_batch(access, run_id=run_id, request=body)
+        span = trace.get_current_span()
+        span.set_attribute("agent_platform.tenant_id", access.context.tenant_id)
+        span.set_attribute("agent_platform.run_id", run_id)
+        span.set_attribute("agent_platform.event_count", len(body.events))
+        with bind_log_context(tenant_id=access.context.tenant_id, run_id=run_id):
+            return await service.append_batch(access, run_id=run_id, request=body)
 
     return router

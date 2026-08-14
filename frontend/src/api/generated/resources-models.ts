@@ -260,6 +260,115 @@ export interface QuotaPolicyVersionPage {
   readonly has_more: boolean;
 }
 
+export interface BudgetPolicyCreateRequest {
+  readonly name: string;
+  readonly description?: string | null;
+  readonly period: "DAILY" | "MONTHLY";
+  readonly enforcement?: "HARD" | "SOFT";
+  readonly token_limit: number;
+  readonly cost_limit?: null | BudgetPolicyCreateRequestCostLimitChoice2;
+}
+
+export interface BudgetPolicyUpdateRequest {
+  readonly name?: string;
+  readonly description?: string | null;
+  readonly period?: "DAILY" | "MONTHLY";
+  readonly enforcement?: "HARD" | "SOFT";
+  readonly token_limit?: number;
+  readonly cost_limit?: null | BudgetPolicyUpdateRequestCostLimitChoice2;
+}
+
+export interface BudgetPolicyVersion {
+  readonly id: string;
+  readonly policy_id: string;
+  readonly version_no: number;
+  readonly period: "DAILY" | "MONTHLY";
+  readonly enforcement: "HARD" | "SOFT";
+  readonly token_limit: number;
+  readonly cost_limit: null | BudgetPolicyVersionCostLimitChoice2;
+  readonly price_catalog_version: string | null;
+  readonly content_hash: string;
+  readonly created_by: string;
+  readonly created_at: string;
+}
+
+export interface BudgetPolicy {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly description: string | null;
+  readonly status: "ACTIVE" | "DISABLED";
+  readonly current_version: BudgetPolicyVersion;
+  readonly resource_version: number;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface BudgetPolicyPage {
+  readonly items: ReadonlyArray<BudgetPolicy>;
+  readonly next_cursor?: string | null;
+  readonly has_more: boolean;
+}
+
+export interface BudgetPolicyVersionPage {
+  readonly items: ReadonlyArray<BudgetPolicyVersion>;
+  readonly next_cursor?: string | null;
+  readonly has_more: boolean;
+}
+
+export interface StorageLimits {
+  readonly max_reserved_workspace_bytes?: number;
+  readonly max_reserved_workspaces?: number;
+  readonly max_reserved_artifact_bytes?: number;
+  readonly max_reserved_artifacts?: number;
+}
+
+export interface StoragePolicyCreateRequest {
+  readonly name: string;
+  readonly description?: string | null;
+  readonly limits: StorageLimits;
+}
+
+export interface StoragePolicyUpdateRequest {
+  readonly name?: string;
+  readonly description?: string | null;
+  readonly limits?: StorageLimits;
+}
+
+export interface StoragePolicyVersion {
+  readonly id: string;
+  readonly policy_id: string;
+  readonly version_no: number;
+  readonly limits: StorageLimits;
+  readonly content_hash: string;
+  readonly created_by: string;
+  readonly created_at: string;
+}
+
+export interface StoragePolicy {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly description: string | null;
+  readonly status: "ACTIVE" | "DISABLED";
+  readonly current_version: StoragePolicyVersion;
+  readonly resource_version: number;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface StoragePolicyPage {
+  readonly items: ReadonlyArray<StoragePolicy>;
+  readonly next_cursor?: string | null;
+  readonly has_more: boolean;
+}
+
+export interface StoragePolicyVersionPage {
+  readonly items: ReadonlyArray<StoragePolicyVersion>;
+  readonly next_cursor?: string | null;
+  readonly has_more: boolean;
+}
+
 export interface MemberCreateRequest {
   readonly external_subject: string;
   readonly display_name: string;
@@ -999,6 +1108,66 @@ export type ListQuotaPolicyVersionsLimit = number;
 
 export type ListQuotaPolicyVersionsCursor = string;
 
+export type ListBudgetPoliciesLimit = number;
+
+export type ListBudgetPoliciesCursor = string;
+
+export type CreateBudgetPolicyIdempotencyKey = string;
+
+export type GetBudgetPolicyBudgetPolicyId = string;
+
+export type UpdateBudgetPolicyBudgetPolicyId = string;
+
+export type UpdateBudgetPolicyIfMatch = string;
+
+export type DisableBudgetPolicyBudgetPolicyId = string;
+
+export type DisableBudgetPolicyIdempotencyKey = string;
+
+export type DisableBudgetPolicyIfMatch = string;
+
+export type EnableBudgetPolicyBudgetPolicyId = string;
+
+export type EnableBudgetPolicyIdempotencyKey = string;
+
+export type EnableBudgetPolicyIfMatch = string;
+
+export type ListBudgetPolicyVersionsBudgetPolicyId = string;
+
+export type ListBudgetPolicyVersionsLimit = number;
+
+export type ListBudgetPolicyVersionsCursor = string;
+
+export type ListStoragePoliciesLimit = number;
+
+export type ListStoragePoliciesCursor = string;
+
+export type CreateStoragePolicyIdempotencyKey = string;
+
+export type GetStoragePolicyStoragePolicyId = string;
+
+export type UpdateStoragePolicyStoragePolicyId = string;
+
+export type UpdateStoragePolicyIfMatch = string;
+
+export type DisableStoragePolicyStoragePolicyId = string;
+
+export type DisableStoragePolicyIdempotencyKey = string;
+
+export type DisableStoragePolicyIfMatch = string;
+
+export type EnableStoragePolicyStoragePolicyId = string;
+
+export type EnableStoragePolicyIdempotencyKey = string;
+
+export type EnableStoragePolicyIfMatch = string;
+
+export type ListStoragePolicyVersionsStoragePolicyId = string;
+
+export type ListStoragePolicyVersionsLimit = number;
+
+export type ListStoragePolicyVersionsCursor = string;
+
 export type ListMembersLimit = number;
 
 export type ListMembersCursor = string;
@@ -1197,6 +1366,21 @@ export interface ResourceDiffChangesItem {
   readonly before?: JSONValue;
   readonly after?: JSONValue;
   readonly sensitive?: boolean;
+}
+
+export interface BudgetPolicyCreateRequestCostLimitChoice2 {
+  readonly amount: string;
+  readonly currency: "USD" | "CNY";
+}
+
+export interface BudgetPolicyUpdateRequestCostLimitChoice2 {
+  readonly amount: string;
+  readonly currency: "USD" | "CNY";
+}
+
+export interface BudgetPolicyVersionCostLimitChoice2 {
+  readonly amount: string;
+  readonly currency: "USD" | "CNY";
 }
 
 export interface KnowledgeRetrieveResultItemsItem {

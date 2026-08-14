@@ -50,3 +50,19 @@ class PlatformReconciler:
             approvals=await self._approvals.reconcile_tenant_once(context, now=now),
             sandboxes=await self._sandboxes.reconcile_tenant_once(context, now=now),
         )
+
+    async def process_run_admission_queue(
+        self, context: TenantContext, *, now: datetime
+    ) -> RunReconciliationSummary:
+        """Run the latency-sensitive scheduler without scanning other resources."""
+
+        return await self._runs.process_admission_queue(context, now=now)
+
+    async def process_capacity_admission_domains(
+        self, scheduler_context: TenantContext, *, now: datetime
+    ) -> RunReconciliationSummary:
+        """Run the cross-tenant durable Capacity Domain scheduler."""
+
+        return await self._runs.process_capacity_admission_domains(
+            scheduler_context, now=now
+        )

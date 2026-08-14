@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 
+from opentelemetry import trace
 from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -76,7 +77,11 @@ class TemporalProbeStarter:
             request_id=payload.request_id,
             trace_id=payload.trace_id,
             tenant_id=str(payload.tenant_id),
+            workflow_id=workflow_id,
         ):
+            span = trace.get_current_span()
+            span.set_attribute("agent_platform.tenant_id", str(payload.tenant_id))
+            span.set_attribute("agent_platform.workflow_id", workflow_id)
             try:
                 handle = await self._client.start_workflow(
                     PlatformProbeWorkflow.run,
@@ -98,6 +103,10 @@ class TemporalProbeStarter:
                     already_exists=True,
                 )
             except RPCError as error:
+                self._metrics.temporal_workflow_starts.labels(
+                    worker_kind=payload.worker_kind.value,
+                    outcome="rpc_error",
+                ).inc()
                 raise RetryableOutboxError("Temporal start RPC failed") from error
         self._metrics.temporal_workflow_starts.labels(
             worker_kind=payload.worker_kind.value,
@@ -147,7 +156,13 @@ class TemporalReleaseStarter:
             request_id=payload.request_id,
             trace_id=payload.trace_id,
             tenant_id=str(payload.tenant_id),
+            workflow_id=workflow_id,
+            release_id=str(payload.release_id),
         ):
+            span = trace.get_current_span()
+            span.set_attribute("agent_platform.tenant_id", str(payload.tenant_id))
+            span.set_attribute("agent_platform.workflow_id", workflow_id)
+            span.set_attribute("agent_platform.release_id", str(payload.release_id))
             try:
                 handle = await self._client.start_workflow(
                     PublishAgentWorkflow.run,
@@ -169,6 +184,10 @@ class TemporalReleaseStarter:
                     already_exists=True,
                 )
             except RPCError as error:
+                self._metrics.temporal_workflow_starts.labels(
+                    worker_kind="control",
+                    outcome="rpc_error",
+                ).inc()
                 raise RetryableOutboxError("Temporal start RPC failed") from error
         self._metrics.temporal_workflow_starts.labels(
             worker_kind="control",
@@ -218,7 +237,13 @@ class TemporalRunStarter:
             request_id=payload.request_id,
             trace_id=payload.trace_id,
             tenant_id=str(payload.tenant_id),
+            run_id=str(payload.run_id),
+            workflow_id=workflow_id,
         ):
+            span = trace.get_current_span()
+            span.set_attribute("agent_platform.tenant_id", str(payload.tenant_id))
+            span.set_attribute("agent_platform.run_id", str(payload.run_id))
+            span.set_attribute("agent_platform.workflow_id", workflow_id)
             try:
                 handle = await self._client.start_workflow(
                     AgentRunWorkflow.run,
@@ -240,6 +265,10 @@ class TemporalRunStarter:
                     already_exists=True,
                 )
             except RPCError as error:
+                self._metrics.temporal_workflow_starts.labels(
+                    worker_kind="run",
+                    outcome="rpc_error",
+                ).inc()
                 raise RetryableOutboxError("Temporal start RPC failed") from error
         self._metrics.temporal_workflow_starts.labels(
             worker_kind="run",

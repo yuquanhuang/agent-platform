@@ -1,11 +1,12 @@
 # Agent 平台测试验收与 AI 任务包
 
-> 文档版本：V2.1
+> 文档版本：V2.2
 > 文档状态：开发输入基线
 
 ## 1. 测试原则
 
 - 测试与契约同时开发，不在功能完成后补写。
+- StoragePolicy 必须覆盖管理 API/RLS/CAS/幂等、ACTIVE 收紧、DISABLED 回退、Artifact/Workspace 并发原子准入、拒绝事务回滚、策略版本审计和既有 Workspace quota 不漂移。
 - 每个 FR 至少映射一个正常、一个失败和一个权限/租户场景。
 - 公共契约使用 Golden File，Schema 变化必须显式评审。
 - 外部依赖使用协议 Fake 进行单元测试，使用真实容器进行集成测试。

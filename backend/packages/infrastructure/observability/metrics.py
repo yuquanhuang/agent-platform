@@ -93,6 +93,57 @@ class PlatformMetrics:
             labelnames=("provider", "token_type", "estimated"),
             registry=self.registry,
         )
+        self.run_event_batches = Counter(
+            "agent_platform_run_event_batches_total",
+            "RunEvent ingestion batch outcomes.",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
+        self.run_event_batch_duration = Histogram(
+            "agent_platform_run_event_batch_duration_seconds",
+            "RunEvent ingestion batch latency.",
+            registry=self.registry,
+        )
+        self.run_events = Counter(
+            "agent_platform_run_events_total",
+            "RunEvent candidate persistence outcomes.",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
+        self.sse_connections = Gauge(
+            "agent_platform_sse_connections",
+            "Current SSE connections in this API process.",
+            registry=self.registry,
+        )
+        self.sse_connection_outcomes = Counter(
+            "agent_platform_sse_connection_outcomes_total",
+            "SSE connection close and fallback outcomes.",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
+        self.sse_frames = Counter(
+            "agent_platform_sse_frames_total",
+            "SSE frames emitted by type.",
+            labelnames=("frame_type",),
+            registry=self.registry,
+        )
+        self.sse_event_visibility_delay = Histogram(
+            "agent_platform_sse_event_visibility_delay_seconds",
+            "Delay from durable RunEvent recording until ASGI frame send completes.",
+            registry=self.registry,
+        )
+        self.run_queue_events = Counter(
+            "agent_platform_run_queue_events_total",
+            "Durable Run admission queue outcomes.",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
+        self.capacity_lease_events = Counter(
+            "agent_platform_capacity_lease_events_total",
+            "Run capacity lease reconciliation outcomes.",
+            labelnames=("outcome",),
+            registry=self.registry,
+        )
 
     def observe_http(self, *, method: str, status_code: int, duration: float) -> None:
         status_class = f"{status_code // 100}xx"
@@ -101,6 +152,42 @@ class PlatformMetrics:
 
     def observe_worker_cycle(self, *, process: str, outcome: str) -> None:
         self.worker_cycles.labels(process=process, outcome=outcome).inc()
+
+    def observe_run_event_batch(
+        self,
+        *,
+        outcome: str,
+        duration: float,
+        created: int = 0,
+        duplicate: int = 0,
+        rejected: int = 0,
+    ) -> None:
+        self.run_event_batches.labels(outcome=outcome).inc()
+        self.run_event_batch_duration.observe(duration)
+        for item_outcome, count in (
+            ("created", created),
+            ("duplicate", duplicate),
+            ("rejected", rejected),
+        ):
+            if count:
+                self.run_events.labels(outcome=item_outcome).inc(count)
+
+    def sse_opened(self) -> None:
+        self.sse_connections.inc()
+
+    def sse_closed(self, *, outcome: str) -> None:
+        self.sse_connections.dec()
+        self.observe_sse_connection_outcome(outcome=outcome)
+
+    def observe_sse_connection_outcome(self, *, outcome: str) -> None:
+        self.sse_connection_outcomes.labels(outcome=outcome).inc()
+
+    def observe_sse_frame(
+        self, *, frame_type: str, visibility_delay_seconds: float | None = None
+    ) -> None:
+        self.sse_frames.labels(frame_type=frame_type).inc()
+        if visibility_delay_seconds is not None:
+            self.sse_event_visibility_delay.observe(max(0.0, visibility_delay_seconds))
 
     def set_worker_consecutive_failures(self, *, process: str, count: int) -> None:
         if count < 0:
@@ -127,6 +214,8 @@ class PlatformMetrics:
         requests_requeued: int,
         cancellations_signalled: int,
         unresolved: int,
+        queue_admitted: int = 0,
+        queue_timed_out: int = 0,
     ) -> None:
         for outcome, count in (
             ("examined", examined),
@@ -134,9 +223,22 @@ class PlatformMetrics:
             ("request_requeued", requests_requeued),
             ("cancellation_signalled", cancellations_signalled),
             ("unresolved", unresolved),
+            ("queue_admitted", queue_admitted),
+            ("queue_timed_out", queue_timed_out),
         ):
             if count:
                 self.run_reconciliation.labels(outcome=outcome).inc(count)
+        for outcome, count in (
+            ("admitted", queue_admitted),
+            ("timed_out", queue_timed_out),
+        ):
+            if count:
+                self.run_queue_events.labels(outcome=outcome).inc(count)
+
+    def observe_capacity_leases(self, *, released: int, renewed: int) -> None:
+        for outcome, count in (("released", released), ("renewed", renewed)):
+            if count:
+                self.capacity_lease_events.labels(outcome=outcome).inc(count)
 
     def observe_model_gateway_request(
         self, *, provider: str, mode: str, outcome: str

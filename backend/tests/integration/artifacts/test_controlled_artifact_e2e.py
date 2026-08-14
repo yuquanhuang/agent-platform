@@ -161,6 +161,7 @@ class ControlledArtifactPlatform:
             created_at=now,
             updated_at=now,
             expires_at=expires_at,
+            retention_delete_after=None,
             deleted_at=None,
         )
         self.records[key] = record
@@ -425,6 +426,21 @@ class ControlledArtifactPlatform:
         self.records[key] = replace(self.records[key], status="FAILED", updated_at=now)
 
     async def expire_due(
+        self, context: TenantContext, *, now: datetime, limit: int
+    ) -> int:
+        return 0
+
+    async def reclaim_expired_uploads(
+        self, context: TenantContext, *, now: datetime, limit: int
+    ) -> int:
+        return 0
+
+    async def purge_retention_due(
+        self, context: TenantContext, *, now: datetime, limit: int
+    ) -> int:
+        return 0
+
+    async def recover_failed_deletes(
         self, context: TenantContext, *, now: datetime, limit: int
     ) -> int:
         return 0

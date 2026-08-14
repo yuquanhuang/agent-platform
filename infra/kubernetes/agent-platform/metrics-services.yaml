@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-platform-event-worker-metrics
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/name: agent-platform-event-worker
+    app.kubernetes.io/part-of: agent-platform
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent-platform-event-worker
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-platform-reconciliation-worker-metrics
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/name: agent-platform-reconciliation-worker
+    app.kubernetes.io/part-of: agent-platform
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent-platform-reconciliation-worker
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: agent-platform-worker-metrics
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/name: agent-platform-worker-metrics
+    app.kubernetes.io/part-of: agent-platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - agent-platform
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

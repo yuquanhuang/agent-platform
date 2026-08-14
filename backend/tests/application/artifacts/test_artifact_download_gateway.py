@@ -146,6 +146,7 @@ def _grant() -> ArtifactDownloadGrantRecord:
         created_at=NOW,
         updated_at=NOW,
         expires_at=NOW + timedelta(days=1),
+        retention_delete_after=None,
         deleted_at=None,
     )
     return ArtifactDownloadGrantRecord(

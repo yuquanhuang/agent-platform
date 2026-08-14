@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -36,6 +36,7 @@ from packages.domain.model_gateway import (
     AdapterTextDelta,
     AdapterToolCallDelta,
     AdapterUsageEvent,
+    CostAttribution,
     ModelBinding,
     ModelInvocationInput,
     ModelRoute,
@@ -99,6 +100,7 @@ class BudgetGuard(Protocol):
         context: TenantContext,
         request: ModelGatewayRequest,
         binding: ModelBinding,
+        invocation: ModelInvocationInput | None = None,
     ) -> "BudgetPermit": ...
 
     async def settle(
@@ -126,6 +128,38 @@ class UsageRecorder(Protocol):
     async def record(self, context: TenantContext, usage: ModelUsageRecord) -> None: ...
 
 
+class ProviderAttemptRecorder(Protocol):
+    async def record_attempt(
+        self,
+        context: TenantContext,
+        *,
+        request: ModelGatewayRequest,
+        permit: "BudgetPermit",
+        route: ModelRoute,
+        attempt_no: int,
+        provider_request_id: str | None,
+        submission_state: str,
+        error_code: str | None,
+        started_at: datetime,
+        finished_at: datetime,
+    ) -> None: ...
+
+
+class NoopProviderAttemptRecorder:
+    async def record_attempt(self, context: TenantContext, **facts: object) -> None:
+        del context, facts
+
+
+class CostAttributor(Protocol):
+    async def attribute(
+        self,
+        context: TenantContext,
+        route: ModelRoute,
+        usage: ProviderUsage | None,
+        occurred_at: datetime,
+    ) -> CostAttribution: ...
+
+
 class ModelGatewayObserver(Protocol):
     def observe_model_gateway_request(
         self, *, provider: str, mode: str, outcome: str
@@ -144,6 +178,8 @@ class ModelGatewayObserver(Protocol):
 class BudgetPermit:
     reservation_id: UUID | None = None
     reserved_tokens: int | None = None
+    reserved_cost_amount: str | None = None
+    reserved_cost_currency: str | None = None
 
 
 class NoopBudgetGuard:
@@ -154,8 +190,9 @@ class NoopBudgetGuard:
         context: TenantContext,
         request: ModelGatewayRequest,
         binding: ModelBinding,
+        invocation: ModelInvocationInput | None = None,
     ) -> BudgetPermit:
-        del context, binding
+        del context, binding, invocation
         if request.token_budget is not None or request.cost_budget is not None:
             raise ProviderError(
                 code="BUDGET_GUARD_UNAVAILABLE",
@@ -212,6 +249,22 @@ class NoopModelGatewayObserver:
         del provider, usage
 
 
+class NoopCostAttributor:
+    """Preserve provider-reported facts without inventing catalog prices."""
+
+    async def attribute(
+        self,
+        context: TenantContext,
+        route: ModelRoute,
+        usage: ProviderUsage | None,
+        occurred_at: datetime,
+    ) -> CostAttribution:
+        del context, route, occurred_at
+        if usage is None or usage.cost is None:
+            return CostAttribution()
+        return CostAttribution(cost=usage.cost, source="PROVIDER_REPORTED")
+
+
 class ProviderAdapterRegistry:
     def __init__(self, adapters: Mapping[str, ModelProviderAdapter]) -> None:
         self._adapters = dict(adapters)
@@ -264,6 +317,8 @@ class ModelGatewayService:
         secrets: SecretReferenceResolver,
         adapters: ProviderAdapterRegistry,
         usage_recorder: UsageRecorder,
+        attempt_recorder: ProviderAttemptRecorder | None = None,
+        cost_attributor: CostAttributor | None = None,
         budget_guard: BudgetGuard | None = None,
         rate_limiter: ModelRateLimiter | None = None,
         observer: ModelGatewayObserver | None = None,
@@ -275,6 +330,8 @@ class ModelGatewayService:
         self._secrets = secrets
         self._adapters = adapters
         self._usage_recorder = usage_recorder
+        self._attempt_recorder = attempt_recorder or NoopProviderAttemptRecorder()
+        self._cost_attributor = cost_attributor or NoopCostAttributor()
         self._budget_guard = budget_guard or NoopBudgetGuard()
         self._rate_limiter = rate_limiter or NoopModelRateLimiter()
         self._observer = observer or NoopModelGatewayObserver()
@@ -288,7 +345,9 @@ class ModelGatewayService:
         for route in binding.routes:
             self._require_capabilities(route, request)
         invocation = await self._materialize(context, request)
-        permit = await self._budget_guard.authorize(context, request, binding)
+        permit = await self._budget_guard.authorize(
+            context, request, binding, invocation
+        )
         last_error: ProviderError | None = None
         for fallback_count, route in enumerate(binding.routes):
             started_at = self._clock()
@@ -301,9 +360,25 @@ class ModelGatewayService:
                     adapter.generate(route, request, invocation, credential),
                     timeout=timeout,
                 )
+                await self._record_attempt(
+                    context,
+                    request,
+                    permit,
+                    route,
+                    fallback_count + 1,
+                    response.provider_request_id,
+                    "submitted",
+                    None,
+                    started_at,
+                )
                 output_ref = await self._write_output(context, request, response.output)
-                usage = normalize_usage(response.usage)
                 finished_at = self._clock()
+                attribution = await self._cost_attributor.attribute(
+                    context, route, response.usage, finished_at
+                )
+                usage = normalize_usage(
+                    _with_attributed_cost(response.usage, attribution)
+                )
                 await self._record_usage(
                     context,
                     request,
@@ -312,6 +387,7 @@ class ModelGatewayService:
                     usage,
                     started_at,
                     finished_at,
+                    attribution,
                 )
                 budget_error = await self._budget_guard.settle(
                     context, request, permit, usage
@@ -340,6 +416,17 @@ class ModelGatewayService:
                     retryable=False,
                     submission_state="unknown",
                 )
+                await self._record_attempt(
+                    context,
+                    request,
+                    permit,
+                    route,
+                    fallback_count + 1,
+                    None,
+                    "unknown",
+                    last_error.code,
+                    started_at,
+                )
                 self._observer.observe_model_gateway_request(
                     provider=route.provider,
                     mode="generate",
@@ -348,6 +435,18 @@ class ModelGatewayService:
                 raise last_error from error
             except ProviderError as error:
                 last_error = error
+                if error.submission_state in {"submitted", "unknown"}:
+                    await self._record_attempt(
+                        context,
+                        request,
+                        permit,
+                        route,
+                        fallback_count + 1,
+                        None,
+                        error.submission_state,
+                        error.code,
+                        started_at,
+                    )
                 if binding.allows_fallback(error, fallback_count):
                     self._observer.observe_model_gateway_fallback(
                         source_provider=route.provider,
@@ -369,6 +468,17 @@ class ModelGatewayService:
                     retryable=False,
                     submission_state="unknown",
                 )
+                await self._record_attempt(
+                    context,
+                    request,
+                    permit,
+                    route,
+                    fallback_count + 1,
+                    None,
+                    "unknown",
+                    last_error.code,
+                    started_at,
+                )
                 self._observer.observe_model_gateway_request(
                     provider=route.provider, mode="generate", outcome="error"
                 )
@@ -385,11 +495,14 @@ class ModelGatewayService:
         for route in binding.routes:
             self._require_capabilities(route, request)
         invocation = await self._materialize(context, request)
-        permit = await self._budget_guard.authorize(context, request, binding)
+        permit = await self._budget_guard.authorize(
+            context, request, binding, invocation
+        )
         for route_index, route in enumerate(binding.routes):
             started_at = self._clock()
             provider_request_id: str | None = None
             usage: ModelUsage | None = None
+            usage_attribution = CostAttribution()
             emitted = False
             completed = False
             try:
@@ -402,20 +515,26 @@ class ModelGatewayService:
                         route, request, invocation, credential
                     ):
                         emitted = True
-                        event, provider_request_id, event_usage, is_completed = (
-                            await self._normalize_stream_event(
-                                context,
-                                request,
-                                route,
-                                adapter_event,
-                                provider_request_id,
-                            )
+                        (
+                            event,
+                            provider_request_id,
+                            event_usage,
+                            event_attribution,
+                            is_completed,
+                        ) = await self._normalize_stream_event(
+                            context,
+                            request,
+                            route,
+                            adapter_event,
+                            provider_request_id,
                         )
                         if event_usage is not None:
                             usage = event_usage
+                            usage_attribution = event_attribution
                         if is_completed:
                             if usage is None:
                                 usage = normalize_usage(None)
+                                usage_attribution = CostAttribution()
                                 yield self._usage_event(
                                     route, provider_request_id, usage
                                 )
@@ -427,6 +546,18 @@ class ModelGatewayService:
                                 usage,
                                 started_at,
                                 self._clock(),
+                                usage_attribution,
+                            )
+                            await self._record_attempt(
+                                context,
+                                request,
+                                permit,
+                                route,
+                                route_index + 1,
+                                provider_request_id,
+                                "submitted",
+                                None,
+                                started_at,
                             )
                             budget_error = await self._budget_guard.settle(
                                 context, request, permit, usage
@@ -459,6 +590,18 @@ class ModelGatewayService:
             except asyncio.CancelledError:
                 raise
             except ProviderError as error:
+                if error.submission_state in {"submitted", "unknown"}:
+                    await self._record_attempt(
+                        context,
+                        request,
+                        permit,
+                        route,
+                        route_index + 1,
+                        provider_request_id,
+                        error.submission_state,
+                        error.code,
+                        started_at,
+                    )
                 if not emitted and binding.allows_fallback(error, route_index):
                     self._observer.observe_model_gateway_fallback(
                         source_provider=route.provider,
@@ -481,6 +624,17 @@ class ModelGatewayService:
                     retryable=False,
                     submission_state="unknown" if not emitted else "submitted",
                 )
+                await self._record_attempt(
+                    context,
+                    request,
+                    permit,
+                    route,
+                    route_index + 1,
+                    provider_request_id,
+                    error.submission_state,
+                    error.code,
+                    started_at,
+                )
                 self._observer.observe_model_gateway_request(
                     provider=route.provider, mode="stream", outcome="error"
                 )
@@ -492,6 +646,17 @@ class ModelGatewayService:
                     message="The model provider stream failed.",
                     retryable=False,
                     submission_state="unknown" if not emitted else "submitted",
+                )
+                await self._record_attempt(
+                    context,
+                    request,
+                    permit,
+                    route,
+                    route_index + 1,
+                    provider_request_id,
+                    error.submission_state,
+                    error.code,
+                    started_at,
                 )
                 self._observer.observe_model_gateway_request(
                     provider=route.provider, mode="stream", outcome="error"
@@ -540,6 +705,7 @@ class ModelGatewayService:
         usage: ModelUsage,
         started_at: datetime,
         finished_at: datetime,
+        attribution: CostAttribution,
     ) -> None:
         await self._usage_recorder.record(
             context,
@@ -560,9 +726,37 @@ class ModelGatewayService:
                 cost_currency=usage.cost.currency if usage.cost is not None else None,
                 started_at=started_at,
                 finished_at=finished_at,
+                cost_source=attribution.source,
+                price_catalog_version_id=attribution.price_catalog_version_id,
+                cost_details=attribution.details,
             ),
         )
         self._observer.observe_model_gateway_usage(provider=route.provider, usage=usage)
+
+    async def _record_attempt(
+        self,
+        context: TenantContext,
+        request: ModelGatewayRequest,
+        permit: BudgetPermit,
+        route: ModelRoute,
+        attempt_no: int,
+        provider_request_id: str | None,
+        submission_state: str,
+        error_code: str | None,
+        started_at: datetime,
+    ) -> None:
+        await self._attempt_recorder.record_attempt(
+            context,
+            request=request,
+            permit=permit,
+            route=route,
+            attempt_no=attempt_no,
+            provider_request_id=provider_request_id,
+            submission_state=submission_state,
+            error_code=error_code,
+            started_at=started_at,
+            finished_at=self._clock(),
+        )
 
     async def _normalize_stream_event(
         self,
@@ -571,7 +765,13 @@ class ModelGatewayService:
         route: ModelRoute,
         event: AdapterStreamEvent,
         current_request_id: str | None,
-    ) -> tuple[ModelGatewayStreamEvent, str | None, ModelUsage | None, bool]:
+    ) -> tuple[
+        ModelGatewayStreamEvent,
+        str | None,
+        ModelUsage | None,
+        CostAttribution,
+        bool,
+    ]:
         occurred_at = self._clock()
         event_id = f"mge_{uuid4().hex}"
         request_id = getattr(event, "provider_request_id", None) or current_request_id
@@ -588,6 +788,7 @@ class ModelGatewayService:
                 ),
                 request_id,
                 None,
+                CostAttribution(),
                 False,
             )
         if isinstance(event, AdapterTextDelta):
@@ -603,6 +804,7 @@ class ModelGatewayService:
                 ),
                 request_id,
                 None,
+                CostAttribution(),
                 False,
             )
         if isinstance(event, AdapterToolCallDelta):
@@ -622,14 +824,21 @@ class ModelGatewayService:
                 ),
                 request_id,
                 None,
+                CostAttribution(),
                 False,
             )
         if isinstance(event, AdapterUsageEvent):
-            normalized = normalize_usage(event.usage)
+            attribution = await self._cost_attributor.attribute(
+                context, route, event.usage, occurred_at
+            )
+            normalized = normalize_usage(
+                _with_attributed_cost(event.usage, attribution)
+            )
             return (
                 self._usage_event(route, request_id, normalized),
                 request_id,
                 normalized,
+                attribution,
                 False,
             )
         output_ref = await self._write_output(context, request, event.output)
@@ -648,6 +857,7 @@ class ModelGatewayService:
             ),
             request_id,
             None,
+            CostAttribution(),
             True,
         )
 
@@ -730,3 +940,11 @@ def _request_error_outcome(error: ProviderError) -> str:
     }:
         return "rejected"
     return "error"
+
+
+def _with_attributed_cost(
+    usage: ProviderUsage | None, attribution: CostAttribution
+) -> ProviderUsage | None:
+    if usage is None or attribution.cost is None:
+        return usage
+    return replace(usage, cost=attribution.cost)

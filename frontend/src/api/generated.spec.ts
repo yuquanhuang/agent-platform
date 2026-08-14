@@ -9,10 +9,10 @@ describe('generated contracts', () => {
   it('covers both frozen OpenAPI operation catalogs', () => {
     expect(coreOperationIds).toHaveLength(42);
     expect(coreOperationIds).toContain('downloadArtifactContent');
-    expect(resourceOperationIds).toHaveLength(134);
+    expect(resourceOperationIds).toHaveLength(148);
     expect(resourceOperationIds).toContain('createQuotaPolicy');
     expect(resourceOperationIds).toContain('listQuotaPolicyVersions');
-    expect(new Set([...coreOperationIds, ...resourceOperationIds]).size).toBe(176);
+    expect(new Set([...coreOperationIds, ...resourceOperationIds]).size).toBe(190);
   });
 
   it('keeps RunEvent as a discriminated union', () => {

@@ -8,6 +8,7 @@ from apps.api.routes.approvals import create_approval_router
 from apps.api.routes.artifacts import create_artifact_router
 from apps.api.routes.audit import create_audit_router
 from apps.api.routes.auth import create_auth_router
+from apps.api.routes.budget_policies import create_budget_policy_router
 from apps.api.routes.events import InternalServiceIdentityProvider, create_event_router
 from apps.api.routes.health import create_health_router
 from apps.api.routes.iam import create_iam_router
@@ -20,6 +21,7 @@ from apps.api.routes.releases import create_release_router
 from apps.api.routes.runs import create_run_router
 from apps.api.routes.sessions import create_session_router
 from apps.api.routes.skills import create_skill_router
+from apps.api.routes.storage_policies import create_storage_policy_router
 from packages.application.event_service import (
     RunEventIngestionService,
     RunEventQueryService,
@@ -31,6 +33,7 @@ from packages.application.public import (
     ArtifactDownloadGatewayService,
     ArtifactManagementService,
     AuditManagementService,
+    BudgetPolicyManagementService,
     CurrentIdentityService,
     DeploymentManagementService,
     HealthService,
@@ -46,6 +49,7 @@ from packages.application.public import (
     RunManagementService,
     SessionManagementService,
     SkillManagementService,
+    StoragePolicyManagementService,
 )
 from packages.contracts.public import IdentityProvider
 from packages.infrastructure.auth.public import MockIdentityProvider
@@ -63,6 +67,8 @@ def create_app(
     model_service: ModelManagementService | None = None,
     prompt_service: PromptManagementService | None = None,
     quota_policy_service: QuotaPolicyManagementService | None = None,
+    budget_policy_service: BudgetPolicyManagementService | None = None,
+    storage_policy_service: StoragePolicyManagementService | None = None,
     skill_service: SkillManagementService | None = None,
     mcp_service: McpManagementService | None = None,
     release_service: ReleaseManagementService | None = None,
@@ -113,6 +119,12 @@ def create_app(
         create_quota_policy_router(resolved_identity_provider, quota_policy_service)
     )
     application.include_router(
+        create_budget_policy_router(resolved_identity_provider, budget_policy_service)
+    )
+    application.include_router(
+        create_storage_policy_router(resolved_identity_provider, storage_policy_service)
+    )
+    application.include_router(
         create_agent_router(resolved_identity_provider, agent_service)
     )
     application.include_router(
@@ -147,6 +159,7 @@ def create_app(
             run_event_query_service,
             run_event_stream_service,
             resolved_settings.sse_send_timeout_seconds,
+            resolved_metrics,
         )
     )
     application.include_router(

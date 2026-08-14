@@ -150,8 +150,9 @@ class RecordingBudgetGuard:
         context: TenantContext,
         request: ModelGatewayRequest,
         binding: ModelBinding,
+        invocation: ModelInvocationInput | None = None,
     ) -> BudgetPermit:
-        del context, request, binding
+        del context, request, binding, invocation
         self.authorized += 1
         return self.permit
 

@@ -1,6 +1,7 @@
 """Strongly typed process configuration."""
 
 import ipaddress
+import json
 from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, Literal, Self
@@ -84,6 +85,28 @@ class AppSettings(BaseSettings):
         3600.0
     )
     artifact_public_origins: tuple[str, ...] = ()
+    artifact_max_reserved_bytes_per_tenant: (
+        Annotated[int, Field(ge=1, le=1_125_899_906_842_624)] | None
+    ) = None
+    artifact_max_reserved_count_per_tenant: (
+        Annotated[int, Field(ge=1, le=1_000_000_000)] | None
+    ) = None
+    artifact_retention_seconds: Annotated[int, Field(ge=300, le=315_360_000)] = (
+        2_592_000
+    )
+    artifact_forensic_retention_seconds: Annotated[
+        int, Field(ge=300, le=315_360_000)
+    ] = 604_800
+    artifact_delete_recovery_delay_seconds: Annotated[
+        int, Field(ge=60, le=2_592_000)
+    ] = 3_600
+    artifact_delete_recovery_max_operations: Annotated[int, Field(ge=1, le=100)] = 3
+    workspace_max_reserved_bytes_per_tenant: Annotated[
+        int, Field(ge=1, le=1_125_899_906_842_624)
+    ] = 10_737_418_240
+    workspace_max_reserved_count_per_tenant: Annotated[
+        int, Field(ge=1, le=1_000_000_000)
+    ] = 100
     temporal_address: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     temporal_namespace: Annotated[str, Field(min_length=1, max_length=255)] | None = (
         None
@@ -130,7 +153,18 @@ class AppSettings(BaseSettings):
         None
     )
     run_max_nonterminal_codex: Annotated[int, Field(ge=1, le=1_000_000)] | None = None
+    run_queue_max_wait_seconds: Annotated[int, Field(ge=1, le=86_400)] = 300
+    run_queue_max_pending_per_tenant: Annotated[int, Field(ge=1, le=1_000_000)] = 1_000
+    run_queue_admission_batch_size: Annotated[int, Field(ge=1, le=500)] = 50
+    run_queue_poll_interval_seconds: Annotated[float, Field(gt=0, le=60)] = 1.0
+    run_capacity_domain_slots: dict[str, Annotated[int, Field(ge=1, le=1_000_000)]] = {}
+    run_capacity_lease_ttl_seconds: Annotated[int, Field(ge=30, le=86_400)] = 300
+    run_capacity_tenant_quantum: Annotated[int, Field(ge=1, le=100)] = 1
     metrics_allowed_networks: tuple[str, ...] = ("127.0.0.1/32", "::1/128")
+    worker_metrics_host: Annotated[str, Field(min_length=1, max_length=255)] = (
+        "127.0.0.1"
+    )
+    worker_metrics_port: Annotated[int, Field(ge=1, le=65535)] = 9090
     oidc_issuer: AnyHttpUrl | None = None
     oidc_client_id: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     oidc_client_secret_ref: SecretReference | None = None
@@ -185,6 +219,37 @@ class AppSettings(BaseSettings):
                     "AP_METRICS_ALLOWED_NETWORKS must contain valid CIDRs"
                 ) from exc
         return value
+
+    @field_validator("run_capacity_domain_slots", mode="before")
+    @classmethod
+    def parse_run_capacity_domain_slots(cls, value: object) -> object:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "AP_RUN_CAPACITY_DOMAIN_SLOTS must be a JSON object"
+                ) from exc
+        return value
+
+    @field_validator("run_capacity_domain_slots")
+    @classmethod
+    def validate_run_capacity_domain_slots(
+        cls, value: dict[str, int]
+    ) -> dict[str, int]:
+        normalized: dict[str, int] = {}
+        for domain_key, slots in value.items():
+            key = domain_key.strip()
+            if not key or len(key) > 255:
+                raise ValueError(
+                    "AP_RUN_CAPACITY_DOMAIN_SLOTS keys must contain 1 to 255 characters"
+                )
+            if key in normalized:
+                raise ValueError(
+                    "AP_RUN_CAPACITY_DOMAIN_SLOTS contains duplicate normalized keys"
+                )
+            normalized[key] = slots
+        return normalized
 
     @model_validator(mode="after")
     def validate_environment_security(self) -> Self:

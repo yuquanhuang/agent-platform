@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from prometheus_client import generate_latest
 
 from packages.application.event_service import (
     EventAppendItem,
@@ -18,6 +19,7 @@ from packages.contracts.generated.run_event import (
     RuntimeEventCandidate,
 )
 from packages.contracts.public import PlatformError, SubjectType, TenantContext
+from packages.infrastructure.observability import PlatformMetrics
 
 NOW = datetime(2026, 8, 8, tzinfo=UTC)
 TENANT_ID = UUID("11111111-1111-4111-8111-111111111111")
@@ -164,6 +166,7 @@ async def test_service_requires_service_identity_and_event_write_permission(
 
 @pytest.mark.asyncio
 async def test_service_raises_batch_failure_after_store_commits_audit() -> None:
+    metrics = PlatformMetrics()
     service = RunEventIngestionService(
         Store(
             EventBatchStoreOutcome(
@@ -173,7 +176,8 @@ async def test_service_raises_batch_failure_after_store_commits_audit() -> None:
                     message="stale",
                 )
             )
-        )
+        ),
+        metrics,
     )
 
     with pytest.raises(PlatformError) as rejected:
@@ -185,3 +189,58 @@ async def test_service_raises_batch_failure_after_store_commits_audit() -> None:
 
     assert rejected.value.status_code == 409
     assert rejected.value.code == "EXECUTION_FENCING_REJECTED"
+    payload = generate_latest(metrics.registry).decode()
+    assert (
+        'agent_platform_run_event_batches_total{outcome="store_rejected"} 1.0'
+        in payload
+    )
+
+
+@pytest.mark.asyncio
+async def test_service_records_bounded_batch_and_candidate_outcomes() -> None:
+    metrics = PlatformMetrics()
+    service = RunEventIngestionService(
+        Store(
+            EventBatchStoreOutcome(
+                items=(
+                    EventAppendItem(
+                        source_event_id="source-1",
+                        status="created",
+                        event_id=EVENT_ID,
+                        sequence_no=1,
+                    ),
+                )
+            )
+        ),
+        metrics,
+    )
+
+    await service.append_batch(
+        access(), run_id=str(RUN_ID), request=request(candidate())
+    )
+    payload = generate_latest(metrics.registry).decode()
+
+    assert 'agent_platform_run_event_batches_total{outcome="success"} 1.0' in payload
+    assert 'agent_platform_run_events_total{outcome="created"} 1.0' in payload
+    assert "tenant_id" not in payload
+    assert "run_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_service_uses_fixed_metric_outcome_for_authorization_failure() -> None:
+    metrics = PlatformMetrics()
+    service = RunEventIngestionService(Store(EventBatchStoreOutcome()), metrics)
+
+    with pytest.raises(PlatformError):
+        await service.append_batch(
+            access(permissions=frozenset()),
+            run_id=str(RUN_ID),
+            request=request(candidate()),
+        )
+
+    payload = generate_latest(metrics.registry).decode()
+    assert (
+        'agent_platform_run_event_batches_total{outcome="authorization_rejected"} '
+        "1.0" in payload
+    )
+    assert "permission_denied" not in payload

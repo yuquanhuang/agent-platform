@@ -3,6 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Request, status
+from opentelemetry import trace
 from starlette.responses import Response, StreamingResponse
 
 from apps.api.sse import BoundedSseResponse
@@ -27,6 +28,7 @@ from packages.contracts.public import (
     dependency_unavailable,
     validation_error,
 )
+from packages.infrastructure.observability import PlatformMetrics
 
 
 def create_run_router(
@@ -35,6 +37,7 @@ def create_run_router(
     event_query_service: RunEventQueryService | None = None,
     event_stream_service: RunEventStreamService | None = None,
     sse_send_timeout_seconds: float = 15.0,
+    metrics: PlatformMetrics | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
 
@@ -173,6 +176,8 @@ def create_run_router(
             after=_stream_after(last_event_id, after),
             metadata=metadata(request),
         )
+        span = trace.get_current_span()
+        span.set_attribute("agent_platform.run_id", run_id)
         return BoundedSseResponse(
             event_stream,
             send_timeout_seconds=sse_send_timeout_seconds,
@@ -181,6 +186,7 @@ def create_run_router(
                 "Cache-Control": "no-cache, no-transform",
                 "X-Accel-Buffering": "no",
             },
+            metrics=metrics,
         )
 
     @router.post(

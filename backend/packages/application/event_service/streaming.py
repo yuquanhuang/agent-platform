@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -40,6 +41,18 @@ class RunEventNotificationSource(Protocol):
     ) -> RunEventNotificationSubscription: ...
 
 
+class RunEventStreamMetrics(Protocol):
+    def sse_opened(self) -> None: ...
+
+    def sse_closed(self, *, outcome: str) -> None: ...
+
+    def observe_sse_connection_outcome(self, *, outcome: str) -> None: ...
+
+    def observe_sse_frame(
+        self, *, frame_type: str, visibility_delay_seconds: float | None = None
+    ) -> None: ...
+
+
 class RunEventStreamService:
     """Stream durable facts in sequence order and use notifications only to wake reads."""
 
@@ -52,6 +65,7 @@ class RunEventStreamService:
         heartbeat_seconds: float = 15.0,
         poll_interval_seconds: float = 1.0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        metrics: RunEventStreamMetrics | None = None,
     ) -> None:
         if not 1 <= page_size <= 200:
             raise ValueError("SSE page_size must be between 1 and 200")
@@ -63,6 +77,7 @@ class RunEventStreamService:
         self._heartbeat_seconds = heartbeat_seconds
         self._poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
+        self._metrics = metrics
 
     async def open_stream(
         self,
@@ -81,19 +96,37 @@ class RunEventStreamService:
         self, access: RunEventReadAccess, *, after: int
     ) -> AsyncIterator[bytes]:
         cursor = after
-        subscription = await self._try_subscribe(access)
+        subscription: RunEventNotificationSubscription | None = None
+        close_outcome = "terminal"
+        fallback_observed = False
+        if self._metrics is not None:
+            self._metrics.sse_opened()
         try:
+            subscription = await self._try_subscribe(access)
+            if subscription is None and self._metrics is not None:
+                self._metrics.observe_sse_connection_outcome(
+                    outcome="notification_fallback"
+                )
+                fallback_observed = True
             while True:
                 try:
                     page = await self._query_service.read_page(
                         access, after=cursor, limit=self._page_size
                     )
                 except PlatformError:
+                    close_outcome = "query_error"
                     return
                 for event in page.events:
                     if event.sequence_no <= cursor:
                         continue
                     yield _run_event_frame(event)
+                    if self._metrics is not None:
+                        self._metrics.observe_sse_frame(
+                            frame_type="run_event",
+                            visibility_delay_seconds=_visibility_delay(
+                                event.recorded_at
+                            ),
+                        )
                     cursor = event.sequence_no
                     if event.event_type in TERMINAL_EVENT_TYPES:
                         return
@@ -111,12 +144,21 @@ class RunEventStreamService:
                         await _close_subscription(subscription)
                         subscription = None
                 if subscription is None:
+                    if self._metrics is not None and not fallback_observed:
+                        self._metrics.observe_sse_connection_outcome(
+                            outcome="notification_fallback"
+                        )
+                        fallback_observed = True
                     await self._sleep(self._poll_interval_seconds)
                 if not notified:
                     yield SSE_HEARTBEAT_FRAME
+                    if self._metrics is not None:
+                        self._metrics.observe_sse_frame(frame_type="heartbeat")
         finally:
             if subscription is not None:
                 await _close_subscription(subscription)
+            if self._metrics is not None:
+                self._metrics.sse_closed(outcome=close_outcome)
 
     async def _try_subscribe(
         self, access: RunEventReadAccess
@@ -140,6 +182,13 @@ def _run_event_frame(event: RunEvent) -> bytes:
     return (
         f"id: {event.sequence_no}\n" "event: run_event\n" f"data: {payload}\n\n"
     ).encode()
+
+
+def _visibility_delay(recorded_at: datetime) -> float:
+    now = datetime.now(UTC)
+    if recorded_at.tzinfo is None:
+        return 0.0
+    return max(0.0, (now - recorded_at).total_seconds())
 
 
 async def _close_subscription(

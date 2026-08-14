@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.sandbox_manager.app import create_sandbox_manager_app
 from apps.sandbox_manager.routes import SandboxServiceIdentityProvider
+from packages.application.policy import TenantStoragePolicy
 from packages.application.sandbox import (
     SandboxLifecycleService,
     SandboxPolicyResolver,
@@ -50,7 +51,15 @@ def build_database_sandbox_lifecycle_service(
     """Build the lifecycle service while keeping deployment adapters explicit."""
 
     return SandboxLifecycleService(
-        SqlAlchemySandboxLifecycleStore(session_factory),
+        SqlAlchemySandboxLifecycleStore(
+            session_factory,
+            storage_policy=TenantStoragePolicy(
+                max_reserved_workspace_bytes=(
+                    settings.workspace_max_reserved_bytes_per_tenant
+                ),
+                max_reserved_workspaces=settings.workspace_max_reserved_count_per_tenant,
+            ),
+        ),
         provider,
         policy_resolver,
         token_verifier,

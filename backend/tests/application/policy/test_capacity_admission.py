@@ -3,10 +3,16 @@
 import pytest
 
 from packages.application.policy import (
+    ArtifactStorageAdmissionDenied,
+    ArtifactStoragePolicy,
     CapacityAdmissionDenied,
     RunCapacityFacts,
     RunCapacityPolicy,
+    TenantStoragePolicy,
+    WorkspaceStorageAdmissionDenied,
+    admit_artifact_storage,
     admit_run_capacity,
+    admit_workspace_storage,
 )
 
 
@@ -134,3 +140,115 @@ def test_tenant_capacity_policy_can_only_narrow_deployment_hard_limits() -> None
     assert effective.max_nonterminal_runs_per_agent == 5
     assert effective.max_nonterminal_agentscope_runs == 30
     assert deployment.expansion_fields(tenant) == ("max_nonterminal_agentscope_runs",)
+
+
+def test_artifact_storage_admission_accounts_for_reserved_bytes_and_count() -> None:
+    policy = ArtifactStoragePolicy(
+        max_reserved_bytes_per_tenant=100,
+        max_reserved_artifacts_per_tenant=2,
+    )
+
+    admit_artifact_storage(
+        policy,
+        reserved_bytes=80,
+        reserved_artifacts=1,
+        requested_bytes=20,
+    )
+
+    with pytest.raises(ArtifactStorageAdmissionDenied) as bytes_denial:
+        admit_artifact_storage(
+            policy,
+            reserved_bytes=80,
+            reserved_artifacts=1,
+            requested_bytes=21,
+        )
+    assert bytes_denial.value.reason_code == "ARTIFACT_TENANT_STORAGE_BYTES_LIMIT"
+    assert bytes_denial.value.current == 80
+    assert bytes_denial.value.requested == 21
+
+    with pytest.raises(ArtifactStorageAdmissionDenied) as count_denial:
+        admit_artifact_storage(
+            policy,
+            reserved_bytes=50,
+            reserved_artifacts=2,
+            requested_bytes=1,
+        )
+    assert count_denial.value.reason_code == "ARTIFACT_TENANT_STORAGE_COUNT_LIMIT"
+
+
+def test_artifact_storage_policy_rejects_invalid_limits_and_facts() -> None:
+    with pytest.raises(ValueError):
+        ArtifactStoragePolicy(max_reserved_bytes_per_tenant=0)
+    with pytest.raises(ValueError):
+        ArtifactStoragePolicy(max_reserved_artifacts_per_tenant=0)
+    with pytest.raises(ValueError):
+        admit_artifact_storage(
+            ArtifactStoragePolicy(),
+            reserved_bytes=0,
+            reserved_artifacts=0,
+            requested_bytes=0,
+        )
+
+
+def test_tenant_storage_policy_keeps_workspace_and_artifact_pools_separate() -> None:
+    deployment = TenantStoragePolicy(
+        max_reserved_workspace_bytes=1_000,
+        max_reserved_workspaces=10,
+        max_reserved_artifact_bytes=2_000,
+        max_reserved_artifacts=20,
+    )
+    tenant = TenantStoragePolicy(
+        max_reserved_workspace_bytes=800,
+        max_reserved_artifacts=12,
+    )
+
+    effective = deployment.narrowed_by(tenant)
+
+    assert effective == TenantStoragePolicy(
+        max_reserved_workspace_bytes=800,
+        max_reserved_workspaces=10,
+        max_reserved_artifact_bytes=2_000,
+        max_reserved_artifacts=12,
+    )
+    assert effective.artifact_policy() == ArtifactStoragePolicy(
+        max_reserved_bytes_per_tenant=2_000,
+        max_reserved_artifacts_per_tenant=12,
+    )
+
+
+def test_tenant_storage_policy_reports_deployment_expansion() -> None:
+    deployment = TenantStoragePolicy(
+        max_reserved_workspace_bytes=1_000,
+        max_reserved_artifacts=10,
+    )
+    tenant = TenantStoragePolicy(
+        max_reserved_workspace_bytes=1_001,
+        max_reserved_artifacts=11,
+    )
+
+    assert deployment.expansion_fields(tenant) == (
+        "max_reserved_workspace_bytes",
+        "max_reserved_artifacts",
+    )
+
+
+def test_workspace_storage_admission_uses_reserved_quota_not_live_usage() -> None:
+    policy = TenantStoragePolicy(
+        max_reserved_workspace_bytes=1_000,
+        max_reserved_workspaces=2,
+    )
+
+    admit_workspace_storage(
+        policy,
+        reserved_bytes=700,
+        reserved_workspaces=1,
+        requested_bytes=300,
+    )
+    with pytest.raises(WorkspaceStorageAdmissionDenied) as denied:
+        admit_workspace_storage(
+            policy,
+            reserved_bytes=700,
+            reserved_workspaces=1,
+            requested_bytes=301,
+        )
+    assert denied.value.reason_code == "WORKSPACE_TENANT_STORAGE_BYTES_LIMIT"

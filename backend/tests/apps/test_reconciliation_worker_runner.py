@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from apps.reconciliation_worker.runner import reconciliation_cycle
+from apps.reconciliation_worker.runner import reconciliation_cycle, run_admission_cycle
 from packages.application.reconciliation import (
     ApprovalReconciliationSummary,
     PlatformReconciler,
@@ -68,6 +68,13 @@ class Reconciler:
             ),
         )
 
+    async def process_run_admission_queue(
+        self, context: TenantContext, *, now: datetime
+    ) -> RunReconciliationSummary:
+        del context
+        assert now == NOW
+        return RunReconciliationSummary(queue_admitted=2, queue_timed_out=1)
+
 
 @pytest.mark.asyncio
 async def test_cycle_aggregates_each_explicit_tenant() -> None:
@@ -100,4 +107,20 @@ async def test_cycle_aggregates_each_explicit_tenant() -> None:
             cleanup_failed=2,
             unresolved=2,
         ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_queue_cycle_does_not_run_other_reconcilers() -> None:
+    summary = await run_admission_cycle(
+        cast(PlatformReconciler, Reconciler()),
+        Source(),
+        PlatformMetrics(),
+        tenant_limit=2,
+        now=NOW,
+    )
+
+    assert summary == RunReconciliationSummary(
+        queue_admitted=4,
+        queue_timed_out=2,
     )

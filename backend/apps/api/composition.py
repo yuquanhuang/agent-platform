@@ -10,14 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.app import create_app
 from apps.api.routes.events import InternalServiceIdentityProvider
-from packages.application.artifacts import ArtifactGrantUrlPolicy
+from packages.application.artifacts import (
+    ArtifactGrantUrlPolicy,
+    ArtifactRetentionPolicy,
+)
 from packages.application.event_service import (
     RunEventIngestionService,
     RunEventNotificationSource,
     RunEventQueryService,
     RunEventStreamService,
 )
-from packages.application.policy import RunCapacityPolicy
+from packages.application.policy import (
+    ArtifactStoragePolicy,
+    RunCapacityPolicy,
+    TenantStoragePolicy,
+)
 from packages.application.public import (
     ApprovalManagementService,
     ApprovalWorkflowControl,
@@ -28,6 +35,7 @@ from packages.application.public import (
     ArtifactObjectStore,
     AuditManagementService,
     BaselineSkillSupplyChainScanner,
+    BudgetPolicyManagementService,
     CompositeResourceReferenceReader,
     DeploymentManagementService,
     ExecutionTicketIssuer,
@@ -44,6 +52,7 @@ from packages.application.public import (
     SkillManagementService,
     SkillRegistry,
     SkillSupplyChainScanner,
+    StoragePolicyManagementService,
     TrustedSkillArtifactContentReader,
 )
 from packages.application.temporal import RuntimeTargetReleaseConfig
@@ -57,6 +66,7 @@ from packages.infrastructure.public import (
     SqlAlchemyApprovalStore,
     SqlAlchemyArtifactStore,
     SqlAlchemyAuditQueryStore,
+    SqlAlchemyBudgetPolicyStore,
     SqlAlchemyDeploymentStore,
     SqlAlchemyIamPersistence,
     SqlAlchemyIdentityReader,
@@ -71,6 +81,7 @@ from packages.infrastructure.public import (
     SqlAlchemySkillArtifactReader,
     SqlAlchemySkillScanStore,
     SqlAlchemySnapshotCompilationStore,
+    SqlAlchemyStoragePolicyStore,
 )
 
 
@@ -80,6 +91,8 @@ class DatabasePublicationServices:
 
     iam: IamManagementService
     quota_policy: QuotaPolicyManagementService
+    budget_policy: BudgetPolicyManagementService
+    storage_policy: StoragePolicyManagementService
     release: ReleaseManagementService
     deployment: DeploymentManagementService
     query: PublicationQueryService
@@ -95,6 +108,7 @@ class DatabasePublicationServices:
     audit: AuditManagementService
     skill: SkillManagementService | None
     mcp: McpManagementService
+    metrics: PlatformMetrics
 
 
 def build_database_publication_services(
@@ -110,9 +124,11 @@ def build_database_publication_services(
     artifact_download_reader: ArtifactDownloadObjectReader | None = None,
     artifact_download_gateway_subject_id: UUID | None = None,
     artifact_download_revocation_source: ArtifactDownloadRevocationSource | None = None,
+    metrics: PlatformMetrics | None = None,
 ) -> DatabasePublicationServices:
     """Compose real PostgreSQL adapters without resolving deployment Secrets here."""
 
+    resolved_metrics = metrics or PlatformMetrics()
     access = SqlAlchemyIamPersistence(session_factory)
     snapshot_store = SqlAlchemySnapshotCompilationStore(session_factory)
     event_query = RunEventQueryService(
@@ -120,6 +136,10 @@ def build_database_publication_services(
     )
     resolved_settings = settings or AppSettings()
     deployment_capacity_policy = _run_capacity_policy(resolved_settings)
+    artifact_storage_policy = _artifact_storage_policy(
+        resolved_settings,
+        required=artifact_object_store is not None,
+    )
     if (
         artifact_object_store is not None
         and not resolved_settings.artifact_public_origins
@@ -163,7 +183,11 @@ def build_database_publication_services(
             SqlAlchemySkillScanStore(session_factory),
         )
     approval_store = SqlAlchemyApprovalStore(session_factory)
-    artifact_store = SqlAlchemyArtifactStore(session_factory)
+    artifact_store = SqlAlchemyArtifactStore(
+        session_factory,
+        storage_policy=artifact_storage_policy,
+        retention_policy=_artifact_retention_policy(resolved_settings),
+    )
     artifact_credentials = RandomArtifactDownloadCredentialIssuer()
     return DatabasePublicationServices(
         iam=IamManagementService(access),
@@ -171,6 +195,28 @@ def build_database_publication_services(
             access,
             SqlAlchemyQuotaPolicyStore(session_factory),
             deployment_capacity_policy,
+        ),
+        budget_policy=BudgetPolicyManagementService(
+            access,
+            SqlAlchemyBudgetPolicyStore(session_factory),
+        ),
+        storage_policy=StoragePolicyManagementService(
+            access,
+            SqlAlchemyStoragePolicyStore(session_factory),
+            TenantStoragePolicy(
+                max_reserved_workspace_bytes=(
+                    resolved_settings.workspace_max_reserved_bytes_per_tenant
+                ),
+                max_reserved_workspaces=(
+                    resolved_settings.workspace_max_reserved_count_per_tenant
+                ),
+                max_reserved_artifact_bytes=(
+                    artifact_storage_policy.max_reserved_bytes_per_tenant
+                ),
+                max_reserved_artifacts=(
+                    artifact_storage_policy.max_reserved_artifacts_per_tenant
+                ),
+            ),
         ),
         release=ReleaseManagementService(
             access, SqlAlchemyReleaseStore(session_factory)
@@ -190,10 +236,18 @@ def build_database_publication_services(
             SqlAlchemyRunStore(
                 session_factory,
                 run_capacity_policy=deployment_capacity_policy,
+                queue_max_wait=timedelta(
+                    seconds=resolved_settings.run_queue_max_wait_seconds
+                ),
+                queue_max_pending_per_tenant=(
+                    resolved_settings.run_queue_max_pending_per_tenant
+                ),
             ),
             run_workflow_control,
         ),
-        event=RunEventIngestionService(SqlAlchemyRunEventStore(session_factory)),
+        event=RunEventIngestionService(
+            SqlAlchemyRunEventStore(session_factory), metrics=resolved_metrics
+        ),
         event_query=event_query,
         event_stream=RunEventStreamService(
             event_query,
@@ -201,6 +255,7 @@ def build_database_publication_services(
             page_size=resolved_settings.sse_page_size,
             heartbeat_seconds=resolved_settings.sse_heartbeat_seconds,
             poll_interval_seconds=resolved_settings.sse_poll_interval_seconds,
+            metrics=resolved_metrics,
         ),
         artifact=(
             ArtifactManagementService(
@@ -212,6 +267,7 @@ def build_database_publication_services(
                 ),
                 artifact_credentials,
                 str(resolved_settings.public_base_url),
+                _artifact_retention_policy(resolved_settings),
             )
             if artifact_object_store is not None
             else None
@@ -256,6 +312,7 @@ def build_database_publication_services(
             references,
             SqlAlchemyMcpDiscoveryStore(session_factory),
         ),
+        metrics=resolved_metrics,
     )
 
 
@@ -277,6 +334,46 @@ def _run_capacity_policy(settings: AppSettings) -> RunCapacityPolicy:
         max_nonterminal_runs_per_agent=settings.run_max_nonterminal_per_agent,
         max_nonterminal_agentscope_runs=settings.run_max_nonterminal_agentscope,
         max_nonterminal_codex_runs=settings.run_max_nonterminal_codex,
+    )
+
+
+def _artifact_storage_policy(
+    settings: AppSettings, *, required: bool
+) -> ArtifactStoragePolicy:
+    values = {
+        "AP_ARTIFACT_MAX_RESERVED_BYTES_PER_TENANT": (
+            settings.artifact_max_reserved_bytes_per_tenant
+        ),
+        "AP_ARTIFACT_MAX_RESERVED_COUNT_PER_TENANT": (
+            settings.artifact_max_reserved_count_per_tenant
+        ),
+    }
+    if required and settings.env.value in {"staging", "production"}:
+        missing = [name for name, value in values.items() if value is None]
+        if missing:
+            raise ValueError(
+                "Artifact storage admission requires: " + ", ".join(missing)
+            )
+    return ArtifactStoragePolicy(
+        max_reserved_bytes_per_tenant=(settings.artifact_max_reserved_bytes_per_tenant),
+        max_reserved_artifacts_per_tenant=(
+            settings.artifact_max_reserved_count_per_tenant
+        ),
+    )
+
+
+def _artifact_retention_policy(settings: AppSettings) -> ArtifactRetentionPolicy:
+    return ArtifactRetentionPolicy(
+        available_retention=timedelta(seconds=settings.artifact_retention_seconds),
+        forensic_retention=timedelta(
+            seconds=settings.artifact_forensic_retention_seconds
+        ),
+        delete_recovery_delay=timedelta(
+            seconds=settings.artifact_delete_recovery_delay_seconds
+        ),
+        delete_recovery_max_operations=(
+            settings.artifact_delete_recovery_max_operations
+        ),
     )
 
 
@@ -317,6 +414,7 @@ def create_database_publication_app(
         artifact_download_reader=artifact_download_reader,
         artifact_download_gateway_subject_id=artifact_download_gateway_subject_id,
         artifact_download_revocation_source=artifact_download_revocation_source,
+        metrics=metrics,
     )
     return create_app(
         settings,
@@ -324,6 +422,8 @@ def create_database_publication_app(
         identity_provider=identity_provider,
         iam_service=services.iam,
         quota_policy_service=services.quota_policy,
+        budget_policy_service=services.budget_policy,
+        storage_policy_service=services.storage_policy,
         release_service=services.release,
         deployment_service=services.deployment,
         publication_query_service=services.query,
@@ -340,5 +440,5 @@ def create_database_publication_app(
         mcp_service=services.mcp,
         internal_service_identity_provider=internal_service_identity_provider,
         event_ingestion_service=services.event,
-        metrics=metrics,
+        metrics=services.metrics,
     )

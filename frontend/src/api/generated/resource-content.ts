@@ -59,6 +59,12 @@ export interface ResourceContentModelConfig {
   readonly default_parameters: Readonly<Record<string, string | number | boolean | null>>;
   readonly max_context_tokens?: number | null;
   readonly rate_limit_rpm?: number | null;
+  readonly max_output_tokens?: number | null;
+  readonly max_reasoning_tokens?: number | null;
+  readonly counter_profile_id?: string | null;
+  readonly counter_profile_version?: string | null;
+  readonly counter_profile_hash?: string | null;
+  readonly billing_semantics_version?: string | null;
 }
 
 export interface ResourceContentRuntimeTarget {

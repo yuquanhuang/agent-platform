@@ -4,9 +4,11 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
+from prometheus_client import generate_latest
 from starlette.types import Message
 
 from apps.api.sse import BoundedSseResponse
+from packages.infrastructure.observability import PlatformMetrics
 
 
 @pytest.mark.asyncio
@@ -26,8 +28,12 @@ async def test_slow_consumer_timeout_closes_stream_generator() -> None:
         if message["type"] == "http.response.body":
             await asyncio.Event().wait()
 
+    metrics = PlatformMetrics()
     response = BoundedSseResponse(
-        frames(), send_timeout_seconds=0.01, media_type="text/event-stream"
+        frames(),
+        send_timeout_seconds=0.01,
+        media_type="text/event-stream",
+        metrics=metrics,
     )
 
     await response.stream_response(slow_send)
@@ -35,3 +41,4 @@ async def test_slow_consumer_timeout_closes_stream_generator() -> None:
     assert sent[0]["type"] == "http.response.start"
     assert sent[1]["type"] == "http.response.body"
     assert closed is True
+    assert 'outcome="send_timeout"' in generate_latest(metrics.registry).decode()

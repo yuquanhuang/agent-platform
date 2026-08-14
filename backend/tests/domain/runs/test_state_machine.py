@@ -11,6 +11,7 @@ from packages.domain.public import (
 def test_run_allows_expected_execution_path() -> None:
     ensure_run_transition("CREATED", "QUEUED")
     ensure_run_transition("QUEUED", "PREPARING")
+    ensure_run_transition("QUEUED", "FAILED")
     ensure_run_transition("PREPARING", "RUNNING")
     ensure_run_transition("RUNNING", "SUCCEEDED")
 

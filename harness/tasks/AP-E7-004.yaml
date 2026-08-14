@@ -1,0 +1,73 @@
+task_id: AP-E7-004
+title: SLO、指标、告警和 Trace 关联
+status: in_progress
+baseline: agent-platform-v1-dev-baseline-2026-08-r22
+current_substage: 最小可观测实现与门禁已完成；生产 scrape 组合、持久 backlog/saturation Gauge 和完整跨进程 Trace propagation 后置
+scope:
+  includes:
+    - 复用 PlatformMetrics 私有 CollectorRegistry，补齐 API、Worker、Event Store、SSE、Outbox、Reconciliation、Run Queue、Capacity Lease 和 Model Gateway 的低基数指标
+    - 以 Histogram/Counter/Gauge 形成控制面和运行面 SLI 观测输入，不把压测结果或估算值冒充 SLO 已达标
+    - SSE 在线连接、PostgreSQL 轮询回退、慢消费者发送超时和可见延迟指标；Redis 继续只作唤醒通道
+    - Event 批量写入数量、延迟和失败分类指标；PostgreSQL 继续是 RunEvent 唯一事实来源
+    - Run admission、Capacity Domain/Lease、Outbox、Worker 恢复和 Reconciliation 结果的容量与可靠性指标
+    - trace_id 在 API、Temporal、Outbox、RunEvent、Worker 日志和受控内部调用间关联；高基数业务 ID 只进入 Trace/Log
+    - 独立 Worker 的受控 Prometheus metrics 暴露与 Kubernetes 抓取边界
+    - Prometheus 告警规则和最小处置 Runbook；每条告警包含 owner、severity、threshold、for、恢复条件和有效 Runbook 链接
+    - 指标标签基数、敏感字段和 Secret 泄漏负向测试
+  excludes:
+    - AP-E7-005 的 100 AgentScope Run、1000 SSE、2000 events/s、20 Codex Run、30% 安全余量真实容量和耐久压测
+    - Event 写入侧功能性有限缓冲、Delta 合并、终态优先队列和超过恢复阈值时 Run 失败语义
+    - 生产告警接收渠道、排班系统、通知 Secret 和真实 receiver 路由
+    - AP-E7-007 的灾备、恢复演练和最终生产准入
+    - RunEvent 全局唯一登记表与 recorded_at 月分区事件表
+decisions:
+  - PlatformMetrics 保持每个 API/Worker/Test 私有 CollectorRegistry；禁止改用全局默认 Registry 规避重复注册
+  - Metric 标签只允许固定枚举或有明确上界的 process、outcome、method、status_class、provider、mode、runtime_type 等维度
+  - tenant_id、run_id、workflow_id、session_id、sandbox_id、Prompt、文件名、模型标识和用户输入不得作为长期 Metric Label
+  - 高基数关联标识保留在 Trace/结构化日志和既有 durable fact，不新增公开 Trace 查询 API
+  - PostgreSQL 是 Event、Outbox、Queue、Capacity Lease 和 Reconciliation 状态事实来源；Redis/Prometheus 不参与业务状态判断
+  - SLO 阈值沿用非功能基线；告警阈值和持续时间可由部署覆盖，代码不硬编码生产 receiver
+  - Worker metrics 开发默认为 127.0.0.1:9090/metrics，Kubernetes 只在 Service/NetworkPolicy 受控时覆盖 bind 地址
+  - AP-E7-004 只交付可计算、可抓取、可告警的观测能力；真实容量结论由 AP-E7-005 报告给出
+  - 当前可抓取范围以已进入 Kubernetes 受控组合的 Event/Reconciliation Worker 为准；API/Temporal/Sandbox/Runtime metrics 必须在对应生产 overlay 接入后才可作为生产告警输入
+  - "`outbox_claimed` 是最近一次有界 poll 的观测，不代表持久 backlog 或 oldest age；Queue depth、Lease active/configured/saturation Gauge 在后续 PostgreSQL 聚合任务补齐"
+  - durable `trace_id`、结构化日志和 API Span 属性已关联；从 Outbox durable payload 恢复完整 OTel Span Context 的跨进程 propagation 后置
+compatibility:
+  - 不修改公共 OpenAPI、RunEvent Schema、Temporal Workflow Definition 或 Vue 业务契约
+  - 现有指标名称和标签语义保持兼容；新增指标为向后兼容扩展
+  - 后端 Python 代码位于 backend，前端代码位于 frontend；本任务预期不需要新增前端业务页面
+  - 本次稳定门禁后冻结 baseline r22；不修改公共 OpenAPI、RunEvent Schema、Temporal Workflow 或 Vue 业务契约
+verification:
+  planned:
+    - PlatformMetrics 单元测试和低基数/敏感标签负向测试
+    - Event ingestion、SSE、Outbox、Reconciliation、Run Queue/Capacity 定向测试
+    - Worker metrics 暴露和 Kubernetes 静态部署测试
+    - Prometheus 规则解析、Runbook 链接和告警元数据静态校验
+    - make backend-check
+    - make contract-check
+    - make check
+  results:
+    - AP-E7-004 定向测试：40 passed（Event ingestion、SSE、API composition、metrics、Temporal starter、Kubernetes 静态规则）
+    - make backend-check：792 passed、20 skipped；Black、Ruff、Pyright 通过
+    - make frontend-check：26 个测试文件、85 passed；格式、Lint、类型检查和生产构建通过
+    - make contract-check：R22 通过；31 个完整性文件、190 个 operationId、7 个 Schema、184 个引用、4 个 Golden、17 个生成文件零漂移
+    - make check：契约步骤通过，但编排在 Black 启动阶段因沙箱禁止 multiprocessing SyncManager 本地 socket 中止；`make backend-check`、`make frontend-check`、`make contract-check` 已分别通过，不记统一编排为通过
+    - "`kubectl kustomize infra/kubernetes/agent-platform`：590 行本地渲染通过；无可用集群，未执行 server-side apply/dry-run"
+    - Kubernetes apply/dry-run：当前环境无可用集群，不执行；Prometheus Operator CRD/生产 receiver 仍是部署前置
+acceptance:
+  - 所有新增指标由私有 Registry 暴露，应用工厂和测试不重复注册
+  - 已进入受控组合的 Worker 指标可在内部网络抓取，API metrics 端点已受 CIDR 限制但当前 base 尚无 API scrape Service
+  - Event/SSE/Outbox/Reconciliation/Queue/Capacity 的失败和延迟已有低基数输入；持久积压、队列深度和容量饱和 Gauge 尚未完成，保留为后续项
+  - Trace/Log 能使用 trace_id 关联跨组件流程，Metric 不使用高基数业务标识
+  - 生产告警规则均有 severity、owner、for、恢复条件和存在的 Runbook 路径
+  - 未运行的 AP-E7-005 负载、耐久和资源池隔离测试不记为通过
+follow_up:
+  - AP-E7-005 在独立环境执行标准工作负载、尖峰、慢消费者、依赖降速、耐久和 AgentScope/Codex 资源池隔离测试
+  - 在 AP-E7-005 前单独冻结并实现 Event 写入侧功能性缓冲、Delta 合并、终态优先和失败关闭语义
+  - 上线前配置 Alertmanager 或等价系统的真实 receiver、通知 Secret、升级路径和排班责任人
+  - 生产容量阈值前实施 RunEvent 全局唯一登记表加 recorded_at 月分区事件表，并完成归档/迁移/回滚演练
+  - AP-E7-007 完成 Runbook 深化、灾备恢复演练和最终生产准入
+  - API/Temporal/Sandbox/Runtime metrics 的生产 ServiceMonitor/NetworkPolicy overlay
+  - PostgreSQL 聚合的 Queue depth/oldest wait、Outbox backlog/oldest age、active Lease/configured slots/saturation Gauge
+  - Outbox durable trace_id 到 OTel Span Context 的跨进程恢复；完整控制面/运行面 SLO 与 Model Gateway/容量告警
+open_questions: []

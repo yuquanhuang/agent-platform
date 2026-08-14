@@ -1,6 +1,7 @@
 """Authorize and validate RuntimeEventCandidate batches before persistence."""
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
@@ -83,6 +84,18 @@ class RunEventAppendStore(Protocol):
     ) -> EventBatchStoreOutcome: ...
 
 
+class RunEventMetrics(Protocol):
+    def observe_run_event_batch(
+        self,
+        *,
+        outcome: str,
+        duration: float,
+        created: int = 0,
+        duplicate: int = 0,
+        rejected: int = 0,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RunEventRecord:
     id: UUID
@@ -146,8 +159,11 @@ class RunEventQueryStore(Protocol):
 class RunEventIngestionService:
     """Validate one bounded batch and preserve per-candidate result ordering."""
 
-    def __init__(self, store: RunEventAppendStore) -> None:
+    def __init__(
+        self, store: RunEventAppendStore, metrics: RunEventMetrics | None = None
+    ) -> None:
         self._store = store
+        self._metrics = metrics
 
     async def append_batch(
         self,
@@ -156,7 +172,16 @@ class RunEventIngestionService:
         run_id: str,
         request: RunEventBatchRequest,
     ) -> RunEventBatchResponse:
-        self._authorize(access)
+        started_at = time.perf_counter()
+        try:
+            self._authorize(access)
+        except PlatformError:
+            if self._metrics is not None:
+                self._metrics.observe_run_event_batch(
+                    outcome="authorization_rejected",
+                    duration=time.perf_counter() - started_at,
+                )
+            raise
         parsed_run_id = _run_id(run_id)
         valid_events: list[RuntimeEventCandidate] = []
         result_slots: list[RunEventAppendResult | None] = []
@@ -168,14 +193,27 @@ class RunEventIngestionService:
 
         persisted: tuple[EventAppendItem, ...] = ()
         if valid_events:
-            outcome = await self._store.append_batch(
-                access.context,
-                run_id=parsed_run_id,
-                execution_attempt=request.execution_attempt,
-                execution_fencing_token=request.execution_fencing_token,
-                events=tuple(valid_events),
-            )
+            try:
+                outcome = await self._store.append_batch(
+                    access.context,
+                    run_id=parsed_run_id,
+                    execution_attempt=request.execution_attempt,
+                    execution_fencing_token=request.execution_fencing_token,
+                    events=tuple(valid_events),
+                )
+            except PlatformError:
+                if self._metrics is not None:
+                    self._metrics.observe_run_event_batch(
+                        outcome="store_failure",
+                        duration=time.perf_counter() - started_at,
+                    )
+                raise
             if outcome.failure is not None:
+                if self._metrics is not None:
+                    self._metrics.observe_run_event_batch(
+                        outcome="store_rejected",
+                        duration=time.perf_counter() - started_at,
+                    )
                 raise PlatformError(
                     status_code=outcome.failure.status_code,
                     code=outcome.failure.code,
@@ -196,9 +234,22 @@ class RunEventIngestionService:
             persisted_index += 1
         if persisted_index != len(persisted):
             raise RuntimeError("Event Store returned more results than candidates")
-        return RunEventBatchResponse(
+        response = RunEventBatchResponse(
             items=[item for item in result_slots if item is not None]
         )
+        if self._metrics is not None:
+            counts = {
+                outcome: sum(item.status == outcome for item in response.items)
+                for outcome in ("created", "duplicate", "rejected")
+            }
+            self._metrics.observe_run_event_batch(
+                outcome=("rejected" if counts["rejected"] else "success"),
+                duration=time.perf_counter() - started_at,
+                created=counts["created"],
+                duplicate=counts["duplicate"],
+                rejected=counts["rejected"],
+            )
+        return response
 
     @staticmethod
     def _authorize(access: EventWriteAccess) -> None:

@@ -35,7 +35,19 @@ class ArtifactDeletionObjectStore(Protocol):
 
 
 class ArtifactLifecycleStore(Protocol):
+    async def reclaim_expired_uploads(
+        self, context: TenantContext, *, now: datetime, limit: int
+    ) -> int: ...
+
     async def expire_due(
+        self, context: TenantContext, *, now: datetime, limit: int
+    ) -> int: ...
+
+    async def purge_retention_due(
+        self, context: TenantContext, *, now: datetime, limit: int
+    ) -> int: ...
+
+    async def recover_failed_deletes(
         self, context: TenantContext, *, now: datetime, limit: int
     ) -> int: ...
 
@@ -143,7 +155,7 @@ class ArtifactDeleteProcessor:
 
 
 class ArtifactLifecycleDispatcher:
-    """Expire due Artifacts, then process only Artifact deletion Outbox events."""
+    """Reclaim abandoned uploads, expire retention, then process deletions."""
 
     def __init__(
         self,
@@ -167,7 +179,16 @@ class ArtifactLifecycleDispatcher:
     async def dispatch_tenant_once(
         self, context: TenantContext, *, now: datetime
     ) -> OutboxDispatchSummary:
+        await self._lifecycle_store.reclaim_expired_uploads(
+            context, now=now, limit=self._batch_size
+        )
         await self._lifecycle_store.expire_due(context, now=now, limit=self._batch_size)
+        await self._lifecycle_store.purge_retention_due(
+            context, now=now, limit=self._batch_size
+        )
+        await self._lifecycle_store.recover_failed_deletes(
+            context, now=now, limit=self._batch_size
+        )
         events: Sequence[OutboxEvent] = await self._outbox_store.claim_ready(
             context,
             now=now,

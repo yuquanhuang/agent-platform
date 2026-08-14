@@ -1,6 +1,6 @@
 # Agent 平台需求追踪矩阵
 
-> 文档版本：V2.1
+> 文档版本：V2.5
 > 文档状态：开发输入基线
 
 ## 1. 使用方式
@@ -47,9 +47,14 @@
 | 兼容性 | API、RunSpec、RunEvent、Bundle、Manifest | 当前与前一生产版本契约测试 |
 | 可恢复性 | Temporal、Runtime、Outbox、Event、Sandbox | Worker/依赖重启与对账 |
 | 资源限制 | Model、Run、Sandbox、Workspace、Event | 配额、背压、限流和资源耗尽 |
-| Run 配额策略 | FR-MDL-004、Epic 7 | QuotaPolicy 管理 API、quota_policy/version、Run Admission | RLS、ETag、幂等、版本不可变、部署上限求交、并发 429/Audit |
+| Run 配额与排队 | FR-MDL-004、FR-CON-001～006、Epic 7 | QuotaPolicy 管理 API、quota_policy/version、run_admission_queue、Run Admission Scheduler | RLS、ETag、幂等、版本不可变、部署上限求交、FIFO/优先级、等待取消/超时、容量释放后准入、Temporal Replay |
+| 全局运行容量 | FR-CON-001～006、Epic 7 | run_capacity_domain/lease、runtime_target_id、Reconciliation Scheduler | 跨租户 slots 不超配、quantum 公平性、WAITING 不占槽、续租防盗用、终态/孤儿释放、RLS/平台身份 |
+| 模型周期预算 | FR-MDL-004、Epic 7 | BudgetPolicy 管理 API、budget_policy/version、Model Gateway Reservation、cost ledger/provider attempt | UTC 日/月、HARD/SOFT Token/费用、Run/租户余额求交、可信调用前上界、fallback 最大值、USD/CNY 无换汇、并发原子性、禁用回退、币种不一致拒绝 |
+| 租户存储配额 | FR-ART-001～006、FR-SBX-001～006、Epic 7 | StoragePolicy 管理 API、storage_policy/version、Artifact/Workspace Admission | RLS、ETag、幂等、版本不可变、Workspace/Artifact 分离额度、部署上限求交、并发不超配、禁用回退、策略版本审计 |
+| Artifact 保留与 Legal Hold | FR-DAT-005、FR-ART-001～006、Epic 7 | expires_at、retention_delete_after、artifact_legal_hold、Artifact Lifecycle | AVAILABLE 创建时期限/取证态期限分别固化、多 Hold 阻断自动/手动删除、解除恢复、并发 sweep 幂等、失败删除有界恢复、Audit/RLS |
 | 安全 | Skill、MCP、Prompt、文件、工具、Secret | SSRF、路径、供应链、Prompt Injection |
-| 可观测性 | 所有进程与跨系统调用 | Trace 关联、SLO、告警与 Runbook |
+| 可观测性 | 所有进程与跨系统调用 | API/Worker 私有 Registry、低基数 Prometheus 指标、Trace/Log 高基数关联、SLO 计算、告警元数据和有效 Runbook 链接；生产 receiver 另行配置 |
+| 容量与耐久 | AgentScope/Codex、Event Store、SSE、PostgreSQL/Redis/Temporal/Object Storage | AP-E7-005 标准工作负载、100 Run/tenant、1,000 SSE/cluster、2,000 events/s、20 Codex/cluster、30% 安全余量、慢消费者、耐久和资源池隔离报告 |
 
 ## 5. 需求完成判定
 
@@ -78,7 +83,9 @@
 | Epic 5 Artifact | FR-DAT-001～006 | createArtifactUpload/completeArtifactUpload/getArtifact/createArtifactDownload/downloadArtifactContent（200/206/416 单 Range）/deleteArtifact | artifact、artifact_download_grant、workspace | 扫描、越权、Token 猜测、授权撤销、过期、Range 边界、长连接撤销 |
 | Epic 6 Skill/MCP | FR-RES-003～005 | Resource API、Skill Manifest、MCP Discover | resource_definition/version | 路径、供应链、Schema Hash |
 | Epic 6 Approval | FR-APR-001～006 | listApprovals/getApproval/decideApproval | approval_request/decision、execution_ticket | AC-004、重放、自审批 |
-| Epic 7 可靠性 | FR-TMP-001～007 | Temporal 契约、Reconciliation | outbox、inbox、workflow mapping | AC-006、Replay、故障注入 |
+| Epic 7 可靠性 | FR-TMP-001～007、FR-CON-001～006 | Temporal 契约、Reconciliation、durable Run admission queue | outbox、inbox、workflow mapping、run_admission_queue | AC-006、WAITING 取消/超时、批内不超配、准入后启动、Replay、故障注入 |
+| AP-E7-004 可观测性 | 横向非功能、FR-RUN-003～004、FR-TMP-001～007、FR-MDL-002～004、FR-CON-001～006 | Prometheus 私有 Registry、OpenTelemetry Trace、告警规则/Runbook | 无新业务实体 | 低基数标签、Event/SSE/Outbox/Reconciliation/Queue/Capacity 结果埋点、已组合 Worker 抓取、告警元数据与 durable trace_id 关联；API/其他进程 scrape、持久队列深度/Lease 饱和 Gauge 和跨进程 OTel context 后置 |
+| AP-E7-005 容量验收 | 横向非功能、FR-RT-001～006、FR-RUN-003～004、FR-CON-001～006 | 容量/耐久测试工作负载与报告 | 无新业务实体 | 100 AgentScope Run/tenant、1,000 SSE/cluster、2,000 events/s、20 Codex/cluster、30% 余量、资源池隔离与故障耐久 |
 | Epic 8 Codex | FR-RT-001～006 | CodexAcpRuntimeAdapter、ACP STDIO | runtime_session、run_attempt | Codex V1 验收 |
 | Epic 9 V1 增量 | FR-KNW-001～005、FR-EVL-001～005、FR-SCH-001～006、FR-SBX-002 | Knowledge/Evaluation/Schedule/Session Sandbox/A2A Client 契约 | 对应 V1 增量实体 | E2E-007～010、Session Sandbox 隔离 |
 

@@ -21,6 +21,38 @@ def render_upgrade_sql() -> str:
     return output.getvalue()
 
 
+def render_capacity_downgrade_sql() -> str:
+    output = StringIO()
+    config = Config(str(BACKEND_ROOT / "alembic.ini"), output_buffer=output)
+    config.attributes["database_url"] = (
+        "postgresql+asyncpg://migration:placeholder@localhost/agent_platform"
+    )
+
+    command.downgrade(
+        config,
+        "0041_capacity_domain_lease:0040_artifact_retention",
+        sql=True,
+    )
+
+    return output.getvalue()
+
+
+def render_cost_budget_downgrade_sql() -> str:
+    output = StringIO()
+    config = Config(str(BACKEND_ROOT / "alembic.ini"), output_buffer=output)
+    config.attributes["database_url"] = (
+        "postgresql+asyncpg://migration:placeholder@localhost/agent_platform"
+    )
+
+    command.downgrade(
+        config,
+        "0042_model_cost_budget:0041_capacity_domain_lease",
+        sql=True,
+    )
+
+    return output.getvalue()
+
+
 def test_offline_upgrade_contains_foundation_tables_and_extensions() -> None:
     sql = render_upgrade_sql()
 
@@ -42,6 +74,12 @@ def test_offline_upgrade_contains_foundation_tables_and_extensions() -> None:
         "execution_ticket",
         "quota_policy",
         "quota_policy_version",
+        "budget_policy",
+        "budget_policy_version",
+        "storage_policy",
+        "storage_policy_version",
+        "artifact_legal_hold",
+        "run_capacity_lease",
         "agent_run",
         "run_attempt",
         "run_event",
@@ -60,8 +98,15 @@ def test_offline_upgrade_contains_foundation_tables_and_extensions() -> None:
         "operation_record",
         "outbox_event",
         "model_usage",
+        "price_catalog_version",
+        "price_catalog_rate",
+        "run_admission_queue",
+        "run_capacity_domain",
+        "run_capacity_lease",
         "model_binding_snapshot",
         "model_rate_limit_window",
+        "cost_ledger_entry",
+        "model_provider_attempt",
         "resource_definition",
         "resource_version",
         "release",
@@ -123,13 +168,109 @@ def test_offline_upgrade_enables_and_forces_rls_with_write_checks() -> None:
         "execution_ticket",
         "quota_policy",
         "quota_policy_version",
+        "price_catalog_version",
+        "price_catalog_rate",
+        "storage_policy",
+        "storage_policy_version",
+        "cost_ledger_entry",
+        "model_provider_attempt",
     ):
         assert f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY" in sql
         assert f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY" in sql
         assert f"CREATE POLICY tenant_isolation ON {table_name}" in sql
 
-    assert sql.count("WITH CHECK") == 39
-    assert sql.count("current_setting('app.current_tenant_id', true)") == 78
+    assert sql.count("WITH CHECK") == 52
+    assert "ALTER TABLE run_capacity_domain ENABLE ROW LEVEL SECURITY" in sql
+    assert "ALTER TABLE run_capacity_domain FORCE ROW LEVEL SECURITY" in sql
+    assert "CREATE POLICY platform_scheduler ON run_capacity_domain" in sql
+
+
+def test_offline_upgrade_contains_versioned_storage_policy() -> None:
+    sql = render_upgrade_sql()
+
+    assert "0039_storage_policy" in sql
+    assert "ALTER TABLE tenant ADD COLUMN storage_policy_id UUID" in sql
+    assert "uq_storage_policy__tenant_id" in sql
+    assert "uq_storage_policy_version__tenant_policy_version" in sql
+    assert "fk_storage_policy__current_version" in sql
+    assert "fk_tenant__storage_policy_id__storage_policy" in sql
+    assert "FOREIGN KEY(id, storage_policy_id)" in sql
+    assert "max_reserved_workspace_bytes BETWEEN 1 AND 1125899906842624" in sql
+    assert "max_reserved_workspaces BETWEEN 1 AND 1000000000" in sql
+    assert "max_reserved_artifact_bytes BETWEEN 1 AND 1125899906842624" in sql
+    assert "max_reserved_artifacts BETWEEN 1 AND 1000000000" in sql
+    assert "trg_storage_policy_version__immutable" in sql
+    for action in ("create", "read", "list", "update", "disable"):
+        assert f"SELECT tenant_id, id, 'storage_policy', '{action}' FROM role" in sql
+
+
+def test_offline_upgrade_contains_durable_run_admission_queue() -> None:
+    sql = render_upgrade_sql()
+
+    assert "CREATE TABLE run_admission_queue" in sql
+    assert "uq_run_admission_queue__tenant_run" in sql
+    assert "ix_run_admission_queue__tenant_status_priority_queued" in sql
+    assert "ix_run_admission_queue__tenant_status_deadline" in sql
+    assert "trg_run_admission_queue__guard" in sql
+    assert "'PREPARING','CANCELLED','CANCELLING','TIMEOUT'" in sql
+
+
+def test_offline_upgrade_contains_capacity_domains_and_run_leases() -> None:
+    sql = render_upgrade_sql()
+
+    assert "0041_capacity_domain_lease" in sql
+    assert "CREATE TABLE run_capacity_domain" in sql
+    assert "CREATE TABLE run_capacity_lease" in sql
+    assert "uq_run_capacity_lease__run_id" in sql
+    assert "ix_run_capacity_lease__domain_active" in sql
+    assert "fk_run_capacity_lease__tenant_run__agent_run" in sql
+    assert "CREATE POLICY platform_scheduler ON run_capacity_domain" in sql
+    assert "CREATE POLICY tenant_isolation ON run_capacity_lease" in sql
+    assert "trg_run_capacity_domain__guard" in sql
+    assert "trg_run_capacity_lease__guard" in sql
+    assert "migration:unconfigured" in sql
+
+    migration_start = sql.index("Running upgrade 0040_artifact_retention")
+    migration_sql = sql[migration_start:]
+    guard_drop = migration_sql.index(
+        "DROP TRIGGER trg_run_admission_queue__guard ON run_admission_queue"
+    )
+    queue_backfill = migration_sql.index(
+        "UPDATE run_admission_queue AS q SET capacity_domain = d.runtime_target_id"
+    )
+    guard_restore = migration_sql.index(
+        "CREATE TRIGGER trg_run_admission_queue__guard", queue_backfill
+    )
+    assert guard_drop < queue_backfill < guard_restore
+
+
+def test_offline_capacity_downgrade_restores_queue_guard_after_backfill() -> None:
+    sql = render_capacity_downgrade_sql()
+
+    guard_drop = sql.index(
+        "DROP TRIGGER trg_run_admission_queue__guard ON run_admission_queue"
+    )
+    queue_backfill = sql.index(
+        "UPDATE run_admission_queue SET capacity_domain = "
+        "'tenant/' || tenant_id::text"
+    )
+    guard_restore = sql.index(
+        "CREATE TRIGGER trg_run_admission_queue__guard", queue_backfill
+    )
+    assert guard_drop < queue_backfill < guard_restore
+    assert "EXECUTE FUNCTION guard_run_admission_queue_mutation()" in sql
+
+
+def test_offline_upgrade_contains_price_catalog_and_usage_provenance() -> None:
+    sql = render_upgrade_sql()
+    assert "CREATE TABLE price_catalog_version" in sql
+    assert "CREATE TABLE price_catalog_rate" in sql
+    assert "ALTER TABLE model_usage ADD COLUMN cost_source VARCHAR(32)" in sql
+    assert "price_catalog_version_id UUID" in sql
+    assert "cost_details_json JSONB" in sql
+    assert "trg_model_usage__immutable" in sql
+    assert "trg_price_catalog_version__immutable" in sql
+    assert "trg_price_catalog_rate__immutable" in sql
 
 
 def test_offline_upgrade_contains_approval_state_guards_and_permissions() -> None:
@@ -185,6 +326,18 @@ def test_offline_upgrade_contains_artifact_download_and_delete_lifecycle() -> No
     assert "status IN ('DELETING','DELETED')" in sql
     assert "SELECT tenant_id, id, 'artifact', 'download' FROM role" in sql
     assert "SELECT tenant_id, id, 'artifact', 'delete' FROM role" in sql
+    assert "ix_artifact__tenant_status_upload_expires_at" in sql
+
+
+def test_offline_upgrade_contains_artifact_retention_and_legal_holds() -> None:
+    sql = render_upgrade_sql()
+
+    assert "0040_artifact_retention" in sql
+    assert "retention_delete_after" in sql
+    assert "CREATE TABLE artifact_legal_hold" in sql
+    assert "uq_artifact_legal_hold__tenant_artifact_case_active" in sql
+    assert "trg_artifact_legal_hold__guard" in sql
+    assert "ALTER TABLE artifact_legal_hold FORCE ROW LEVEL SECURITY" in sql
 
 
 def test_offline_upgrade_contains_skill_scan_evidence_and_permissions() -> None:
@@ -286,6 +439,24 @@ def test_offline_upgrade_contains_model_gateway_admission_tables() -> None:
     assert "CREATE TABLE model_rate_limit_window" in sql
     assert "pk_model_rate_limit_window" in sql
     assert "ck_model_rate_limit_window__request_count" in sql
+
+
+def test_offline_upgrade_contains_model_cost_budget_facts() -> None:
+    sql = render_upgrade_sql()
+
+    assert "0042_model_cost_budget" in sql
+    assert "CREATE TABLE cost_ledger_entry" in sql
+    assert "CREATE TABLE model_provider_attempt" in sql
+    assert "ck_cost_ledger_entry__entry_type" in sql
+    assert "uq_model_provider_attempt__request_attempt" in sql
+    assert "trg_cost_ledger_entry__immutable" in sql
+    assert "trg_model_provider_attempt__immutable" in sql
+
+
+def test_offline_cost_budget_downgrade_rejects_soft_policy_data() -> None:
+    sql = render_cost_budget_downgrade_sql()
+
+    assert "cannot downgrade 0042 while SOFT budget policy versions exist" in sql
 
 
 def test_offline_upgrade_contains_agent_draft_bindings_and_permissions() -> None:

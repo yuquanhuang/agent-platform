@@ -5,9 +5,10 @@ import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from packages.application.outbox import PermanentOutboxError
@@ -18,15 +19,21 @@ from packages.domain.model_gateway import (
     ModelParameterValue,
     ModelRoute,
     ModelUsageRecord,
+    PriceCatalogRate,
+    PriceDimension,
     ProviderError,
 )
 from packages.infrastructure.database.models import (
     AuditLogModel,
     ModelBindingSnapshotModel,
+    ModelProviderAttemptModel,
     ModelUsageModel,
     OperationRecordModel,
+    PriceCatalogRateModel,
+    PriceCatalogVersionModel,
 )
 from packages.infrastructure.database.uow import TenantUnitOfWork
+from packages.infrastructure.model_gateway.catalog import PriceCatalogVersion
 
 
 class SqlAlchemyModelGatewayStore:
@@ -59,8 +66,63 @@ class SqlAlchemyModelGatewayStore:
                         else None
                     ),
                     cost_currency=usage.cost_currency,
+                    cost_source=usage.cost_source,
+                    price_catalog_version_id=usage.price_catalog_version_id,
+                    cost_details_json=(
+                        dict(usage.cost_details) if usage.cost_details else None
+                    ),
                     started_at=usage.started_at,
                     finished_at=usage.finished_at,
+                )
+            )
+
+    async def record_attempt(
+        self,
+        context: TenantContext,
+        *,
+        request: object,
+        permit: object,
+        route: ModelRoute,
+        attempt_no: int,
+        provider_request_id: str | None,
+        submission_state: str,
+        error_code: str | None,
+        started_at: datetime,
+        finished_at: datetime,
+    ) -> None:
+        from packages.application.model_gateway import BudgetPermit
+        from packages.contracts.model_gateway import ModelGatewayRequest
+
+        if not isinstance(request, ModelGatewayRequest) or not isinstance(
+            permit, BudgetPermit
+        ):
+            raise TypeError("invalid provider attempt facts")
+        async with TenantUnitOfWork(self._session_factory, context) as uow:
+            await uow.session.execute(
+                postgresql_insert(ModelProviderAttemptModel)
+                .values(
+                    id=uuid4(),
+                    tenant_id=UUID(context.tenant_id),
+                    reservation_id=permit.reservation_id,
+                    run_id=request.run_id,
+                    idempotency_key=request.idempotency_key,
+                    attempt_no=attempt_no,
+                    provider=route.provider,
+                    model=route.model,
+                    provider_request_id=provider_request_id,
+                    submission_state=submission_state,
+                    error_code=error_code,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    created_at=finished_at,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        ModelProviderAttemptModel.tenant_id,
+                        ModelProviderAttemptModel.run_id,
+                        ModelProviderAttemptModel.idempotency_key,
+                        ModelProviderAttemptModel.attempt_no,
+                    ]
                 )
             )
 
@@ -149,6 +211,72 @@ class SqlAlchemyModelGatewayStore:
             )
 
 
+class SqlAlchemyPriceCatalogReader:
+    """Read only tenant-scoped immutable catalog versions and rates."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def get_catalog(
+        self,
+        context: TenantContext,
+        *,
+        provider: str,
+        model: str,
+        occurred_at: datetime,
+    ) -> PriceCatalogVersion | None:
+        async with TenantUnitOfWork(self._session_factory, context) as uow:
+            version = await uow.session.scalar(
+                select(PriceCatalogVersionModel)
+                .where(
+                    PriceCatalogVersionModel.tenant_id == UUID(context.tenant_id),
+                    PriceCatalogVersionModel.provider == provider,
+                    PriceCatalogVersionModel.model == model,
+                    PriceCatalogVersionModel.status == "PUBLISHED",
+                    PriceCatalogVersionModel.effective_from <= occurred_at,
+                    (
+                        PriceCatalogVersionModel.effective_to.is_(None)
+                        | (PriceCatalogVersionModel.effective_to > occurred_at)
+                    ),
+                )
+                .order_by(PriceCatalogVersionModel.effective_from.desc())
+                .limit(1)
+            )
+            if version is None:
+                return None
+            rates = (
+                await uow.session.scalars(
+                    select(PriceCatalogRateModel)
+                    .where(
+                        PriceCatalogRateModel.tenant_id == UUID(context.tenant_id),
+                        PriceCatalogRateModel.catalog_version_id == version.id,
+                    )
+                    .order_by(PriceCatalogRateModel.dimension)
+                )
+            ).all()
+            return PriceCatalogVersion(
+                id=version.id,
+                provider=version.provider,
+                model=version.model,
+                currency=version.currency,
+                effective_from=version.effective_from,
+                effective_to=version.effective_to,
+                source_ref=version.source_ref,
+                source_digest=version.source_digest,
+                content_hash=version.content_hash,
+                status=version.status,
+                rates=tuple(
+                    PriceCatalogRate(
+                        id=rate.id,
+                        dimension=cast(PriceDimension, rate.dimension),
+                        unit_tokens=rate.unit_tokens,
+                        unit_price=rate.unit_price,
+                    )
+                    for rate in rates
+                ),
+            )
+
+
 class SqlAlchemyModelBindingReader:
     """Resolve only immutable Model Config binding snapshots."""
 
@@ -190,6 +318,12 @@ class SqlAlchemyModelBindingReader:
                         ),
                         max_context_tokens=snapshot.max_context_tokens,
                         rate_limit_rpm=snapshot.rate_limit_rpm,
+                        max_output_tokens=snapshot.max_output_tokens,
+                        max_reasoning_tokens=snapshot.max_reasoning_tokens,
+                        counter_profile_id=snapshot.counter_profile_id,
+                        counter_profile_version=snapshot.counter_profile_version,
+                        counter_profile_hash=snapshot.counter_profile_hash,
+                        billing_semantics_version=snapshot.billing_semantics_version,
                     ),
                 ),
             )

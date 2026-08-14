@@ -82,6 +82,12 @@ def _model() -> ResourceContentModelConfig:
         default_parameters={"temperature": 0.1},
         max_context_tokens=8192,
         rate_limit_rpm=60,
+        max_output_tokens=None,
+        max_reasoning_tokens=None,
+        counter_profile_id=None,
+        counter_profile_version=None,
+        counter_profile_hash=None,
+        billing_semantics_version=None,
     )
 
 

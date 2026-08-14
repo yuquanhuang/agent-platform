@@ -376,6 +376,154 @@ class QuotaPolicyVersionPage(BaseModel):
     has_more: bool
 
 
+class BudgetPolicyCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=2000)
+    period: Literal["DAILY", "MONTHLY"]
+    enforcement: Literal["HARD", "SOFT"] | None = "HARD"
+    token_limit: int = Field(..., ge=1, le=9223372036854775807)
+    cost_limit: None | BudgetPolicyCreateRequestCostLimitChoice2 = None
+
+
+class BudgetPolicyUpdateRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    name: str | None = Field(None, min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=2000)
+    period: Literal["DAILY", "MONTHLY"] | None = None
+    enforcement: Literal["HARD", "SOFT"] | None = None
+    token_limit: int | None = Field(None, ge=1, le=9223372036854775807)
+    cost_limit: None | BudgetPolicyUpdateRequestCostLimitChoice2 = None
+
+
+class BudgetPolicyVersion(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    id: str
+    policy_id: str
+    version_no: int = Field(..., ge=1)
+    period: Literal["DAILY", "MONTHLY"]
+    enforcement: Literal["HARD", "SOFT"]
+    token_limit: int = Field(..., ge=1, le=9223372036854775807)
+    cost_limit: None | BudgetPolicyVersionCostLimitChoice2
+    price_catalog_version: str | None
+    content_hash: str = Field(..., pattern="^sha256:[a-f0-9]{64}$")
+    created_by: str
+    created_at: datetime
+
+
+class BudgetPolicy(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    id: str
+    tenant_id: str
+    name: str
+    description: str | None
+    status: Literal["ACTIVE", "DISABLED"]
+    current_version: BudgetPolicyVersion
+    resource_version: int = Field(..., ge=1)
+    created_at: datetime
+    updated_at: datetime
+
+
+class BudgetPolicyPage(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    items: list[BudgetPolicy]
+    next_cursor: str | None = None
+    has_more: bool
+
+
+class BudgetPolicyVersionPage(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    items: list[BudgetPolicyVersion]
+    next_cursor: str | None = None
+    has_more: bool
+
+
+class StorageLimits(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    max_reserved_workspace_bytes: int | None = Field(None, ge=1, le=1125899906842624)
+    max_reserved_workspaces: int | None = Field(None, ge=1, le=1000000000)
+    max_reserved_artifact_bytes: int | None = Field(None, ge=1, le=1125899906842624)
+    max_reserved_artifacts: int | None = Field(None, ge=1, le=1000000000)
+
+
+class StoragePolicyCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=2000)
+    limits: StorageLimits
+
+
+class StoragePolicyUpdateRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    name: str | None = Field(None, min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=2000)
+    limits: StorageLimits | None = None
+
+
+class StoragePolicyVersion(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    id: str
+    policy_id: str
+    version_no: int = Field(..., ge=1)
+    limits: StorageLimits
+    content_hash: str = Field(..., pattern="^sha256:[a-f0-9]{64}$")
+    created_by: str
+    created_at: datetime
+
+
+class StoragePolicy(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    id: str
+    tenant_id: str
+    name: str
+    description: str | None
+    status: Literal["ACTIVE", "DISABLED"]
+    current_version: StoragePolicyVersion
+    resource_version: int = Field(..., ge=1)
+    created_at: datetime
+    updated_at: datetime
+
+
+class StoragePolicyPage(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    items: list[StoragePolicy]
+    next_cursor: str | None = None
+    has_more: bool
+
+
+class StoragePolicyVersionPage(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    items: list[StoragePolicyVersion]
+    next_cursor: str | None = None
+    has_more: bool
+
+
 class MemberCreateRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid", populate_by_name=True, regex_engine="python-re"
@@ -1254,6 +1402,66 @@ type ListQuotaPolicyVersionsLimit = int
 
 type ListQuotaPolicyVersionsCursor = str
 
+type ListBudgetPoliciesLimit = int
+
+type ListBudgetPoliciesCursor = str
+
+type CreateBudgetPolicyIdempotencyKey = str
+
+type GetBudgetPolicyBudgetPolicyId = str
+
+type UpdateBudgetPolicyBudgetPolicyId = str
+
+type UpdateBudgetPolicyIfMatch = str
+
+type DisableBudgetPolicyBudgetPolicyId = str
+
+type DisableBudgetPolicyIdempotencyKey = str
+
+type DisableBudgetPolicyIfMatch = str
+
+type EnableBudgetPolicyBudgetPolicyId = str
+
+type EnableBudgetPolicyIdempotencyKey = str
+
+type EnableBudgetPolicyIfMatch = str
+
+type ListBudgetPolicyVersionsBudgetPolicyId = str
+
+type ListBudgetPolicyVersionsLimit = int
+
+type ListBudgetPolicyVersionsCursor = str
+
+type ListStoragePoliciesLimit = int
+
+type ListStoragePoliciesCursor = str
+
+type CreateStoragePolicyIdempotencyKey = str
+
+type GetStoragePolicyStoragePolicyId = str
+
+type UpdateStoragePolicyStoragePolicyId = str
+
+type UpdateStoragePolicyIfMatch = str
+
+type DisableStoragePolicyStoragePolicyId = str
+
+type DisableStoragePolicyIdempotencyKey = str
+
+type DisableStoragePolicyIfMatch = str
+
+type EnableStoragePolicyStoragePolicyId = str
+
+type EnableStoragePolicyIdempotencyKey = str
+
+type EnableStoragePolicyIfMatch = str
+
+type ListStoragePolicyVersionsStoragePolicyId = str
+
+type ListStoragePolicyVersionsLimit = int
+
+type ListStoragePolicyVersionsCursor = str
+
 type ListMembersLimit = int
 
 type ListMembersCursor = str
@@ -1458,6 +1666,30 @@ class ResourceDiffChangesItem(BaseModel):
     sensitive: bool | None = False
 
 
+class BudgetPolicyCreateRequestCostLimitChoice2(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    amount: str = Field(..., pattern="^\\d+(\\.\\d{1,8})?$")
+    currency: Literal["USD", "CNY"]
+
+
+class BudgetPolicyUpdateRequestCostLimitChoice2(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    amount: str = Field(..., pattern="^\\d+(\\.\\d{1,8})?$")
+    currency: Literal["USD", "CNY"]
+
+
+class BudgetPolicyVersionCostLimitChoice2(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, regex_engine="python-re"
+    )
+    amount: str = Field(..., pattern="^\\d+(\\.\\d{1,8})?$")
+    currency: Literal["USD", "CNY"]
+
+
 class KnowledgeRetrieveResultItemsItem(BaseModel):
     model_config = ConfigDict(
         extra="forbid", populate_by_name=True, regex_engine="python-re"
@@ -1504,6 +1736,19 @@ for _model in (
     QuotaPolicy,
     QuotaPolicyPage,
     QuotaPolicyVersionPage,
+    BudgetPolicyCreateRequest,
+    BudgetPolicyUpdateRequest,
+    BudgetPolicyVersion,
+    BudgetPolicy,
+    BudgetPolicyPage,
+    BudgetPolicyVersionPage,
+    StorageLimits,
+    StoragePolicyCreateRequest,
+    StoragePolicyUpdateRequest,
+    StoragePolicyVersion,
+    StoragePolicy,
+    StoragePolicyPage,
+    StoragePolicyVersionPage,
     MemberCreateRequest,
     MemberUpdateRequest,
     Member,
@@ -1547,6 +1792,9 @@ for _model in (
     AuditRecord,
     AuditPage,
     ResourceDiffChangesItem,
+    BudgetPolicyCreateRequestCostLimitChoice2,
+    BudgetPolicyUpdateRequestCostLimitChoice2,
+    BudgetPolicyVersionCostLimitChoice2,
     KnowledgeRetrieveResultItemsItem,
 ):
     _model.model_rebuild()
